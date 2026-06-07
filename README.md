@@ -32,6 +32,21 @@ bash setup.sh
 
 Skills are linked into `~/.claude/skills/` and available immediately in Claude Code — no restart needed.
 
+## Plugin skill overrides
+
+Some official plugin skills are edited and tracked under `overrides/<plugin>/<skill>/SKILL.md`. The plugin cache directory is replaced with a junction to the repo, so the skill still loads under its original namespace (e.g. `claude-md-management:reflect`).
+
+| Override | Original | Why |
+|---|---|---|
+| `overrides/claude-md-management/reflect/` | `claude-md-management:reflect` | Customized phase structure, workspace paths, dialogue prompts |
+
+**After a plugin update:** check `~/.claude/plugins/cache/<plugin>/.../skills/<name>` — if the junction was replaced with a real directory, re-run the junction command:
+```powershell
+# Windows
+Remove-Item -Recurse -Force <plugin-skill-dir>
+New-Item -ItemType Junction -Path <plugin-skill-dir> -Target (Resolve-Path overrides/<plugin>/<skill>)
+```
+
 ## Adding a skill
 
 1. Create `skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`) and the skill body
