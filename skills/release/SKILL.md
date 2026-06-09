@@ -7,7 +7,7 @@ description: "Guides the full release process for a published npm package — ru
 
 You are preparing a release for a published npm package. Nothing ships unless every gate passes.
 
-Read `~/code/CLAUDE.md` for the full standards this release must satisfy, specifically the Published Package Libraries section.
+Read `~/code/CLAUDE.md` for the full standards this release must satisfy, and `~/code/docs/STACK.md` for the Published Package setup.
 
 <HARD-GATE>
 Do not create a changeset or prepare a release commit until every verification step has passed. A release with failing tests, broken types, or a bad build is worse than no release.
@@ -93,10 +93,9 @@ Guide the user through the prompts:
 Good changeset description: "Add Badge component with default, secondary, destructive, and outline variants"
 Bad changeset description: "stuff" / "updates" / "fix things"
 
-Commit the changeset file:
+Stage the changeset file (do not commit yet — commits require user approval, same as Step 6):
 ```bash
 git add .changeset/
-git commit -m "chore: add changeset for <brief description>"
 ```
 
 ---

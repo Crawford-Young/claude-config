@@ -16,7 +16,7 @@ A structured end-of-phase dialogue between Claude and the user. Claude self-refl
 Read everything relevant to the phase that just ended:
 
 - `git log` since phase start — what was built, what changed
-- Active or recently completed checklist in `~/code/docs/checklists/active/` or `done/` — what was planned vs delivered (the checklist IS the plan; look here first, not `docs/<project-name>/phases/`)
+- Active or recently completed checklist in `~/code/docs/<project>/checklists/active/` or `done/` — what was planned vs delivered (the checklist IS the plan)
 - All existing agent-facing MDs:
   - `~/code/CLAUDE.md` (workspace level)
   - Repo-level `CLAUDE.md`

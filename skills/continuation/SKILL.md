@@ -34,7 +34,7 @@ Writes a handoff file capturing session state before `/clear`. The next session 
 
 1. **Locate active checklist** — scan `docs/<project>/checklists/active/` for the current phase file
 2. **Check git state** — `git status` + `git log --oneline -5` from the project dir
-3. **Read last N completed tasks** from checklist (or infer from code present vs checklist)
+3. **Read last N completed tasks** from checklist (or infer from code present vs checklist). **If checklist boxes don't match reality, tick them now before writing the handoff** — the handoff is the reconciliation gate; never hand off a checklist that lies.
 4. **Identify next unchecked task** — the exact step to start on resume
 5. **Write handoff file** to `docs/<project>/continuation/<YYYY-MM-DD-HH-MM>-handoff.md`
 6. **Tell the user** the handoff path and what to say at session start

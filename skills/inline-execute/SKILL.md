@@ -9,7 +9,7 @@ description: Use when executing a checklist plan inline in the current session w
 
 ## Overview
 
-Execute a checklist from `docs/checklists/active/` task-by-task in the current session. Self-review after each task. Compact at every `<!-- COMPACT POINT -->` marker. No subagents dispatched.
+Execute a checklist from `docs/<project>/checklists/active/` task-by-task in the current session. Self-review after each task. Compact at every `<!-- COMPACT POINT -->` marker. No subagents dispatched.
 
 Use `superpowers:subagent-driven-development` instead when tasks touch 3+ files, require integration judgment, or involve architecture decisions.
 
@@ -17,7 +17,7 @@ Use `superpowers:subagent-driven-development` instead when tasks touch 3+ files,
 
 ### Step 1: Load
 
-1. Scan `docs/checklists/active/` — if multiple files, ask user which to execute
+1. Scan `docs/<project>/checklists/active/` — if multiple files, ask user which to execute
 2. Read target checklist in full
 3. Critical review: flag tasks with missing paths, undefined dependencies, or ambiguous steps
    - Gaps found → surface to user, stop. Do not guess.
@@ -46,7 +46,7 @@ For each unchecked task (top to bottom):
 At every `<!-- COMPACT POINT -->` in the checklist:
 
 1. Ensure all completed tasks are ticked in the checklist file
-2. Run `/compact`
+2. Stop and prompt the user to run `/compact` — the agent cannot invoke it; do not continue past the marker until compaction or explicit user go-ahead
 3. After compaction: read checklist only to re-orient — find first unchecked task, resume
 
 The checklist is the sole state that survives compaction. Do not re-read specs or plan prose.
@@ -54,7 +54,7 @@ The checklist is the sole state that survives compaction. Do not re-read specs o
 ### Step 4: Complete
 
 All tasks ticked:
-1. Move checklist: `docs/checklists/active/<file>.md` → `docs/checklists/done/<file>.md`
+1. Move checklist: `docs/<project>/checklists/active/<file>.md` → `docs/<project>/checklists/done/<file>.md`
 2. Run `claude-md-management:reflect`
 
 ## BLOCKED Condition

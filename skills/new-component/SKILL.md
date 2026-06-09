@@ -9,6 +9,7 @@ You are creating a new UI component for a Radix UI + CVA + Tailwind CSS componen
 Read these files before starting — they contain the exact patterns to follow:
 - `~/code/docs/COMPONENT-LIBRARY.md` — structure, CVA pattern, accessibility checklist
 - `~/code/docs/PATTERNS.md` — cn() helper, CVA variant reference
+- `~/code/docs/agents/COMPONENT-AGENT.md` — test gotchas (V8 coverage gaps, dropdown testing, story rules) and TypeScript style rules
 
 <HARD-GATE>
 Never move to the next step until the current step has passed. If a step fails, fix it before continuing — do not skip ahead.
@@ -33,7 +34,7 @@ Do not proceed to Step 2 until you have clear answers to all six.
 
 ## Step 2 — Write the Failing Test
 
-Create `tests/unit/components/ui/<name>.test.tsx`.
+Create `src/components/ui/<name>/<name>.test.tsx` (tests are colocated with the component).
 
 Cover all of:
 - Renders without crashing and shows content
@@ -46,7 +47,7 @@ Cover all of:
 
 After writing the test, run it:
 ```bash
-pnpm vitest run tests/unit/components/ui/<name>.test.tsx
+pnpm vitest run src/components/ui/<name>/<name>.test.tsx
 ```
 
 **Confirm it fails.** If it passes before any implementation exists, the test has a bug — fix the test before continuing. A green test with no implementation means the assertion is not actually checking anything meaningful.
@@ -55,7 +56,7 @@ pnpm vitest run tests/unit/components/ui/<name>.test.tsx
 
 ## Step 3 — Implement the Component
 
-Create `src/components/ui/<name>.tsx`.
+Create `src/components/ui/<name>/<name>.tsx`.
 
 Follow the exact pattern in `~/code/docs/COMPONENT-LIBRARY.md`:
 - `React.forwardRef` wrapping
@@ -71,10 +72,16 @@ Write the minimum implementation that makes the tests pass. Do not add features 
 
 ## Step 4 — Export
 
-Open `src/components/ui/index.ts` (create it if it doesn't exist) and add:
+Create `src/components/ui/<name>/index.ts` (per-component barrel):
 
 ```ts
 export { ComponentName, type ComponentNameProps, componentNameVariants } from './component-name'
+```
+
+Then add the component to the library barrel `src/index.ts`:
+
+```ts
+export * from './components/ui/component-name'
 ```
 
 ---
@@ -83,7 +90,7 @@ export { ComponentName, type ComponentNameProps, componentNameVariants } from '.
 
 Run:
 ```bash
-pnpm vitest run --coverage tests/unit/components/ui/<name>.test.tsx
+pnpm vitest run --coverage src/components/ui/<name>/<name>.test.tsx
 ```
 
 All tests must pass. Coverage must be 100% on statements, branches, functions, and lines.
