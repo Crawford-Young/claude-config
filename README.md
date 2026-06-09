@@ -32,6 +32,15 @@ bash setup.sh
 
 Skills are linked into `~/.claude/skills/` and available immediately in Claude Code — no restart needed.
 
+## Scripts
+
+`scripts/` holds workspace utility scripts:
+
+| Script | Purpose |
+|---|---|
+| `export-harness.ps1` / `import-harness.ps1` | Export/import Claude Code harness config between machines |
+| `open-admin-shells.ps1` | Open elevated PowerShell windows for admin tasks |
+
 ## Plugin skill overrides
 
 Some official plugin skills are edited and tracked under `overrides/<plugin>/<skill>/SKILL.md`. The plugin cache directory is replaced with a junction to the repo, so the skill still loads under its original namespace (e.g. `claude-md-management:reflect`).
