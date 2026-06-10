@@ -11,7 +11,7 @@ This file governs **all projects** in this workspace (`~/code`). Rules here appl
 > - [`docs/ENV.md`](./docs/ENV.md) — environment variable conventions (load when setting up env or .env.example)
 > - [`docs/COMPONENT-LIBRARY.md`](./docs/COMPONENT-LIBRARY.md) — Radix+CVA component guide (load when building UI)
 > - [`docs/TYPESCRIPT-STYLE.md`](./docs/TYPESCRIPT-STYLE.md) — full TypeScript style guide with real-world examples
-> - [`docs/brand/`](./docs/brand/) — brand identity + design system (load `brand-identity.md` for tokens/colors/motion, `design-system.md` for layout/states/composition)
+> - [`docs/brand/`](./docs/brand/) — brand identity + design system + motion (load `brand-identity.md` for tokens/colors, `design-system.md` for layout/states/composition, `motion.md` for transitions/loading/animation)
 > - [`docs/agents/`](./docs/agents/) — subagent briefing MDs: `COMPONENT-AGENT.md`, `NEW-REPO-AGENT.md`, `WAVE-RELEASE-AGENT.md`, `DOCS-AGENT.md`
 > - [`docs/ORCHESTRATOR.md`](./docs/ORCHESTRATOR.md) — model tiers, dispatch template, compact discipline, workflow selection (load when orchestrating)
 > - [`docs/SKILLS.md`](./docs/SKILLS.md) — canonical situation→skill routing, trigger discipline, cost notes (load when unsure which skill applies)
@@ -124,6 +124,8 @@ Always write and commit the spec before producing an implementation plan. No exc
 
 **Plan path verification:** Every file path listed in a plan must be verified to exist (Glob) at plan-writing time — stale grep results are not evidence.
 
+**Plan premise verification:** Any plan step that says "follow the existing pattern in X" must cite a verified `file:line` confirmed at plan-writing time. Unverifiable premises are written as assumptions to confirm, never as facts. (2026-06-10: a plan asserted e2e session mocking existed — it didn't; cost a full task to deferral.)
+
 ### 2. Visual / Token Work — Preview Gate
 
 For any color, token, or design system change: open Storybook first, verify dark + light mode visually, then write tests. Token changes are visual — they need eyes before engineering.
@@ -162,7 +164,7 @@ Nothing is "done" until all pass at 100%:
 - [ ] TypeScript — zero errors (`tsc --noEmit`)
 - [ ] ESLint + Prettier — zero errors or formatting diffs
 - [ ] Storybook — builds; all `ui/` components have stories
-- [ ] Lighthouse — 100 in all four categories (dark + light mode)
+- [ ] Lighthouse — 100 in all four categories (dark + light mode), run against a production build (`pnpm build && pnpm start`, never dev). Accepted documented deviations: localhost-only artifacts (e.g. `/_vercel/insights/*` 404s cap Best Practices ~96 — they resolve on Vercel deploys) and LCP cost of intentional entry animations. When Lighthouse can't toggle theme (next-themes localStorage), light-mode contrast is covered by axe instead — note the deviation in the checklist, don't re-litigate it per wave.
 - [ ] axe — zero violations
 - [ ] Sentry — integrated and reporting (production deployments)
 - [ ] Dependabot — `.github/dependabot.yml` present
@@ -198,6 +200,8 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 
 **Vitest patterns:**
 - Mocking `auth()` returning null: `vi.mocked(auth).mockResolvedValueOnce(null as never)` — `null as never` required because `auth` has middleware + callback overloads; plain `null` fails type-check.
+- Component mocks (dialogs especially) must render the DATA props they receive (dates, times, ids as visible text/attrs), not just component identity — identity-only mocks have hidden real contract bugs (2026-06-10: full datetime passed where date-only was required; test passed, save silently wiped data).
+- Structurally unreachable guard statements (e.g. `if (!x) return` where render conditions guarantee `x`) block the 100%-statements gate — restructure as a statement-free JSX inline guard (`{x && handler(x)}`); the untaken branch then falls under the DoD branch exemption.
 
 ---
 

@@ -190,92 +190,13 @@ Anything with a visual opinion — buttons, cards, inputs, effects, motion — g
 
 ## 7. Motion
 
-- **Default:** Tailwind `transition-*` for micro-interactions
-- **Framer Motion:** page transitions, shared layout, magnetic/physics
-- **Always:** `motion-safe:` prefix on all Tailwind animations; check `prefers-reduced-motion` in Framer hooks
-- **Speed:** 150–250ms exits, 200–400ms entrances, 500–600ms hero reveals max
+Moved → [`motion.md`](./motion.md). All motion — timing tokens, easing, transitions, scroll, micro-interactions — lives there.
 
 ---
 
-## 8. Loading & Transition States — Cinematic Model
+## 8. Loading & Transition States
 
-**Principle:** Loading is experience, not apology. No spinners, ever. Loading states give the user something to *be in* while the system works — Naughty Dog rule: disguise loading as content arriving.
-
-### Pattern 1 — Skeleton Reveal
-
-Skeleton blocks match the exact content shape. Background: `--surface` with shimmer sweep using `--accent-subtle` as glow. On arrival, crossfade over skeleton in 200ms. Grid cards stagger 40ms per card.
-
-```
-skeleton → content crossfade: 200ms ease-out
-grid stagger: 40ms × index, capped at 5 cards
-shimmer: 1.5s linear infinite, emerald-deep glow
-```
-
-### Pattern 2 — Cinematic Progress
-
-2px line at top of viewport. Fills with `--accent`. Fast start (0→60% in 300ms), slow crawl (60→90% over real load time), snaps to 100% and fades on complete.
-
-```
-phase 1: 0→60% in 300ms, ease-out-quart
-phase 2: 60→90% over real duration, linear
-phase 3: 90→100% in 150ms, then fade 200ms
-```
-
-### Pattern 3 — Ambient Typewriter
-
-Monospace ghost text (`--font-mono`, `--muted-foreground` at 60% opacity) streams curated context phrases while real response is pending. Examples: `initializing context...`, `reading repositories`, `cross-referencing`. Real content streams in via same component on arrival — seamless handoff.
-
-```
-typewriter: 40ms/char
-ghost fade out: 150ms ease-in on arrival
-```
-
-### Pattern 4 — Environment Shift
-
-Ambient background increases intensity ~20% during loading. Settles back on complete. 400ms ease-in-out both directions. Never runs alone — always alongside Pattern 2 or 3.
-
-### Pattern 5 — Staggered Arrival
-
-Content arrives, it doesn't snap. Hero text: SplitText 30ms word stagger, `translateY(12px) → 0`, 400ms ease-out-quart. Cards: 40ms stagger, `translateY(8px) → 0`. Numbers: NumberTicker 800ms. Images: opacity fade 300ms after container settles.
-
-### When each pattern fires
-
-| Situation | Pattern |
-|---|---|
-| Page navigation | 2 + 4 |
-| RSC data fetch / card load | 1 + 4 |
-| AI / long API call (>1.5s) | 3 + 4 |
-| Any content arrival | 5 |
-| Short API call (<1.5s) | 5 only |
-
-### Never
-
-- Spinners
-- Percentage text on progress
-- "Loading..." text
-- Opacity-only pulsing skeletons
-- Blocking overlays over existing content
-
-### `prefers-reduced-motion`
-
-- Pattern 1: shimmer off, skeleton static, crossfade still fires
-- Pattern 2: no easing curve, linear fill
-- Pattern 3: speed 0ms (text appears in chunks instantly)
-- Pattern 4: disabled entirely
-- Pattern 5: transforms off, opacity fades only
-
-### Component library additions
-
-| Component | Pattern | Status |
-|---|---|---|
-| `Skeleton` | 1 — shimmer variant | ⚠️ Shipped, but current implementation is `animate-pulse` — the shimmer variant this spec requires is not built yet (pulse-only is on the "Never" list above) |
-| `ProgressLine` | 2 — top-of-viewport bar | ❌ Not built |
-| `TypewriterStream` | 3 — ghost text + stream handoff | ❌ Not built |
-| `StaggerReveal` | 5 — stagger wrapper | ❌ Not built |
-
-### Known divergence — `Spinner`
-
-`@crawfordyoung/ui` ships a `Spinner` component (wave 1, predates this spec). That conflicts with the "no spinners, ever" rule. Unresolved — either deprecate `Spinner` once Pattern 1–3 components exist, or scope the rule to page/content loading and keep `Spinner` for inline button-level pending states. Decide before Phase 4 work starts.
+Moved → [`motion.md`](./motion.md) §5 (Arrival & Loading). Patterns, fire-table, never-list, reduced-motion behavior, and the open Spinner divergence all live there.
 
 ---
 
@@ -297,7 +218,6 @@ Shipped in `tokens.css`: `--accent-hover`/`--accent-subtle`/`--accent-active` fa
 2. ❌ Wire new accent token variants to Aurora intensity/color — `aurora.tsx` doesn't reference `--accent-hover/-subtle/-active` yet
 
 ### Phase 3 — Visual components 🟡 Partial
-`CountUp` shipped (wave 5a). Remaining: move `SplitText` + `Spotlight` from portfolio `effects/` into the library; build `Marquee`, `BorderTrail`, `MagneticButton`.
-
 ### Phase 4 — Cinematic loading ❌ Not started
-`Skeleton` shimmer variant, `ProgressLine`, `TypewriterStream`, `StaggerReveal`. Resolve the `Spinner` divergence (§8) first.
+
+Both phases absorbed into [`motion.md`](./motion.md) §8 implementation order — track status there.
