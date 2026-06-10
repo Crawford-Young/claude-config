@@ -247,7 +247,7 @@ Every topic where the three sources disagree gets a row with a Picked value. Pic
 **Files:**
 - Create: `C:\Users\young\code\docs\brand\design-system.md`
 
-- [ ] **Step 1: Write file header + section skeleton**
+- [x] **Step 1: Write file header + section skeleton**
 
 ```markdown
 # Design System — Crawford Young
@@ -263,7 +263,7 @@ Composition layer: how pages are assembled. Exact values only — agents build f
 
 Then seven `## §N` headings matching the spec outline.
 
-- [ ] **Step 2: Fill §1 Layout anatomy from audit**
+- [x] **Step 2: Fill §1 Layout anatomy from audit**
 
 Required content (values from audit Portfolio/Cybond sections; fallback defaults in parens if audit found nothing):
 
@@ -274,7 +274,7 @@ Required content (values from audit Portfolio/Cybond sections; fallback defaults
 - Footer: audited structure
 - Breakpoints: mobile-first; only Tailwind defaults `sm md lg xl`; never `2xl`-specific layout
 
-- [ ] **Step 3: Fill §2 Elevation**
+- [x] **Step 3: Fill §2 Elevation**
 
 Four-level table. Use audited shadow classes where library ships them; fallback defaults:
 
@@ -294,7 +294,7 @@ Plus the rule line: "Elevation = surface step + shadow together, never shadow al
 **Files:**
 - Modify: `C:\Users\young\code\docs\brand\design-system.md`
 
-- [ ] **Step 1: Fill §3 Density & spacing rhythm**
+- [x] **Step 1: Fill §3 Density & spacing rhythm**
 
 From audit (Cybond forms, library padding); fallbacks in parens:
 
@@ -303,7 +303,7 @@ From audit (Cybond forms, library padding); fallbacks in parens:
 - Tables/lists: rows `h-12` standard, `h-10` dense; cells `px-3`
 - Cards: `p-4` compact, `p-6` standard, `p-8` feature
 
-- [ ] **Step 2: Fill §4 Empty / error / zero states**
+- [x] **Step 2: Fill §4 Empty / error / zero states**
 
 Write exactly (no audit dependency — these are new patterns):
 
@@ -320,7 +320,7 @@ Write exactly (no audit dependency — these are new patterns):
 **Files:**
 - Modify: `C:\Users\young\code\docs\brand\design-system.md`
 
-- [ ] **Step 1: Fill §5 Iconography**
+- [x] **Step 1: Fill §5 Iconography**
 
 - Lucide only — no other icon sets, no emoji in UI chrome
 - Stroke width: default 2; never override per-icon
@@ -328,7 +328,7 @@ Write exactly (no audit dependency — these are new patterns):
 - Color: `currentColor` inherit by default; `text-muted-foreground` for decorative; `text-accent` only for active/selected indicators
 - Icon-only controls require `aria-label` + tooltip; default is icon + visible label
 
-- [ ] **Step 2: Fill §6 Data viz**
+- [x] **Step 2: Fill §6 Data viz**
 
 Use audited Cybond chart colors if any exist; otherwise this fallback ordered series (emerald-first, then existing semantic hues — never introduce new hues):
 
@@ -351,7 +351,7 @@ Use audited Cybond chart colors if any exist; otherwise this fallback ordered se
 **Files:**
 - Modify: `C:\Users\young\code\docs\brand\design-system.md`
 
-- [ ] **Step 1: Fill §7 Voice & copy**
+- [x] **Step 1: Fill §7 Voice & copy**
 
 Write exactly:
 
@@ -361,11 +361,11 @@ Write exactly:
 - Casing: sentence case everywhere; uppercase only at Micro/tag scale (per brand-identity type table)
 - Numbers/dates: `--font-mono` for stats and timestamps
 
-- [ ] **Step 2: Add divergence table**
+- [x] **Step 2: Add divergence table**
 
 `## Known divergences` section at file end — one row per non-picked audit conflict (from audit Conflicts table): app, current value, spec value, status "deferred to compliance wave". If audit found no conflicts, write "None found at audit (2026-06-10)."
 
-- [ ] **Step 3: Add out-of-scope note**
+- [x] **Step 3: Add out-of-scope note**
 
 End of file:
 
@@ -383,18 +383,18 @@ End of file:
 - Move: `docs\brand\checklists\active\brand-design-system.md` → `docs\brand\checklists\done\`
 - Move: `docs\brand\issues\2026-06-10-design-system-issues.md` → `docs\brand\issues\done\` (after reflect)
 
-- [ ] **Step 1: Verify pointers**
+- [x] **Step 1: Verify pointers**
 
 Grep `spec-brand-identity` across workspace — hits only in dated decision records (design spec, this checklist, audit if mentioned). Grep `docs/brand/README|design-system.md` confirms CLAUDE.md companion line updated.
 
-- [ ] **Step 2: Verify design-system.md completeness**
+- [x] **Step 2: Verify design-system.md completeness**
 
 Read the file top to bottom: all seven sections filled, no "TBD"/"audit pending" text, every table has values, divergence section present.
 
-- [ ] **Step 3: Spec-vs-shipped check**
+- [x] **Step 3: Spec-vs-shipped check**
 
 Open `specs/2026-06-10-design-system-design.md` §3–4, confirm every listed item exists in shipped files (README rows, pointer files, seven sections).
 
-- [ ] **Step 4: Run reflect**
+- [x] **Step 4: Run reflect**
 
 Run `claude-md-management:reflect` — mandatory at wave close. Review issue log, then move it to `issues/done/`. Move this checklist to `checklists/done/`.
