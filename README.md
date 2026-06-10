@@ -1,6 +1,21 @@
 # claude-config
 
-Personal Claude Code skills for Next.js fullstack development.
+Personal Claude Code skills and workspace standards for Next.js fullstack development.
+
+## Layout
+
+| Path | What | Linked to |
+|---|---|---|
+| `skills/` | Custom skills | `~/.claude/skills/<name>` (junction/symlink) |
+| `overrides/` | Edited official plugin skills | plugin cache dir (junction) |
+| `workspace/CLAUDE.md` | Master development standards | `~/code/CLAUDE.md` (symlink) |
+| `workspace/docs/` | Workspace reference docs — STACK, PATTERNS, TEMPLATES, ENV, COMPONENT-LIBRARY, TYPESCRIPT-STYLE, ORCHESTRATOR, **SKILLS** (skill routing), `agents/`, `brand/` | `~/code/docs/<name>` (symlinks for files, junctions for dirs) |
+| `docs/` | Repo-only docs (daily updates, prompts) | — |
+| `scripts/` | Workspace utility scripts | — |
+
+Per-project planning docs (`~/code/docs/<project>/`) stay local — churn, not standards.
+
+**Skill usage routing** lives in [`workspace/docs/SKILLS.md`](./workspace/docs/SKILLS.md) — the canonical situation→skill table. `ORCHESTRATOR.md` and `CLAUDE.md` point to it.
 
 ## Skills
 
@@ -30,7 +45,9 @@ cd claude-config
 bash setup.sh
 ```
 
-Skills are linked into `~/.claude/skills/` and available immediately in Claude Code — no restart needed.
+Skills are linked into `~/.claude/skills/`, and workspace standards (`workspace/CLAUDE.md`, `workspace/docs/`) are linked into `~/code/` — available immediately in Claude Code, no restart needed.
+
+> **Windows:** file symlinks (CLAUDE.md, docs root MDs) require Developer Mode (Settings → System → For developers) or an elevated shell. Directory junctions need neither.
 
 ## Scripts
 

@@ -28,5 +28,32 @@ for skill_dir in "$SKILLS_DIR"/*/; do
     echo "Linked: $name"
 done
 
+# --- Workspace standards (CLAUDE.md + reference docs) ---
+CODE="$HOME/code"
+WS="$REPO/workspace"
+mkdir -p "$CODE/docs"
+
+link_item() {
+    local link="$1" target="$2"
+    if [ -L "$link" ]; then
+        echo "Already linked: $link (skipping)"
+        return
+    fi
+    if [ -e "$link" ]; then
+        echo "WARNING: $link exists and is not a symlink. Remove it manually first."
+        return
+    fi
+    ln -s "$target" "$link"
+    echo "Linked: $link"
+}
+
+link_item "$CODE/CLAUDE.md" "$WS/CLAUDE.md"
+for f in "$WS"/docs/*.md; do
+    link_item "$CODE/docs/$(basename "$f")" "$f"
+done
+for d in "$WS"/docs/*/; do
+    link_item "$CODE/docs/$(basename "$d")" "${d%/}"
+done
+
 echo ""
-echo "Done. Skills available in Claude Code immediately."
+echo "Done. Skills and workspace standards available immediately."

@@ -28,4 +28,32 @@ Get-ChildItem $skillsDir -Directory | ForEach-Object {
     Write-Host "Linked: $name"
 }
 
-Write-Host "`nDone. Skills available in Claude Code immediately."
+# --- Workspace standards (CLAUDE.md + reference docs) ---
+# File symlinks require Developer Mode (Settings > System > For developers) or an elevated shell.
+$code = "$env:USERPROFILE\code"
+$wsRepo = Join-Path $repo "workspace"
+New-Item -ItemType Directory -Force "$code\docs" | Out-Null
+
+function Link-Item($linkPath, $targetPath, $kind) {
+    if (Test-Path $linkPath) {
+        $item = Get-Item $linkPath -Force
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            Write-Host "Already linked: $linkPath (skipping)"
+            return
+        }
+        Write-Warning "$linkPath exists and is not a link. Remove it manually first."
+        return
+    }
+    New-Item -ItemType $kind -Path $linkPath -Target $targetPath | Out-Null
+    Write-Host "Linked: $linkPath"
+}
+
+Link-Item "$code\CLAUDE.md" "$wsRepo\CLAUDE.md" SymbolicLink
+Get-ChildItem "$wsRepo\docs" -File -Filter *.md | ForEach-Object {
+    Link-Item "$code\docs\$($_.Name)" $_.FullName SymbolicLink
+}
+Get-ChildItem "$wsRepo\docs" -Directory | ForEach-Object {
+    Link-Item "$code\docs\$($_.Name)" $_.FullName Junction
+}
+
+Write-Host "`nDone. Skills and workspace standards available immediately."
