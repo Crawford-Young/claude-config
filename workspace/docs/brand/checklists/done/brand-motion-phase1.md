@@ -132,12 +132,12 @@ Replace the `docs/brand/` companion-references line with:
 
 ### Task 4: Commit doc wave (claude-config)
 
-- [ ] **Step 1: Review the diff**
+- [x] **Step 1: Review the diff**
 
 Run: `git -C C:\Users\young\code\claude-config status --short` and `git -C C:\Users\young\code\claude-config diff`
 Expected: `motion.md` new; `brand-identity.md`, `README.md`, `CLAUDE.md` modified; checklist + issue log new.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git -C C:\Users\young\code\claude-config add workspace/docs/brand/ workspace/CLAUDE.md
@@ -145,6 +145,8 @@ git -C C:\Users\young\code\claude-config commit -m "docs(brand): create motion.m
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
+
+> Done — commit `10888d4` (also carries user's own CLAUDE.md "Plan premise verification" line edit, present in working tree at commit time).
 
 <!-- COMPACT POINT -->
 
@@ -157,7 +159,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 Preview-gate note: these vars render nothing until consumed — no visual diff exists to check in Storybook. Gate satisfied by inspection.
 
-- [ ] **Step 1: Create feature branch**
+- [x] **Step 1: Create feature branch**
 
 ```bash
 git -C C:\Users\young\code\component-library checkout main
@@ -165,7 +167,7 @@ git -C C:\Users\young\code\component-library pull --rebase
 git -C C:\Users\young\code\component-library checkout -b feat/motion-tokens
 ```
 
-- [ ] **Step 2: Add motion vars to `:root`**
+- [x] **Step 2: Add motion vars to `:root`**
 
 Insert after the Radius block (mode-independent — `:root` only, do NOT add to `.dark`):
 
@@ -181,7 +183,7 @@ Insert after the Radius block (mode-independent — `:root` only, do NOT add to 
   --ease-exit: cubic-bezier(0.5, 0, 0.75, 0);
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git -C C:\Users\young\code\component-library add src/styles/tokens.css
@@ -189,6 +191,8 @@ git -C C:\Users\young\code\component-library commit -m "feat(tokens): add motion
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
+
+> Done — commit `d36a9e9`. Spec review ✅, quality review ✅ (Approved, no changes).
 
 ---
 
@@ -200,7 +204,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 Style notes: repo uses no semicolons, single quotes (match `src/lib/utils.ts`). `as const` objects, no interfaces needed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from 'vitest'
@@ -241,12 +245,12 @@ describe('SPRING_MAGNETIC', () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pnpm --dir C:\Users\young\code\component-library vitest run src/lib/motion.test.ts`
 Expected: FAIL — `Cannot find module './motion'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 /* src/lib/motion.ts
@@ -290,12 +294,12 @@ export const SPRING_MAGNETIC = {
 } as const
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pnpm --dir C:\Users\young\code\component-library vitest run src/lib/motion.test.ts`
 Expected: PASS, 5 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git -C C:\Users\young\code\component-library add src/lib/motion.ts src/lib/motion.test.ts
@@ -303,6 +307,8 @@ git -C C:\Users\young\code\component-library commit -m "feat(tokens): add MOTION
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
+
+> Done — commit `7b39b5b`. TDD verified (fail → pass, 5/5). Spec review ✅, quality review ✅ (Approved). Quality note adopted into T7: Framer `ease` prop needs spread (`[...EASE.out]`) — add doc-comment line.
 
 ---
 
@@ -312,7 +318,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Modify: `C:\Users\young\code\component-library\src\index.ts` (append at end)
 - Modify: `C:\Users\young\code\component-library\src\tailwind\preset.ts` (theme.extend, after `fontFamily` block ~line 77)
 
-- [ ] **Step 1: Export from library entry**
+- [x] **Step 1: Export from library entry**
 
 Append to `src/index.ts`:
 
@@ -320,7 +326,7 @@ Append to `src/index.ts`:
 export * from './lib/motion'
 ```
 
-- [ ] **Step 2: Map motion vars in the Tailwind preset**
+- [x] **Step 2: Map motion vars in the Tailwind preset**
 
 In `preset.ts` `theme.extend`, after the `fontFamily` block, add (preset.ts has no test file — config is not unit-tested, keep that):
 
@@ -339,12 +345,12 @@ In `preset.ts` `theme.extend`, after the `fontFamily` block, add (preset.ts has 
       },
 ```
 
-- [ ] **Step 3: Typecheck + full unit suite**
+- [x] **Step 3: Typecheck + full unit suite**
 
 Run: `pnpm --dir C:\Users\young\code\component-library exec tsc --noEmit` then `just --justfile C:\Users\young\code\component-library\Justfile --working-directory C:\Users\young\code\component-library test`
 Expected: zero TS errors; coverage stays 100% (motion.ts fully covered by its test)
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git -C C:\Users\young\code\component-library add src/index.ts src/tailwind/preset.ts
@@ -353,22 +359,24 @@ git -C C:\Users\young\code\component-library commit -m "feat(tokens): export mot
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
+> Done — commit `e3d8c28` (also carries the Framer-spread doc-comment line from T6 review). tsc clean; 996 tests pass, coverage 100% across the board. Spec review ✅ (1-deletion = benign `*/` reflow), quality review ✅ (Approved). Quality note → T8: add one-line comment on `transitionTimingFunction` block — `ease-out`/`ease-in-out` intentionally shadow Tailwind defaults with brand curves.
+
 <!-- COMPACT POINT -->
 
 ---
 
 ### Task 8: Full check, changeset, PR
 
-- [ ] **Step 1: Full check**
+- [x] **Step 1: Full check**
 
 Run: `just --justfile C:\Users\young\code\component-library\Justfile --working-directory C:\Users\young\code\component-library check`
 Expected: lint + typecheck + test + e2e all green
 
-- [ ] **Step 2: Changeset**
+- [x] **Step 2: Changeset**
 
 Run: `just --justfile C:\Users\young\code\component-library\Justfile --working-directory C:\Users\young\code\component-library changeset` — choose **minor** (new exports: motion constants + preset keys). Summary: `Add motion design tokens: CSS vars (--motion-*, --ease-*), MOTION/EASE/EASE_CSS/STAGGER/SPRING_MAGNETIC constants, and Tailwind preset duration/easing mappings.`
 
-- [ ] **Step 3: Update repo MDs on the branch**
+- [x] **Step 3: Update repo MDs on the branch**
 
 Per component-library MD rule: update `component-library/README.md` (document `MOTION`/`EASE`/`EASE_CSS`/`STAGGER`/`SPRING_MAGNETIC` exports + Tailwind `duration-fast`/`ease-exit`-style utilities) and `component-library/CLAUDE.md` (add motion-tokens note to file structure section: `src/lib/motion.ts`).
 
@@ -379,7 +387,7 @@ git -C C:\Users\young\code\component-library commit -m "docs: document motion to
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 4: Commit changeset, push, open PR**
+- [x] **Step 4: Commit changeset, push, open PR**
 
 ```bash
 git -C C:\Users\young\code\component-library add .changeset
@@ -390,15 +398,19 @@ git -C C:\Users\young\code\component-library push -u origin feat/motion-tokens
 gh pr create --repo Crawford-Young/component-library --title "feat(tokens): motion design tokens" --fill
 ```
 
-- [ ] **Step 5: Watch CI**
+- [x] **Step 5: Watch CI**
 
 Run: `gh pr checks <number> --watch`
 Expected: all green — do not move on until green or user dismisses.
+
+> Done — commits `a3ae6a3` (docs: README Motion-tokens section, CLAUDE.md file structure, preset.ts shadowing comment), `d3927bc` (changeset, minor), `8a12bfd` (fix: Prettier mangled `*` globs to `_` in changeset — backtick-wrapped). PR #51 open, all 6 CI checks green. Spec review ✅ (compliant, no scope creep), quality review ✅ (Approved; minors noted: duration values duplicated comment+table, no EASE_CSS usage example — polish, deferred). Motion.mdx foundation story deferred to Phase 2 per user.
 
 ---
 
 ### Task 9: Wave close
 
-- [ ] **Step 1:** Move this checklist to `docs/brand/checklists/done/`, issue log to `docs/brand/issues/done/`
-- [ ] **Step 2:** Run `claude-md-management:reflect` (mandatory at wave close)
-- [ ] **Step 3:** Commit closure in claude-config (user approval per policy)
+- [x] **Step 1:** Move this checklist to `docs/brand/checklists/done/`, issue log to `docs/brand/issues/done/`
+- [x] **Step 2:** Run `claude-md-management:reflect` (mandatory at wave close)
+- [x] **Step 3:** Commit closure in claude-config (user approval per policy)
+
+> Done — reflect run with user. Adopted: component-library changeset rules (write file directly, backtick globs), ORCHESTRATOR.md trivial-fix exception, motion.md Phase 2 scope (preset animation easing alignment + Motion.mdx). Issue log closed empty — zero issues logged this wave. Session: $43.37, orchestrator = 85% of cost.

@@ -15,6 +15,10 @@
 
 Every `Agent()` call must set `model:` explicitly. Fable orchestrates only — never used for bounded implementation tasks. Opus handles architecture decisions and review. Haiku handles all reconnaissance before Sonnet begins implementation.
 
+**Verify reviewer Criticals before dispatching fixes.** When a review subagent reports a Critical, the orchestrator reads the cited source lines itself and confirms the claim before ordering a fix subagent. Reviewers can false-alarm (2026-06-10 wave: one false TZ alarm, three real bugs — verification cost seconds, a wrong fix cycle costs a full dispatch + re-review).
+
+**Trivial-fix exception to "never fix manually".** The orchestrator may hand-apply a mechanical fix of ~1 line (typo, escaping, formatting artifact) when the implementer agent is no longer reachable — a fresh dispatch costs more than the edit risks. Anything requiring judgment or touching more than one site: re-dispatch. (2026-06-10 motion wave: Prettier mangled a changeset glob; one-line backtick fix beat a full agent spawn.)
+
 ---
 
 ## Session Start Protocol

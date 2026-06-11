@@ -209,8 +209,8 @@ Apps own: `viewTransition` flag in `next.config.ts`, route wiring, `view-transit
 
 ### Implementation Order
 
-1. 🟡 **Tokens** — `tokens.css` vars + TS constants *(in progress)*
-2. **Core primitives** — `ScrollReveal`, `StaggerReveal`, `ProgressLine`, `Skeleton` shimmer (clears existing Phase 4 backlog)
+1. ✅ **Tokens** — `tokens.css` vars + TS constants *(shipped — component-library PR #51)*
+2. **Core primitives** — `ScrollReveal`, `StaggerReveal`, `ProgressLine`, `Skeleton` shimmer (clears existing Phase 4 backlog). Also: align the preset's hardcoded `animation` shorthand easings (CSS keyword `ease-out`/`ease-in-out`) with brand curves, and add a `stories/foundation/Motion.mdx` token reference page.
 3. **Transitions** — VT flag in portfolio, scene cuts, card→detail morph
 4. **Cinematic extras** — `Parallax`, `MagneticButton`, `TypewriterStream`, `useScrollProgress`
 5. **Per-app compliance** — joins deferred design-system compliance waves
