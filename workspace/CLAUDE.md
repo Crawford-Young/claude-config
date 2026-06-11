@@ -130,6 +130,8 @@ Always write and commit the spec before producing an implementation plan. No exc
 
 For any color, token, or design system change: open Storybook first, verify dark + light mode visually, then write tests. Token changes are visual — they need eyes before engineering.
 
+If Playwright MCP is unavailable or wedged (calls timing out): verify generated SVGs/images textually instead — grep output for `NaN|Infinity|undefined`, inspect the header (width/height/viewBox) and key coordinates — and note the deviation rather than fighting the browser. (2026-06-10: MCP wedged mid-session; textual verification caught everything the eyeball pass would have.)
+
 ### 3. Branch Strategy
 
 - New branch per feature/fix — never commit to `main`

@@ -17,6 +17,8 @@ Every `Agent()` call must set `model:` explicitly. Fable orchestrates only — n
 
 **Verify reviewer Criticals before dispatching fixes.** When a review subagent reports a Critical, the orchestrator reads the cited source lines itself and confirms the claim before ordering a fix subagent. Reviewers can false-alarm (2026-06-10 wave: one false TZ alarm, three real bugs — verification cost seconds, a wrong fix cycle costs a full dispatch + re-review).
 
+**Combined review for verbatim-code tasks.** When a plan task prescribes exact code byte-for-byte (no implementer judgment), the two-stage review collapses into ONE Opus pass doing spec byte-compare + quality together — a separate spec reviewer adds nothing over the byte-compare. Tasks with any implementer latitude keep the full two-stage flow. (2026-06-10 profile-stats wave: 4 combined reviews, 4 approvals, zero missed defects, ~half review cost.)
+
 **Trivial-fix exception to "never fix manually".** The orchestrator may hand-apply a mechanical fix of ~1 line (typo, escaping, formatting artifact) when the implementer agent is no longer reachable — a fresh dispatch costs more than the edit risks. Anything requiring judgment or touching more than one site: re-dispatch. (2026-06-10 motion wave: Prettier mangled a changeset glob; one-line backtick fix beat a full agent spawn.)
 
 ---
