@@ -1,2 +1,11 @@
 .DS_Store
 Thumbs.db
+
+# Project working artifacts never belong here — they live in ~/code/docs (local-private repo).
+# Junctioned dirs under workspace/docs/ hold reference docs only.
+workspace/docs/**/checklists/
+workspace/docs/**/continuation/
+workspace/docs/**/issues/
+workspace/docs/**/screenshots/
+workspace/docs/**/specs/
+workspace/docs/**/assets/
