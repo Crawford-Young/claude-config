@@ -84,7 +84,7 @@ Specs and checklists live in `~/code/docs/<project-name>/`. Workspace-level refe
 - Each debugging session / issue gets its own subfolder so screenshots from parallel processes never collide
 
 **Order for any new feature or project:**
-1. `superpowers:brainstorming` → write spec to `docs/<project>/specs/<date>-<topic>-design.md` → user approves
+1. `superpowers:brainstorming` → at a genuine approach fork, `persona-debate` skill debates the options before approaches are presented → write spec to `docs/<project>/specs/<date>-<topic>-design.md` → user approves
 2. `superpowers:writing-plans` → write checklist to `docs/<project>/checklists/active/<project>-<phase>.md` → `orchestrate` skill selects tier + profile, recorded in checklist header → user approves
 3. Create issue log at `docs/<project>/issues/<date>-<wave>-issues.md` (orchestrator only — never subagents)
 4. Write code — execute fully without approval on each change once plan is approved

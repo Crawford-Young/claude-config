@@ -24,6 +24,7 @@
 | Situation | Skill |
 |---|---|
 | Starting any feature — **always first** (includes feature evolution on existing components) | `superpowers:brainstorming` |
+| Brainstorm hits a genuine design fork — 2+ viable approaches with material trade-offs, or user says "debate this" | `persona-debate` |
 | After brainstorm, before coding | `superpowers:writing-plans` |
 | Executing any multi-task plan/checklist, wave start, dispatch or model decisions, profile selection | `orchestrate` (routes to T1 `inline-execute` or T2+ `superpowers:subagent-driven-development`) |
 | Executing a plan handed to a **separate fresh session** (rare — checklist workflows above are the default) | `superpowers:executing-plans` |
@@ -58,6 +59,7 @@ Inline (current session) → use the skill. Subagent dispatch → include the ag
 | Releasing the component library | `release` | `docs/agents/WAVE-RELEASE-AGENT.md` |
 | Executing a small-task checklist inline | `inline-execute` | — |
 | Tier/profile selection, dispatch, model routing, orchestration metrics | `orchestrate` | — |
+| Spec-time debate at a design fork — personas argue, user picks | `persona-debate` | — |
 | Handoff before `/clear` (auto-triggers after reflect, spec approval, wave end) | `continuation` | — |
 
 ## Next.js & Vercel
