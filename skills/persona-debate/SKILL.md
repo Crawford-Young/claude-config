@@ -43,7 +43,7 @@ Pick the 2–4 personas most relevant to the fork. State the lineup with a one-l
 
 ## Debate Protocol (inline role-play, max 2 rounds)
 
-1. **Frame.** Restate the user's goal **verbatim** — the exact quote, never a paraphrase — then state the fork. This is the anti-flattening guard; it is mandatory.
+1. **Frame.** Restate the user's goal **verbatim** — the exact quote, never a paraphrase — then state the fork. This is the anti-flattening guard; it is mandatory. No verbatim quote on record → quote the nearest recorded user wording and flag the absence; never paraphrase silently.
 2. **Round 1 — positions.** Each persona: 2–4 sentences, must cite a concrete consequence in THIS spec ("if we pick X, then Y breaks/costs/blocks"). No generic platitudes.
 3. **Round 2 — rebuttals.** Each persona attacks the strongest rival point. No persona may concede in round 2 — concessions appear only in synthesis.
 4. **Synthesis.** Drop the persona voices; write the trade-off table and recommendation.
