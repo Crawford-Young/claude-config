@@ -59,6 +59,8 @@ This file governs **all projects** in this workspace (`~/code`). Rules here appl
 
 Specs and checklists live in `~/code/docs/<project-name>/`. Workspace-level reference docs live in `~/code/docs/` root. Ambiguous or historical docs go to `~/code/docs/archive/`.
 
+`~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`agents/`, `brand/`, root reference MDs) are gitignored — their history lives in `claude-config`.
+
 **Structure per project:**
 ```
 ~/code/docs/<project-name>/
