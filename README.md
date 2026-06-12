@@ -25,6 +25,8 @@ Per-project planning docs (`~/code/docs/<project>/`) stay local — churn, not s
 | `inline-execute` | Executing a checklist with ≤2 files per task | Runs a checklist plan inline without subagent overhead |
 | `new-component` | "add a component", "create a [name] component" | Full TDD workflow for Radix UI + CVA + Tailwind components — test → implement → export → story → check |
 | `new-repo` | "new project", "create a repo", "scaffold" | 24-step production scaffold: git, env, justfile, ESLint, Husky, Vitest, Playwright, Storybook, CI, auth, monitoring |
+| `orchestrate` | Any multi-task plan execution, wave start, dispatch/model decisions | Tier ladder T1–T4, plan profiles, adaptive model routing, escalation, orchestration metrics |
+| `persona-debate` | Brainstorm hits a genuine design fork, or user says "debate this" | Personas with competing legitimate engineering claims argue options → trade-off table → user picks. Spec-phase only |
 | `release` | "release", "publish", "cut a release" | Full release process for npm packages — checks, build, verify, changeset, commit |
 
 ## Setup
