@@ -69,4 +69,4 @@ Never guess past a blocker.
 
 ## Workflow Routing
 
-See `docs/ORCHESTRATOR.md` — Workflow Selection for when to use this skill vs `superpowers:subagent-driven-development`.
+See the `orchestrate` skill — tier formula decides: T1 → this skill, T2+ → `superpowers:subagent-driven-development`.
