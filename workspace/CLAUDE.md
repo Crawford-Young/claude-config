@@ -13,7 +13,7 @@ This file governs **all projects** in this workspace (`~/code`). Rules here appl
 > - [`docs/TYPESCRIPT-STYLE.md`](./docs/TYPESCRIPT-STYLE.md) — full TypeScript style guide with real-world examples
 > - [`docs/brand/`](./docs/brand/) — brand identity + design system + motion (load `brand-identity.md` for tokens/colors, `design-system.md` for layout/states/composition, `motion.md` for transitions/loading/animation)
 > - [`docs/agents/`](./docs/agents/) — subagent briefing MDs: `COMPONENT-AGENT.md`, `NEW-REPO-AGENT.md`, `WAVE-RELEASE-AGENT.md`, `DOCS-AGENT.md`
-> - [`docs/ORCHESTRATOR.md`](./docs/ORCHESTRATOR.md) — model tiers, dispatch template, compact discipline, workflow selection (load when orchestrating)
+> - **Orchestration** (tiers T1–T4, model routing, plan profiles, dispatch, metrics) → invoke the `orchestrate` skill when orchestrating — canonical home is `claude-config/skills/orchestrate/SKILL.md`
 > - [`docs/SKILLS.md`](./docs/SKILLS.md) — canonical situation→skill routing, trigger discipline, cost notes (load when unsure which skill applies)
 
 > **Canonical location:** this file and the workspace reference docs (`docs/*.md`, `docs/agents/`, `docs/brand/`) live in the `claude-config` repo under `workspace/` and are symlinked/junctioned into `~/code`. Edit through either path — same file. Commit changes in `claude-config`.
@@ -85,14 +85,14 @@ Specs and checklists live in `~/code/docs/<project-name>/`. Workspace-level refe
 
 **Order for any new feature or project:**
 1. `superpowers:brainstorming` → write spec to `docs/<project>/specs/<date>-<topic>-design.md` → user approves
-2. `superpowers:writing-plans` → write checklist to `docs/<project>/checklists/active/<project>-<phase>.md` → user approves
+2. `superpowers:writing-plans` → write checklist to `docs/<project>/checklists/active/<project>-<phase>.md` → `orchestrate` skill selects tier + profile, recorded in checklist header → user approves
 3. Create issue log at `docs/<project>/issues/<date>-<wave>-issues.md` (orchestrator only — never subagents)
 4. Write code — execute fully without approval on each change once plan is approved
 5. Pause only when: checklist complete, blocked, or plan revision required
 
 **Issue log** (`docs/<project>/issues/<date>-<wave>-issues.md`) is a living log of wrong assumptions, missing behaviors, and bugs discovered during the wave. Orchestrator logs entries proactively at four triggers: (1) user corrects built behavior, (2) same feature needs >1 correction, (3) missing behavior found mid-build, (4) design rethink from test failure. User can also request logging anytime. Reviewed together at reflect, then moved to `done/`. Full spec → `docs/superpowers/specs/2026-05-31-issue-log-workflow-design.md`.
 
-**Checklist** (`docs/<project>/checklists/active/<project>-<phase>.md`) is the session resume file and live progress tracker. Scan `docs/<project>/checklists/active/` at session start — it is the source of truth across sessions and compaction. On phase complete, move to `docs/<project>/checklists/done/`. Full orchestration rules → `docs/ORCHESTRATOR.md`.
+**Checklist** (`docs/<project>/checklists/active/<project>-<phase>.md`) is the session resume file and live progress tracker. Scan `docs/<project>/checklists/active/` at session start — it is the source of truth across sessions and compaction. On phase complete, move to `docs/<project>/checklists/done/`. Full orchestration rules → `orchestrate` skill.
 
 ---
 
@@ -253,9 +253,9 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 
 ---
 
-## Model Tiers
+## Orchestration
 
-Fable = orchestrator. Opus = architecture/review. Sonnet = implementation. Haiku = recon. Every `Agent()` call sets `model:` explicitly. Full rules, dispatch template, skills reference → [`docs/ORCHESTRATOR.md`](./docs/ORCHESTRATOR.md).
+Tier ladder T1–T4, adaptive model routing, escalation, plan profiles, dispatch template — all in the `orchestrate` skill. Invoke it for any multi-task plan execution or `Agent()` dispatch decision. Every `Agent()` call sets `model:` explicitly from the skill's routing table.
 
 ---
 

@@ -1,6 +1,6 @@
 # SKILLS.md — Skill Usage Reference
 
-> Canonical reference for which skill fires in which situation. `ORCHESTRATOR.md` and `CLAUDE.md` point here. When skill routing changes, update this file — nowhere else.
+> Canonical reference for which skill fires in which situation. The `orchestrate` skill and `CLAUDE.md` point here. When skill routing changes, update this file — nowhere else.
 
 ---
 
@@ -25,8 +25,7 @@
 |---|---|
 | Starting any feature — **always first** (includes feature evolution on existing components) | `superpowers:brainstorming` |
 | After brainstorm, before coding | `superpowers:writing-plans` |
-| Executing a checklist: docs/config tasks, or code tasks ≤2 files per task | `inline-execute` |
-| Executing a checklist: 3+ files per task, integration, or architecture decisions | `superpowers:subagent-driven-development` |
+| Executing any multi-task plan/checklist, wave start, dispatch or model decisions, profile selection | `orchestrate` (routes to T1 `inline-execute` or T2+ `superpowers:subagent-driven-development`) |
 | Executing a plan handed to a **separate fresh session** (rare — checklist workflows above are the default) | `superpowers:executing-plans` |
 | 2–4 independent subtasks, no shared state | `superpowers:dispatching-parallel-agents` |
 | Any bug, test failure, or unexpected behavior — before proposing fixes | `superpowers:systematic-debugging` |
@@ -46,7 +45,7 @@
 | Session-end CLAUDE.md learnings | `claude-md-management:revise-claude-md` |
 | Creating or editing a skill | `superpowers:writing-skills` (process) + `skill-creator:skill-creator` (evals/optimization) |
 
-**Routing rule:** `superpowers:executing-plans` is for plans executed in a separate session with review checkpoints. For checklists in the current session, the Workflow Selection table in `ORCHESTRATOR.md` decides between `inline-execute` and `subagent-driven-development` — those two are the default executors.
+**Routing rule:** `superpowers:executing-plans` is for plans executed in a separate session with review checkpoints. For checklists in the current session, the tier formula in the `orchestrate` skill decides: T1 → `inline-execute`, T2+ → `subagent-driven-development` — those two are the default executors.
 
 ## Custom Skills (this repo, `skills/`)
 
@@ -58,6 +57,7 @@ Inline (current session) → use the skill. Subagent dispatch → include the ag
 | Scaffolding a new repository | `new-repo` | `docs/agents/NEW-REPO-AGENT.md` |
 | Releasing the component library | `release` | `docs/agents/WAVE-RELEASE-AGENT.md` |
 | Executing a small-task checklist inline | `inline-execute` | — |
+| Tier/profile selection, dispatch, model routing, orchestration metrics | `orchestrate` | — |
 | Handoff before `/clear` (auto-triggers after reflect, spec approval, wave end) | `continuation` | — |
 
 ## Next.js & Vercel

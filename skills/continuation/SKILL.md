@@ -56,6 +56,7 @@ At the start of the next session, say:
 ## Current State
 
 **Checklist:** `docs/<project>/checklists/active/<file>.md`
+**Tier / Profile:** <from checklist header, incl. any pivots> — Orchestration Log in checklist
 **Last completed task:** Task N — <name>
 **Next task:** Task N+1 — <name>, Step <X>
 
