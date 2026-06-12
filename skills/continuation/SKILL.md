@@ -24,6 +24,17 @@ Writes a handoff file capturing session state before `/clear`. The next session 
 
 **Do not** wait for the user to remember to ask. The whole point is they shouldn't have to.
 
+**Skip condition — nothing to resume:** If the phase is fully closed (checklist in `done/`, reflect run, no unchecked tasks) AND no follow-up work is agreed, do NOT write a handoff — a session recap has no resume value. Say the phase is closed and list any open items (e.g. unmerged branch) in one line. If follow-up work IS agreed (next phase named, pending decision, approved feature), write the handoff — but forward-facing (see content test below). (2026-06-11: post-reflect handoff for a completed wave was pure session recap — user called it worthless.)
+
+## Content Test — Forward-Facing Only
+
+Every line in a handoff must pass one test: **does the next session need this to act?** The handoff is a mission briefing, not a session diary.
+
+- ❌ "What we did this session" — git log and the done checklist already record it
+- ✅ "What the next session must do, decide, or avoid"
+- Session Summary: max 3 bullets, and only ones that change future action (a gotcha that recurs, a decision that constrains the next phase). Zero bullets is fine.
+- Lead the file with the next mission, not the past wave.
+
 ## When to Use (User-Triggered)
 
 - User says "let's clear" / "save context" / "handoff" / "continuation"
@@ -48,14 +59,17 @@ Writes a handoff file capturing session state before `/clear`. The next session 
 At the start of the next session, say:
 > "Continue <project>. Read docs/<project>/continuation/<this-file>.md first."
 
-## Session Summary
-<!-- What happened this session in 3-5 bullets -->
-- 
+## Next Mission
+<!-- THE reason this handoff exists. Copy-paste ready first action + the goal it serves. -->
+<Specific command, skill invocation, or task to run first — and why>
+
+## Open Decisions / Blockers
+<!-- Anything unresolved the next session must address before or during the mission -->
 - 
 
 ## Current State
 
-**Checklist:** `docs/<project>/checklists/active/<file>.md`
+**Checklist:** `docs/<project>/checklists/active/<file>.md` (or: phase closed, next checklist not yet written)
 **Tier / Profile:** <from checklist header, incl. any pivots> — Orchestration Log in checklist
 **Last completed task:** Task N — <name>
 **Next task:** Task N+1 — <name>, Step <X>
@@ -68,20 +82,9 @@ At the start of the next session, say:
 <git log output>
 ```
 
-## Key Files Modified This Session
-- `<path>` — <what changed>
-
-## Open Decisions / Blockers
-<!-- Anything unresolved that the next session must address -->
+## Carry-Forward Notes
+<!-- ONLY items that change future action: recurring gotchas, constraints on the next phase. Max 3. Zero is fine. -->
 - 
-
-## Gotchas Discovered
-<!-- Non-obvious things: bugs found, workarounds, wrong assumptions corrected -->
-- 
-
-## Exact Next Step
-<!-- Copy-paste ready instruction for the next session -->
-<Specific command or task to run first>
 ```
 
 ## After Writing
