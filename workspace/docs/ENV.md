@@ -42,3 +42,11 @@ TRIGGER_API_URL=
 NEXT_PUBLIC_APP_URL=
 NODE_ENV=                             # development | production | test
 ```
+
+## Vercel Env Scoping (earned 2026-06-12)
+
+- **Scope every var to Production + Preview at creation.** Production-only vars make every PR preview build fail at the t3-env Zod gate - the project deploys fine from `main` for months, then the first PR exposes it.
+- **Sensitive-type vars cannot be copied client-side.** `vercel env pull` silently writes BLANK values for them (no error), and re-adding from a pull creates empty vars. To change a sensitive var's scope, PATCH its `target` array via the REST API (`PATCH /v9/projects/{id}/env/{envId}` body `{"target":["production","preview"]}`) or edit scope in the dashboard - the value never leaves Vercel.
+- Non-interactive `vercel env add NAME preview --value X --yes` can loop on `git_branch_required` - the REST API is the reliable automation path.
+- Caveat when copying prod scope to preview: preview deployments then run against the production DB and live Stripe keys. Fine solo; revisit with Neon branch DBs + Stripe test keys when it matters.
+- `vercel redeploy <url>` updates the GitHub PR check - no empty commit needed.

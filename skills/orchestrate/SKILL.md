@@ -164,8 +164,9 @@ Scorecard evidence drives reflect Phase 4/5 proposals: routing-table rows, formu
 
 1. Scan `docs/<project>/checklists/active/` — each file is an in-flight phase
 2. Read the checklist header: branch, tier, profile, spec path
-3. Find the first unchecked task — resume there
-4. Do not re-read specs or full plan prose unless a specific task requires design decisions
+3. **Worktree check (mandatory at T2+, 2026-06-12):** before the first dispatch, check whether the target repo has another branch in flight — if so, work in a worktree (`superpowers:using-git-worktrees`). Skipping this switched a repo mid-wave once; user had to catch it.
+4. Find the first unchecked task — resume there
+5. Do not re-read specs or full plan prose unless a specific task requires design decisions
 
 ## Checklist Editing Protocol
 
@@ -206,7 +207,10 @@ At T3+, manager briefings additionally include: workstream definition, file-set 
 
 - **Verify reviewer Criticals before dispatching fixes.** Read the cited source lines yourself first — reviewers false-alarm; a wrong fix cycle costs a full dispatch + re-review.
 - **Combined review for verbatim-code tasks.** When a plan task prescribes exact code byte-for-byte, collapse two-stage review into ONE Opus pass (spec byte-compare + quality). Tasks with implementer latitude keep the full two-stage flow.
-- **Trivial-fix exception.** The orchestrator may hand-apply a ~1-line mechanical fix (typo, escaping, formatting artifact) when the implementer agent is no longer reachable. Anything requiring judgment or touching 2+ sites: re-dispatch.
+- **Trivial-fix exception (widened 2026-06-12).** The orchestrator may hand-apply a ≤2-line mechanical change (typo, escaping, formatting artifact, user-requested addition like a nav entry) when the implementer agent is no longer reachable, provided it has no test impact and gets an Orchestration Log line. Anything requiring judgment or touching 2+ sites: re-dispatch.
+- **Post-compaction log append (2026-06-12).** Before appending to the Orchestration Log after a compaction, re-read the log tail — the summary may claim lines were logged that sit outside your Read window; appending blind duplicates them.
+- **Briefing escape hatch (2026-06-12).** Every dispatch briefing's scope constraint ends with: "if the constraint blocks the correct fix, report NEEDS_CONTEXT — do not work around it." (B6 shipped an overlay defect because the constraint had no exit; B7 with the hatch went clean.)
+- **Per-component test entries only (2026-06-12).** Implementer briefings for shared spec files (axe, e2e) say "add ONLY entries for your component" — an A1 implementer bundled entries for unmerged components and broke a later task's e2e run.
 
 ## Phase Complete Protocol
 

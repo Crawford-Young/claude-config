@@ -251,7 +251,7 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 - Zod validates all inputs at system boundaries
 - Rate limit all user-facing endpoints via Upstash
 - `pnpm audit` in CI — no high/critical vulnerabilities
-- **Transitive vuln override pattern:** `npm show <pkg> version` → pin exact latest in `pnpm.overrides` → `pnpm install` → `pnpm audit` to confirm zero remaining; never use a range (`>=x`) in overrides
+- **Transitive vuln override pattern:** `npm show <pkg> version` → pin exact latest in `pnpm.overrides` → `pnpm install` → `pnpm audit` to confirm zero remaining; never use a range (`>=x`) in overrides. A red audit gate may be caused by an advisory published the same day, not by the PR's changes - check the advisory publish date before hunting the diff (2026-06-12: esbuild GHSA landed mid-PR)
 
 > Implementation patterns → [`docs/PATTERNS.md`](./docs/PATTERNS.md) | ESLint setup, CI yaml, Justfile, project structure → [`docs/TEMPLATES.md`](./docs/TEMPLATES.md)
 
