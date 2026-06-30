@@ -234,6 +234,7 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 - No dead code, no commented-out code, no `console.log`
 - Always use `@/` path alias — never relative paths traversing more than one level
 - Run `simplify` skill after every implementation pass
+- **A local-only lint/format failure may be a line-ending checkout artifact, not real drift.** Before mass-rewriting (`prettier --write .`), check `git diff --numstat` (empty = EOL-only) and the committed blob's EOL (`git show HEAD:<file> | cat -A`); on Windows with `core.autocrlf=true` + no `.gitattributes`, CRLF-on-disk trips prettier's default `endOfLine:lf` while CI (Linux, LF) is already green. Fix at the source (`.gitattributes` `* text=auto eol=lf` + `.prettierrc` `endOfLine:"auto"`), don't churn files. (2026-06-30: a "repo-wide prettier drift, run prettier --write" flag was carried across two sessions as a blocker — it was a no-op CRLF artifact.)
 
 **Dependencies:**
 - Always use the latest stable major version — stale majors are a blocker, not deferred debt
