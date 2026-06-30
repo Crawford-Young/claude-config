@@ -172,6 +172,7 @@ Nothing is "done" until all pass at 100%:
 - [ ] Storybook — builds; all `ui/` components have stories
 - [ ] Lighthouse — 100 in all four categories (dark + light mode), run against a production build (`pnpm build && pnpm start`, never dev). Accepted documented deviations: localhost-only artifacts (e.g. `/_vercel/insights/*` 404s cap Best Practices ~96 — they resolve on Vercel deploys) and LCP cost of intentional entry animations. When Lighthouse can't toggle theme (next-themes localStorage), light-mode contrast is covered by axe instead — note the deviation in the checklist, don't re-litigate it per wave.
 - [ ] axe — zero violations
+- [ ] Manual playthrough — for interactive/game UI, drive the real feature end-to-end in the browser before calling it done. Automated coverage + axe + Lighthouse all passed a missing HUD, two copy bugs, and a contrast regression that a 2-minute playtest caught (2026-06-30, duel)
 - [ ] Sentry — integrated and reporting (production deployments)
 - [ ] Dependabot — `.github/dependabot.yml` present
 - [ ] No dead code, unused imports, or commented-out blocks
@@ -208,6 +209,7 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 - Mocking `auth()` returning null: `vi.mocked(auth).mockResolvedValueOnce(null as never)` — `null as never` required because `auth` has middleware + callback overloads; plain `null` fails type-check.
 - Component mocks (dialogs especially) must render the DATA props they receive (dates, times, ids as visible text/attrs), not just component identity — identity-only mocks have hidden real contract bugs (2026-06-10: full datetime passed where date-only was required; test passed, save silently wiped data).
 - Structurally unreachable guard statements (e.g. `if (!x) return` where render conditions guarantee `x`) block the 100%-statements gate — restructure as a statement-free JSX inline guard (`{x && handler(x)}`); the untaken branch then falls under the DoD branch exemption.
+- Tests for user-facing copy must assert the INTENDED wording, written independently — not whatever the component currently renders. A test written to match the rendered output locks in the bug: "P1 's turn" (stray space) was asserted by 3 unit tests + 1 e2e, all green, and only a manual playtest caught it (2026-06-30). When changing any user-facing string, grep ALL test directories for the old text including `e2e/` — `src/__tests__` alone misses Playwright specs.
 
 ---
 
@@ -232,6 +234,7 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 - No `any` — use `unknown` and narrow it
 - No `@ts-ignore` / `eslint-disable` without a comment explaining why
 - No dead code, no commented-out code, no `console.log`
+- Never use Tailwind opacity modifiers (`/40`–`/70`) on text to create visual hierarchy — at small sizes they drop below the WCAG AA 4.5:1 floor and fail axe/Lighthouse. Use the full token (e.g. `text-muted-foreground`, ~7.9:1 on dark) or a defined darker step. Opacity on non-text decoration (gauge ticks, bar tracks) is fine. (Hit 3× in one feature, 2026-06-30 duel.)
 - Always use `@/` path alias — never relative paths traversing more than one level
 - Run `simplify` skill after every implementation pass
 - **A local-only lint/format failure may be a line-ending checkout artifact, not real drift.** Before mass-rewriting (`prettier --write .`), check `git diff --numstat` (empty = EOL-only) and the committed blob's EOL (`git show HEAD:<file> | cat -A`); on Windows with `core.autocrlf=true` + no `.gitattributes`, CRLF-on-disk trips prettier's default `endOfLine:lf` while CI (Linux, LF) is already green. Fix at the source (`.gitattributes` `* text=auto eol=lf` + `.prettierrc` `endOfLine:"auto"`), don't churn files. (2026-06-30: a "repo-wide prettier drift, run prettier --write" flag was carried across two sessions as a blocker — it was a no-op CRLF artifact.)
