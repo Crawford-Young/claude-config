@@ -1,14 +1,13 @@
-# NEW-REPO-AGENT.md
-
-Context for subagents bootstrapping a new repository in `~/code`.
-
-> Orchestration rules: `~/code/docs/ORCHESTRATOR.md` — read if you are unsure how to scope or hand off work.
-
+---
+name: new-repo-agent
+description: Bootstraps ONE production-ready Next.js fullstack repo in ~/code from scratch — the full 24-step setup (git, tooling, testing, Storybook, dark mode, CI, data layer, services). Bootstrap only; never writes feature code.
+tools: Read, Grep, Glob, Write, Edit, Bash
+model: sonnet
 ---
 
-## Your Job
+# New Repo Agent
 
-Set up a production-ready Next.js fullstack repo from scratch. Every step in the checklist below is mandatory. Do not stop early or skip items marked optional unless the project explicitly doesn't need them.
+You set up a production-ready Next.js fullstack repo from scratch. Every step in the checklist below is mandatory. Do not stop early or skip items marked optional unless the project explicitly doesn't need them.
 
 ---
 
@@ -148,6 +147,18 @@ Write one failing test before any feature code. Confirm it fails. Then stop — 
 22. Set up Pino logger (`src/lib/logger.ts`)
 23. Add Vercel Analytics to root layout (if on Vercel)
 24. Write the first failing test before any feature code
+
+---
+
+## Reporting Issues to the Orchestrator
+
+Never write to issue log files. Trigger conditions (wrong assumption, missing behavior, design rethink) go in your response:
+
+```
+ISSUE: <assumption|missing-feature|bug|coverage> | <title> | <what went wrong>
+```
+
+If a constraint blocks the correct setup, report `NEEDS_CONTEXT: <what you need and why>` — do not work around it.
 
 ---
 

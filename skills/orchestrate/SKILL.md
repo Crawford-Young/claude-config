@@ -12,7 +12,7 @@ Canonical orchestration standards. Replaces `docs/ORCHESTRATOR.md`. Two entry po
 1. **Plan time** (end of `superpowers:writing-plans`): compute tier from the formula, select a plan profile, record both in the checklist header.
 2. **Execution time** (wave start / dispatch decisions): follow tier structure, route models, log every dispatch, escalate and pivot per the rules below.
 
-Never load this skill as a subagent below manager level — managers at T3+ receive relevant excerpts in their briefing, not this file.
+Never load this skill as a subagent below manager level — the `manager` agent definition carries the rules it needs (dispatch template, routing signals, redo economics), not this file.
 
 ---
 
@@ -23,9 +23,9 @@ Never load this skill as a subagent below manager level — managers at T3+ rece
 | **T1** | Inline agent — no dispatch; route to `inline-execute` skill | Docs/config/small code, ≤2 files per task |
 | **T2** | Orchestrator + flat subagents (impl/recon/review) via `superpowers:subagent-driven-development` | Code waves, single workstream |
 | **T3** | Director + managers + subagents — each manager owns a workstream, dispatches its own impl/review agents, reports summaries only | 2+ independent workstreams |
-| **T4** | T3 + managers in background with isolated git worktrees (`superpowers:using-git-worktrees`), merged at wave end | Disjoint file sets + wall-clock matters |
+| **T4** | T3 + managers dispatched with `isolation: "worktree"` + `run_in_background: true`, merged at wave end | Disjoint file sets + wall-clock matters |
 
-Ladder is capped at 4 — deeper nesting never amortizes its cold-start context cost. Managers are `general-purpose` agents (they have the Agent tool); each nesting level costs a cold start, so the formula must justify it before it is incurred.
+Ladder is capped at 4 — deeper nesting never amortizes its cold-start context cost. Managers are the `manager` agent (`subagent_type: manager` — has the Agent tool); each nesting level costs a cold start, so the formula must justify it before it is incurred.
 
 ## Tier Formula
 
@@ -52,41 +52,63 @@ Selected at the end of `superpowers:writing-plans`; recorded in the checklist he
 
 Guidance: **Precision** for auth, payments, data migrations. **Velocity** for scaffolds, docs waves, low-risk UI. **Standard** otherwise. Reflect scores profile fit — a Velocity wave needing 3 redos should have been Standard.
 
-## Model Routing Table (living data — reflect edits this)
+## Predefined Agents (2026-07-01)
 
-Every `Agent()` call sets `model:` explicitly, chosen from this table. Reflect appends or amends rows (with date + evidence) when a Wave Scorecard shows a misroute.
+Every dispatch uses a predefined agent via `subagent_type` — never `general-purpose` with a briefing MD in the prompt. Definitions live in `claude-config/agents/` (junctioned to `~/.claude/agents/`, workspace-wide). Tool access is ENFORCED by each agent's `tools:` frontmatter — the old honor-system Tool Access Matrix is retired. Edits to roster, tools, or model defaults go to the agent files; reflect owns them like it owns this file.
 
-| Signal | Model | Since | Evidence |
+| subagent_type | Role | tools | model default |
 |---|---|---|---|
-| Orchestration, dispatch decisions, checklist edits | fable | seed | — |
-| Architecture decisions, design review, code review | opus | seed | — |
-| Implementation: single component, complete spec | sonnet | seed | — |
-| Recon: file reads, greps, existence checks, output verification | haiku | seed | — |
-| Cross-file integration (3+ files, shared state) | opus | seed | — |
+| `recon` | Reads/greps/existence checks/output verification; fable diagnostic lane | read-only + Bash | haiku |
+| `implementer` | ONE scoped task via TDD | full edit, no Agent | sonnet |
+| `reviewer` | Spec + quality review of a diff | read-only + Bash | opus |
+| `manager` | T3+ workstream owner, dispatches own agents | all incl. Agent | opus |
+| `component-agent` | One library component end-to-end | implementer set | sonnet |
+| `new-repo-agent` | Full 24-step repo bootstrap | implementer set | sonnet |
+| `docs-agent` | Pure doc/MD work | edit, no Bash | haiku |
+| `wave-release-agent` | Wave DoD verify + changeset + PR prep | implementer set | sonnet |
 
-Fable orchestrates only — never used for bounded implementation tasks.
+New `subagent_type` values resolve at session start — an agent file added mid-session needs a fresh session to be dispatchable.
 
-## Escalation Rule (anti-thrash)
+Orchestrator's own lane is unchanged: writes checklist + docs only, never source; reads summaries only — recon reads source.
 
-On first Sonnet failure, check complexity signals: **3+ files touched · integration/architecture flavor · review fault at design level (not typo level)**.
+## Model Routing — Two Layers (living data — reflect edits this)
 
-- Signals present → escalate to Opus immediately. Do not retry Sonnet.
-- No signals → one Sonnet retry, then escalate.
-- Escalated task fails on Opus too → stop dispatching; surface to user. That is a plan-level problem, not a model problem.
+**Layer 1 — frontmatter defaults.** The 80% case. No `model:` param on the dispatch; the agent's own default applies (table above).
+
+**Layer 2 — dispatch-time override.** Orchestrator (or manager) sets `model:` on the Agent call only when a signal fires. Signals are checked BEFORE dispatch — pay the stronger model upfront instead of after a failed round:
+
+| Signal at dispatch time | Override | Since | Evidence |
+|---|---|---|---|
+| 3+ files, shared state, integration flavor | implementer → opus | seed | promoted from post-failure escalation signals |
+| Novel pattern — nothing in repo to copy | implementer → opus | seed | — |
+| Precision-profile task (auth/payments/migration) | implementer → opus | seed | — |
+| Mechanical spec-verbatim task | reviewer → sonnet | seed | byte-compare needs no opus |
+
+**Fable lanes** (fable is otherwise banned below the orchestrator — never bounded implementation):
+
+| Lane | Dispatch | Since | Evidence |
+|---|---|---|---|
+| Diagnostic after opus failure | recon → fable, systematic-debugging framing | seed | replaces bare "surface to user" |
+| High-stakes design review (Precision spec) | reviewer → fable | seed | — |
+| Coupled-wave manager (independence on paper, coupling risk flagged in plan) | manager → fable | seed | — |
+
+Reflect appends or amends rows (with date + evidence) when a Wave Scorecard shows a misroute, and prunes fable lanes that don't earn their cost.
+
+## Escalation Ladder (anti-thrash)
+
+Route right upfront (Layer 2). Then, on failure:
+
+1. **Sonnet fails, signals present** (3+ files · integration/architecture flavor · review fault at design level) → escalate to opus immediately. No sonnet retry.
+2. **Sonnet fails, no signals** → one retry, then opus.
+3. **Opus fails** → ONE fable `recon` diagnostic dispatch (read-only): classify plan defect vs wrong assumption vs environment → surface to user WITH the diagnosis. Never a third implementation attempt.
 
 Log every escalation: `task · sonnet FAIL×n → opus · outcome · signal that fired`. Escalations are routing-table candidates at reflect.
 
-## Tool Access Matrix
+## Redo Protocol
 
-Activates at T2+ (T1 inline agent does everything itself).
-
-| Role | Agent tool | Write/Edit | Read scope |
-|---|---|---|---|
-| Orchestrator | yes | checklist + docs only — never source | summaries only — recon reads source, not the orchestrator |
-| Manager (T3+) | yes | no | own workstream + own dispatch results |
-| Implementer | no | yes | task scope only |
-| Recon | no | no | read-only |
-| Reviewer | no | no | read-only + diff |
+- **Fixable failure, same model** → `SendMessage` to the SAME agent with the review findings — warm context, no cold re-brief. Log tag: `redo-warm`.
+- **Escalation to a stronger model** → fresh dispatch — fresh eyes are the point. Log tag: `redo-cold`.
+- Scorecard tracks warm-vs-cold outcomes; if warm redos regress (agent anchored on its mistake), reflect narrows the warm lane.
 
 ## Efficiency Playbook
 
@@ -128,7 +150,7 @@ Mandatory for the top agent at every tier:
 <!-- one line per dispatch: task · role · model · outcome · redo/escalation/pivot -->
 
 ## Wave Scorecard
-<!-- reflect fills: tier accuracy · model accuracy (escalations) · profile fit · context % at wave end (/context) · /usage summary -->
+<!-- reflect fills: tier accuracy · model accuracy (escalations + overrides) · fable-dispatch value · redo warm/cold · profile fit · context % at wave end (/context) · /usage summary -->
 
 ## Reflect Log
 ```
@@ -152,7 +174,9 @@ One line each. Never paste raw subagent output into the log.
 Reflect Phase 1 reads the checklist and finds the Orchestration Log + empty Scorecard. During reflect Phase 3, before the `/usage` prompt, also ask the user to run `/context` and paste both. Then fill:
 
 - **Tier accuracy** — formula tier vs actual; each pivot = a miss, with reason
-- **Model accuracy** — escalation count + which signals fired
+- **Model accuracy** — escalation count + which signals fired; Layer-2 overrides that proved unnecessary
+- **Fable-dispatch value** — each fable dispatch (diagnostic/design-review/manager lane): did it earn its cost? Prune lanes that don't.
+- **Redo economics** — `redo-warm` vs `redo-cold` counts and outcomes
 - **Profile fit** — redo/defect rate vs what the profile predicted
 - **Context efficiency** — `/context` % at wave end · `/usage` totals
 
@@ -191,17 +215,19 @@ The checklist is the sole source of truth across compaction boundaries.
 
 ## Dispatch Template
 
-Every subagent prompt includes all five fields. Never write "based on your findings, implement X" — that delegates understanding.
+Dynamic fields only — the static half (role, standards, ISSUE protocol, escape hatch, what-not-to-do) lives in the agent definition. Never write "based on your findings, implement X" — that delegates understanding.
 
 ```
 Goal:           <what to produce and why — one sentence>
 Scope:          <exact files, dirs, or modules>
 Prior context:  <what has been tried or ruled out>
 Output format:  <diff, report, file list, JSON, etc.>
-Constraints:    <stack rules, patterns to follow, things to avoid>
+Constraints:    <ONLY task-specific constraints — omit if none; stack rules are in the agent>
 ```
 
-At T3+, manager briefings additionally include: workstream definition, file-set boundary, and the dispatch template itself (managers dispatch with it too).
+Every Scope line ends with the escape hatch: "if the constraint blocks the correct fix, report NEEDS_CONTEXT — do not work around it."
+
+At T3+, `manager` dispatches additionally include: workstream definition and file-set boundary (the manager agent carries the template itself).
 
 ## Judgment Rules (earned 2026-06-10)
 
@@ -209,8 +235,8 @@ At T3+, manager briefings additionally include: workstream definition, file-set 
 - **Combined review for verbatim-code tasks.** When a plan task prescribes exact code byte-for-byte, collapse two-stage review into ONE Opus pass (spec byte-compare + quality). Tasks with implementer latitude keep the full two-stage flow.
 - **Trivial-fix exception (widened 2026-06-12).** The orchestrator may hand-apply a ≤2-line mechanical change (typo, escaping, formatting artifact, user-requested addition like a nav entry) when the implementer agent is no longer reachable, provided it has no test impact and gets an Orchestration Log line. Anything requiring judgment or touching 2+ sites: re-dispatch.
 - **Post-compaction log append (2026-06-12).** Before appending to the Orchestration Log after a compaction, re-read the log tail — the summary may claim lines were logged that sit outside your Read window; appending blind duplicates them.
-- **Briefing escape hatch (2026-06-12).** Every dispatch briefing's scope constraint ends with: "if the constraint blocks the correct fix, report NEEDS_CONTEXT — do not work around it." (B6 shipped an overlay defect because the constraint had no exit; B7 with the hatch went clean.)
-- **Per-component test entries only (2026-06-12).** Implementer briefings for shared spec files (axe, e2e) say "add ONLY entries for your component" — an A1 implementer bundled entries for unmerged components and broke a later task's e2e run.
+- **Briefing escape hatch (2026-06-12; baked into all agent definitions 2026-07-01).** Every dispatch's scope constraint ends with: "if the constraint blocks the correct fix, report NEEDS_CONTEXT — do not work around it." (B6 shipped an overlay defect because the constraint had no exit; B7 with the hatch went clean.)
+- **Per-component test entries only (2026-06-12; baked into `implementer` agent 2026-07-01).** Shared spec files (axe, e2e): "add ONLY entries for your component" — an A1 implementer bundled entries for unmerged components and broke a later task's e2e run.
 
 ## Phase Complete Protocol
 
@@ -221,7 +247,7 @@ At T3+, manager briefings additionally include: workstream definition, file-set 
 
 ## T4 Merge Protocol
 
-Manager worktrees must have disjoint file sets — that is a formula precondition, not a hope. A merge conflict at wave end = formula miss → log it, scorecard it. Merge order: smallest diff first; rebase-only (`git rebase origin/main`, never merge commits).
+Managers get `isolation: "worktree"` on the Agent call — the harness creates and cleans up the worktree; no manual `git worktree` choreography. Worktrees must have disjoint file sets — that is a formula precondition, not a hope. A merge conflict at wave end = formula miss → log it, scorecard it. Merge order: smallest diff first; rebase-only (`git rebase origin/main`, never merge commits).
 
 ## Continuation Handoff
 

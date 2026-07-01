@@ -20,7 +20,7 @@ Read everything relevant to the phase that just ended:
 - All existing agent-facing MDs:
   - `~/code/CLAUDE.md` (workspace level)
   - Repo-level `CLAUDE.md`
-  - All files in `~/code/docs/agents/` (subagent-specific MDs)
+  - Agent definitions used this phase in `claude-config/agents/` (junctioned to `~/.claude/agents/`)
   - Skill files used this phase in `~/.claude/plugins/` — did they guide behavior well, or did they have gaps?
 
 ### Phase 2: Self-Reflect
@@ -71,7 +71,7 @@ Agree on the complete change set before touching any file. For each proposed cha
 - The exact content
 - Whether a new subagent MD should be created vs updating an existing one
 
-New subagent MDs live in `~/code/docs/agents/`. Name them descriptively: `REVIEW-AGENT.md`, `MIGRATION-AGENT.md`, etc.
+New agent definitions live in `claude-config/agents/` (kebab-case: `migration-agent.md`) with frontmatter: `name`, `description` (dispatch criteria), `tools` allowlist, `model` default. New `subagent_type` values resolve at next session start. Routing-table and fable-lane edits (with date + evidence) go to `claude-config/skills/orchestrate/SKILL.md`.
 
 ### Phase 5: Update
 
@@ -79,8 +79,8 @@ Apply all agreed changes using the Edit tool. Order:
 
 1. `~/code/CLAUDE.md` (workspace level — highest impact)
 2. Repo-level `CLAUDE.md`
-3. Existing `~/code/docs/agents/` MDs
-4. New subagent MDs in `~/code/docs/agents/`
+3. Existing agent definitions in `claude-config/agents/`
+4. New agent definitions in `claude-config/agents/`
 5. Skill files in `~/.claude/plugins/` if skill gaps were identified
 
 Show each diff to the user as it is applied. Do not batch silently.

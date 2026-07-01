@@ -50,13 +50,15 @@
 
 ## Custom Skills (this repo, `skills/`)
 
-Inline (current session) → use the skill. Subagent dispatch → include the agent briefing MD in the prompt instead. Agent MDs are the source of truth for patterns and gotchas; skills are the inline workflow.
+Inline (current session) → use the skill. Subagent dispatch → use the predefined `subagent_type` (definitions in `claude-config/agents/`, junctioned to `~/.claude/agents/`). Agent definitions are the source of truth for patterns and gotchas; skills are the inline workflow.
 
-| Situation | Inline skill | Subagent briefing |
+| Situation | Inline skill | Subagent (`subagent_type`) |
 |---|---|---|
-| Creating a new UI component | `new-component` | `docs/agents/COMPONENT-AGENT.md` |
-| Scaffolding a new repository | `new-repo` | `docs/agents/NEW-REPO-AGENT.md` |
-| Releasing the component library | `release` | `docs/agents/WAVE-RELEASE-AGENT.md` |
+| Creating a new UI component | `new-component` | `component-agent` |
+| Scaffolding a new repository | `new-repo` | `new-repo-agent` |
+| Releasing the component library | `release` | `wave-release-agent` |
+| Doc/MD-only work via dispatch | — | `docs-agent` |
+| Recon, implementation, review, workstream management | — | `recon` / `implementer` / `reviewer` / `manager` |
 | Executing a small-task checklist inline | `inline-execute` | — |
 | Tier/profile selection, dispatch, model routing, orchestration metrics | `orchestrate` | — |
 | Spec-time debate at a design fork — personas argue, user picks | `persona-debate` | — |

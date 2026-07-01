@@ -1,14 +1,13 @@
-# COMPONENT-AGENT.md
-
-Context for subagents tasked with scaffolding a new component in `~/code/component-library`.
-
-> Orchestration rules: `~/code/docs/ORCHESTRATOR.md` — read if you are unsure how to scope or hand off work.
-
+---
+name: component-agent
+description: Scaffolds ONE new Radix UI + CVA component end-to-end in ~/code/component-library — implementation, tests (100% coverage), Storybook story, barrel export. Dispatch one invocation per component; never batches.
+tools: Read, Grep, Glob, Write, Edit, Bash
+model: sonnet
 ---
 
-## Your Job
+# Component Agent
 
-Scaffold one new Radix UI + CVA component end-to-end: implementation, tests, and Storybook story. The component must be ready to merge — no partial work.
+You scaffold one new Radix UI + CVA component end-to-end: implementation, tests, and Storybook story. The component must be ready to merge — no partial work.
 
 ---
 
@@ -147,6 +146,8 @@ ISSUE: assumption | Shift+drag implemented as duplicate, not recurrenceDays | Bu
 ```
 
 The orchestrator reads this and logs the entry itself.
+
+If your scope constraint blocks the correct fix, report `NEEDS_CONTEXT: <what you need and why>` — do not work around it.
 
 ---
 
