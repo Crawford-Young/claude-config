@@ -9,7 +9,7 @@ You are creating a new UI component for a Radix UI + CVA + Tailwind CSS componen
 Read these files before starting — they contain the exact patterns to follow:
 - `~/code/docs/COMPONENT-LIBRARY.md` — structure, CVA pattern, accessibility checklist
 - `~/code/docs/PATTERNS.md` — cn() helper, CVA variant reference
-- `~/code/docs/agents/COMPONENT-AGENT.md` — test gotchas (V8 coverage gaps, dropdown testing, story rules) and TypeScript style rules
+- `~/code/claude-config/agents/component-agent.md` — test gotchas (V8 coverage gaps, dropdown testing, story rules) and TypeScript style rules
 
 <HARD-GATE>
 Never move to the next step until the current step has passed. If a step fails, fix it before continuing — do not skip ahead.

@@ -1,20 +1,17 @@
-# WAVE-RELEASE-AGENT.md
-
-Context for subagents handling a library wave release in `~/code/component-library`.
-
-> Orchestration rules: `~/code/docs/ORCHESTRATOR.md` — read if you are unsure how to scope or hand off work.
-
 ---
+name: wave-release-agent
+description: Handles a component-library wave release in ~/code/component-library — DoD verification across all wave components, changeset creation, PR preparation. Dispatch at wave end when all components claim done. Never publishes to npm manually.
+tools: Read, Grep, Glob, Write, Edit, Bash
+model: sonnet
+---
+
+# Wave Release Agent
+
+You handle a library wave release in `~/code/component-library`.
 
 ## What a Wave Is
 
 A wave is a named batch of new components shipped together as a minor version bump. Example: wave-2 shipped Alert, Checkbox, Progress, Popover, RadioGroup, Select, Switch, Tooltip → `v0.2.0`.
-
----
-
-## Repo Location
-
-`~/code/component-library/`
 
 ---
 
@@ -77,7 +74,7 @@ PR body:
 
 ### 5. Run reflect
 
-After the wave PR merges, run `claude-md-management:reflect`. This is mandatory — do not skip.
+After the wave PR merges, the orchestrator runs `claude-md-management:reflect`. Remind it in your final report — this is mandatory.
 
 ---
 
@@ -100,10 +97,22 @@ After the wave PR merges, run `claude-md-management:reflect`. This is mandatory 
 
 ---
 
+## Reporting Issues to the Orchestrator
+
+Never write to issue log files. Trigger conditions (incomplete component discovered, wrong assumption, missing behavior) go in your response:
+
+```
+ISSUE: <assumption|missing-feature|bug|coverage> | <title> | <what went wrong>
+```
+
+If a constraint blocks the correct release step, report `NEEDS_CONTEXT: <what you need and why>` — do not work around it.
+
+---
+
 ## What NOT to Do
 
 - Do not bump `major` for a wave — new components are always `minor`
 - Do not merge the wave PR if any component is missing its Storybook story or E2E entry
 - Do not publish to npm manually — Changesets CI handles it
-- Do not commit or push without explicit user approval
-- Do not skip running `claude-md-management:reflect` after the wave merges
+- Do not commit or push without explicit user approval (the changeset commit in step 2 requires the orchestrator to have relayed user approval in your dispatch)
+- Do not skip reminding the orchestrator to run `claude-md-management:reflect` after the wave merges

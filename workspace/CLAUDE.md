@@ -12,11 +12,11 @@ This file governs **all projects** in this workspace (`~/code`). Rules here appl
 > - [`docs/COMPONENT-LIBRARY.md`](./docs/COMPONENT-LIBRARY.md) — Radix+CVA component guide (load when building UI)
 > - [`docs/TYPESCRIPT-STYLE.md`](./docs/TYPESCRIPT-STYLE.md) — full TypeScript style guide with real-world examples
 > - [`docs/brand/`](./docs/brand/) — brand identity + design system + motion (load `brand-identity.md` for tokens/colors, `design-system.md` for layout/states/composition, `motion.md` for transitions/loading/animation)
-> - [`docs/agents/`](./docs/agents/) — subagent briefing MDs: `COMPONENT-AGENT.md`, `NEW-REPO-AGENT.md`, `WAVE-RELEASE-AGENT.md`, `DOCS-AGENT.md`
+> - **Predefined subagents** — `claude-config/agents/` (junctioned to `~/.claude/agents/`): dispatch via `subagent_type` — `recon`, `implementer`, `reviewer`, `manager`, `component-agent`, `new-repo-agent`, `docs-agent`, `wave-release-agent`. Tool access + model defaults enforced by frontmatter; routing overrides live in the `orchestrate` skill
 > - **Orchestration** (tiers T1–T4, model routing, plan profiles, dispatch, metrics) → invoke the `orchestrate` skill when orchestrating — canonical home is `claude-config/skills/orchestrate/SKILL.md`
 > - [`docs/SKILLS.md`](./docs/SKILLS.md) — canonical situation→skill routing, trigger discipline, cost notes (load when unsure which skill applies)
 
-> **Canonical location:** this file and the workspace reference docs (`docs/*.md`, `docs/agents/`, `docs/brand/`) live in the `claude-config` repo under `workspace/` and are symlinked/junctioned into `~/code`. Edit through either path — same file. Commit changes in `claude-config`.
+> **Canonical location:** this file and the workspace reference docs (`docs/*.md`, `docs/brand/`) live in the `claude-config` repo under `workspace/` and are symlinked/junctioned into `~/code`; agent definitions live in `claude-config/agents/` junctioned to `~/.claude/agents/`. Edit through either path — same file. Commit changes in `claude-config`.
 
 ---
 
@@ -59,7 +59,7 @@ This file governs **all projects** in this workspace (`~/code`). Rules here appl
 
 Specs and checklists live in `~/code/docs/<project-name>/`. Workspace-level reference docs live in `~/code/docs/` root. Ambiguous or historical docs go to `~/code/docs/archive/`.
 
-`~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`agents/`, `brand/`, root reference MDs) are gitignored — their history lives in `claude-config`.
+`~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`brand/`, root reference MDs) are gitignored — their history lives in `claude-config`.
 
 **claude-config is config + reference docs only.** Never write project working artifacts (specs, checklists, issues, screenshots, continuation handoffs, assets) into junctioned dirs — they land in the claude-config repo. Brand/design-system project work uses `docs/brand-design/` as its project dir; junctioned `docs/brand/` holds only the living reference MDs + README.
 

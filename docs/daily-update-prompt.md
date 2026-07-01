@@ -155,7 +155,7 @@ For each discovered project:
 
 **b)** List all `spec-*.md` and `adr-*.md` files — note any without a corresponding plan.
 
-**c)** List `~/code/docs/agents/` briefing MDs — note any not updated this week.
+**c)** List `claude-config/agents/` definitions — note any not updated this week.
 
 **d)** Cross-check open `feat/*` / `fix/*` branches against plan files.
    Branch with no plan file = undocumented work [ACTION REQUIRED].
