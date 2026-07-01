@@ -38,6 +38,8 @@ Computed at plan-writing time from measurable plan properties; declared in the c
 
 If formula inputs are ambiguous (can't tell whether workstreams are independent): default to the **lower** tier — pivoting up is cheaper than a wasted manager cold start.
 
+**Design-in-context exception (2026-07-01):** when the wave's content was authored in the orchestrator's own context (config/docs waves — agent definitions, skill rewrites, workspace MDs), T1 inline-execute is permitted regardless of task count. Dispatch re-briefing cost dominates when every fact a subagent would need already sits in orchestrator context. Evidence: native-agents wave, 11 tasks formula-T2, ran T1 — 0 redos, 0 escalations.
+
 **Pivot rule:** the orchestrator may move up or down a tier mid-wave when reality diverges from the plan (workstreams merge/split, tasks balloon/collapse). Every pivot is appended to the checklist header `**Tier:**` line and logged in the Orchestration Log with a one-line reason. A pivot means the formula missed — the Wave Scorecard says why.
 
 ## Plan Profiles
