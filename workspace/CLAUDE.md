@@ -141,6 +141,7 @@ If Playwright MCP is unavailable or wedged (calls timing out): verify generated 
 - New branch per feature/fix — never commit to `main`
 - Names mirror Conventional Commits: `feat/`, `fix/`, `chore/`, `refactor/`
 - Use `superpowers:using-git-worktrees` for isolated parallel work
+- **Two concurrent sessions on one repo MUST use separate worktrees.** A shared checkout is one working tree: a second session switching branches corrupts the first session's in-flight gate. (2026-06-12: working tree flipped to `feat/wave-9-token-components` mid-e2e-gate → motion stories absent, false timeouts, a blocked task.)
 - **Rebase-only workflow — linear history is required:**
   - Sync with main: `git fetch origin && git rebase origin/main` — never `git merge main`
   - Pull remote changes to same branch: `git pull --rebase` — never `git pull`
@@ -154,6 +155,7 @@ If Playwright MCP is unavailable or wedged (calls timing out): verify generated 
 - Co-Authored-By trailer required on all commits
 - Conventional Commits format enforced by commitlint
 - **After every push to a PR branch, verify CI passes:** `gh pr checks <number> --watch` — do not move on until all checks are green or explicitly dismissed by the user
+- **Zero check runs on a PR ≠ passing — it may mean conflicts.** GitHub runs no `pull_request` CI on a conflicting PR (only deploy checks like Vercel appear). If `gh pr checks` shows only Vercel/no test jobs, check `mergeStateStatus` — rebase onto `origin/main` before trusting the PR. (2026-06-12: PR #55 opened conflicting after a same-day merge to main; looked check-clean, ran no CI.)
 
 ### 5. Pre-commit Hooks (Husky)
 
@@ -181,6 +183,7 @@ Nothing is "done" until all pass at 100%:
 - [ ] README.md + CLAUDE.md in the repo updated
 - [ ] `~/code/CLAUDE.md` + `~/code/docs/` updated if workspace conventions changed
 - [ ] Phase boundary: **run `claude-md-management:reflect` — mandatory at every wave merge, milestone, or branch close**
+- [ ] **Repo-level doc edits land in the wave branch BEFORE merge — never in a second PR.** If a QA round or reflect surfaces a repo-file change (repo `README.md`/`CLAUDE.md`, tests, config), commit it to the still-open wave branch. Reserve a doc-review beat right before requesting merge; reflect's *repo* proposals get drafted then, not after. Only workspace/`claude-config` edits (junctioned `~/code/CLAUDE.md`, `docs/`) land separately — they're a different repo with no bearing on the wave PR. (2026-07-01: reflect's `component-library/CLAUDE.md` notes surfaced after PR #65 merged → forced a follow-up docs PR.)
 
 Run `superpowers:verification-before-completion` before declaring anything done.
 
@@ -238,6 +241,8 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 - Always use `@/` path alias — never relative paths traversing more than one level
 - Run `simplify` skill after every implementation pass
 - **A local-only lint/format failure may be a line-ending checkout artifact, not real drift.** Before mass-rewriting (`prettier --write .`), check `git diff --numstat` (empty = EOL-only) and the committed blob's EOL (`git show HEAD:<file> | cat -A`); on Windows with `core.autocrlf=true` + no `.gitattributes`, CRLF-on-disk trips prettier's default `endOfLine:lf` while CI (Linux, LF) is already green. Fix at the source (`.gitattributes` `* text=auto eol=lf` + `.prettierrc` `endOfLine:"auto"`), don't churn files. (2026-06-30: a "repo-wide prettier drift, run prettier --write" flag was carried across two sessions as a blocker — it was a no-op CRLF artifact.)
+- **When a library component generalizes app-local code, port the ACTUAL source's staging/timing verbatim — read the shipped file, not the spec's paraphrase.** The spec may describe intent ("Cy's bond" with a space) while the working code achieves it differently (gap from a CSS translate, no space char). Re-tune pixel/duration constants for the library's context (product `text-4xl` → library `text-7xl` needed the split translate to go ±12px→±32px or glyphs overlap). (2026-07-01: BrandSplash first port paraphrased the spec — wrong `'s` staging, dropped quote fade, an `animate-pulse` the product never had; cost a full re-QA round.)
+- **SVG geometry attributes (`<rect width/height>`, `<circle r>`, `x`/`y`/`cx`/`cy`) silently reject CSS `calc()` — the element just doesn't render.** Use percentage or numeric lengths (`width="100%"`, `r="50%"` on an `overflow-visible` svg so the stroke straddles the edge). jsdom renders no SVG layout and axe checks only a11y, so 100% coverage + axe + tsc all pass a component that draws nothing — add a unit assertion that geometry attrs are `%`/number (not `calc`), and always visually verify SVG components. (2026-07-01: TraceBorder trace invisible on a button, every gate green.)
 
 **Dependencies:**
 - Always use the latest stable major version — stale majors are a blocker, not deferred debt
