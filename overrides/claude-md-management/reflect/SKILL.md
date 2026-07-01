@@ -71,7 +71,7 @@ Agree on the complete change set before touching any file. For each proposed cha
 - The exact content
 - Whether a new subagent MD should be created vs updating an existing one
 
-New agent definitions live in `claude-config/agents/` (kebab-case: `migration-agent.md`) with frontmatter: `name`, `description` (dispatch criteria), `tools` allowlist, `model` default. New `subagent_type` values resolve at next session start. Routing-table and fable-lane edits (with date + evidence) go to `claude-config/skills/orchestrate/SKILL.md`.
+New agent definitions live in `claude-config/agents/` (kebab-case: `migration-agent.md`) with frontmatter: `name`, `description` (dispatch criteria), `tools` allowlist, `model` default. New `subagent_type` values hot-load mid-session (verified 2026-07-01 — all 8 seed agents resolved without a fresh session). Routing-table and fable-lane edits (with date + evidence) go to `claude-config/skills/orchestrate/SKILL.md`.
 
 ### Phase 5: Update
 
