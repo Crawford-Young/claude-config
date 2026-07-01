@@ -69,7 +69,7 @@ Every dispatch uses a predefined agent via `subagent_type` — never `general-pu
 | `docs-agent` | Pure doc/MD work | edit, no Bash | haiku |
 | `wave-release-agent` | Wave DoD verify + changeset + PR prep | implementer set | sonnet |
 
-New `subagent_type` values resolve at session start — an agent file added mid-session needs a fresh session to be dispatchable.
+New `subagent_type` values hot-load mid-session (verified 2026-07-01 — all 8 seed agents resolved without a fresh session; validated by live dispatch same day: 4/4 core agents, tool enforcement exact).
 
 Orchestrator's own lane is unchanged: writes checklist + docs only, never source; reads summaries only — recon reads source.
 
