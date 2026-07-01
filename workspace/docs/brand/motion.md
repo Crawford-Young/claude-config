@@ -116,6 +116,8 @@ Content arrives, it doesn't snap. Hero text: SplitText 30ms word stagger, `trans
 | AI / long API call (>1.5s) | 3 + 4 |
 | Any content arrival | 5 |
 | Short API call (<1.5s) | 5 only |
+| App open / first paint | BrandSplash |
+| Button / inline pending | TraceBorder / BorderTrace |
 
 ### Never
 
@@ -137,14 +139,18 @@ Content arrives, it doesn't snap. Hero text: SplitText 30ms word stagger, `trans
 
 | Component | Pattern | Status |
 |---|---|---|
-| `Skeleton` | 1 — shimmer variant | ⚠️ Shipped, but current implementation is `animate-pulse` — the shimmer variant this spec requires is not built yet (pulse-only is on the "Never" list above) |
-| `ProgressLine` | 2 — top-of-viewport bar | ❌ Not built |
-| `TypewriterStream` | 3 — ghost text + stream handoff | ❌ Not built |
-| `StaggerReveal` | 5 — stagger wrapper | ❌ Not built |
+| `Skeleton` | 1 — shimmer variant | ✅ Shimmer variant shipped (default); `pulse` kept as escape hatch — component-library PR #55 |
+| `ProgressLine` | 2 — top-of-viewport bar | ✅ Shipped — component-library PR #55 |
+| `TypewriterStream` | 3 — ghost text + stream handoff | ❌ Not built (Phase 4) |
+| `StaggerReveal` | 5 — stagger wrapper | ✅ Shipped — component-library PR #55 |
+| `BorderTrace` / `TraceBorder` | micro pending states — button submit, inline waits | ✅ Shipped |
+| `BrandSplash` | app intro / first paint | ✅ Shipped |
+
+**Precision foundation (2026-07-01, component-library wave 13):** the trace loop, `BrandSplash` phases, and all their transitions now run on the `MOTION`/`EASE` tokens (trace `1.2s var(--ease-in-out)`; splash dwells `MOTION.slow`/`MOTION.hero`, exit `MOTION.base` on `ease-exit`; entrance keyframe `brand-enter 400ms var(--ease-out) both`). Pending indicators respect an **appearance threshold** — `appearDelayMs` (default 150 = `MOTION.fast`) renders nothing for sub-threshold waits, killing the flash; `0` disables. Reduced motion gets a designed still-state: full static ring (`motion-reduce:[stroke-dasharray:none]`), not a stalled arc.
 
 ### Known divergence — `Spinner`
 
-`@crawfordyoung/ui` ships a `Spinner` component (wave 1, predates this spec). That conflicts with the "no spinners, ever" rule. Unresolved — either deprecate `Spinner` once Pattern 1–3 components exist, or scope the rule to page/content loading and keep `Spinner` for inline button-level pending states. Decide before Phase 4 work starts.
+Resolved 2026-06-09: `Spinner` is deprecated in favor of `BorderTrace` / `TraceBorder` (see `docs/component-library/specs/2026-06-09-loading-indicator-design.md`); removal scheduled for the next major. `BorderTrace` traces a border stroke rather than spinning a ring, satisfying the "no spinners" rule while covering inline / button-level pending states.
 
 ### Arrival is universal
 
@@ -210,7 +216,7 @@ Apps own: `viewTransition` flag in `next.config.ts`, route wiring, `view-transit
 ### Implementation Order
 
 1. ✅ **Tokens** — `tokens.css` vars + TS constants *(shipped — component-library PR #51)*
-2. **Core primitives** — `ScrollReveal`, `StaggerReveal`, `ProgressLine`, `Skeleton` shimmer (clears existing Phase 4 backlog). Also: align the preset's hardcoded `animation` shorthand easings (CSS keyword `ease-out`/`ease-in-out`) with brand curves, and add a `stories/foundation/Motion.mdx` token reference page.
+2. ✅ **Core primitives** — `ScrollReveal`, `StaggerReveal`, `ProgressLine`, `Skeleton` shimmer, `useReducedMotionSafe`, preset easing alignment + `Motion.mdx` token page *(shipped — component-library PR #55; `framer-motion` >=12 now a peer dependency)*
 3. **Transitions** — VT flag in portfolio, scene cuts, card→detail morph
 4. **Cinematic extras** — `Parallax`, `MagneticButton`, `TypewriterStream`, `useScrollProgress`
 5. **Per-app compliance** — joins deferred design-system compliance waves
