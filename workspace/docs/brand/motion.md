@@ -160,6 +160,18 @@ Pattern 5 (Staggered Arrival) applies after *every* content appearance — page 
 
 Navigation sequence = `exit (−8px fade) → ProgressLine if >150ms → arrival stagger`. Skeleton (Pattern 1) only when layout shape is known, renders only if fetch exceeds 300ms, then displays min 500ms — kills the skeleton-flash anti-pattern.
 
+### Splash → app handoff (shipped — component-library wave 14)
+
+The `BrandSplash` wordmark morphs into its in-app landing slot (canonically `SidebarBrand`) via the native View Transitions API. Library API: `startBrandHandoff(update)` helper + `handoffName`/`exit="external"` on `BrandSplash` + `handoffName` on `SidebarBrand`; timing defaults ship in `styles.css` (`::view-transition-*` on `--motion-hero` / `--ease-in-out`). Canonical name: `brand-wordmark`.
+
+**State-driven naming contract** (non-negotiable — two mounted elements sharing a `view-transition-name` make the browser silently skip the morph):
+
+1. Same `handoffName` on splash and landing slot
+2. `exit="external"` on the splash — the transition owns removal; the splash holds its final frame
+3. The landing slot receives its name ONLY in the same state update that unmounts the splash (`flushSync` inside the `startBrandHandoff` callback, deferred out of the splash's effect via `queueMicrotask`)
+
+**Degrade story:** no View Transitions API (Firefox, older Safari) or reduced-motion → `startBrandHandoff` runs the update directly; the splash's stock exit fade covers the swap. No polyfill, no JS-driven fallback animation.
+
 ---
 
 ## 6. Micro-interactions
