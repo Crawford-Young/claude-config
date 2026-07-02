@@ -59,7 +59,7 @@ This file governs **all projects** in this workspace (`~/code`). Rules here appl
 
 Specs and checklists live in `~/code/docs/<project-name>/`. Workspace-level reference docs live in `~/code/docs/` root. Ambiguous or historical docs go to `~/code/docs/archive/`.
 
-`~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`brand/`, root reference MDs) are gitignored — their history lives in `claude-config`.
+`~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`brand/`, root reference MDs) are gitignored — their history lives in `claude-config`. **Commit with explicit paths, never `git add -A`** — the repo is shared by concurrent sessions; `-A` sweeps another session's in-flight checklists/issues into your commit (2026-07-01: 2a spike commit swept w2.2L + cybond-w2.2 files).
 
 **claude-config is config + reference docs only.** Never write project working artifacts (specs, checklists, issues, screenshots, continuation handoffs, assets) into junctioned dirs — they land in the claude-config repo. Brand/design-system project work uses `docs/brand-design/` as its project dir; junctioned `docs/brand/` holds only the living reference MDs + README.
 
