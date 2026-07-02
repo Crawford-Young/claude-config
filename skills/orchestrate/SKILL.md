@@ -96,6 +96,8 @@ Orchestrator's own lane is unchanged: writes checklist + docs only, never source
 
 Reflect appends or amends rows (with date + evidence) when a Wave Scorecard shows a misroute, and prunes fable lanes that don't earn their cost.
 
+**Fable-inline execution (T1 / inline-execute under a fable orchestrator):** code-writing tasks still dispatch to an opus `implementer` — fable does orchestration, verification, checklist edits, and docs inline, but does not write implementation code itself. Fable has a separate weekly usage limit; burning it on bounded coding that opus handles equally well is a misroute. (2026-07-02: user directive after splash-handoff 2b ran 7 tasks fully fable-inline.)
+
 ## Escalation Ladder (anti-thrash)
 
 Route right upfront (Layer 2). Then, on failure:
