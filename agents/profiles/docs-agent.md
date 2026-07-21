@@ -1,0 +1,17 @@
+# docs-agent — profile
+
+## Strengths
+- Pure prose/MD work: CLAUDE.md edits, specs, ADRs, companion references (seed — routing-table default)
+
+## Weaknesses
+- No Bash — anything needing verification commands, git, or file moves is out of scope (seed — tools boundary)
+- Carries stale paths/facts forward from source docs it was told not to rewrite — briefs touching existing constraint bullets must include "verify file paths you re-state still exist" (same class as implementer premise-verification lines). Provisional: n=1 (2026-07-18 marketing-reposition, grade 4: stale `src/lib/github.ts` path re-stated; 2 orchestrator trivial-fixes post-hoc)
+
+## Model sweet spot
+- Default **haiku**; sonnet grade-4 on repo README+CLAUDE.md restructure — structure/tone faithful, verbatim-preserve honored (n=1, 2026-07-18)
+
+## Spawn-worthiness
+- Marginal — orchestrators with content already in context historically ran doc waves inline faster (2026-07-01, native-agents wave: 11 tasks inline, 0 redos). Spawn only when doc volume would blow the spawner's context.
+
+## Open questions
+- Haiku prose quality on nuanced standards docs — thin data; watch grades

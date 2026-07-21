@@ -17,6 +17,7 @@ Read everything relevant to the phase that just ended:
 
 - `git log` since phase start — what was built, what changed
 - Active or recently completed checklist in `~/code/docs/<project>/checklists/active/` or `done/` — what was planned vs delivered (the checklist IS the plan)
+- Performance MDs in `~/code/docs/<project>/agent-logs/` — every managing agent's judged record of its subagents this wave (grades, effort, lessons)
 - All existing agent-facing MDs:
   - `~/code/CLAUDE.md` (workspace level)
   - Repo-level `CLAUDE.md`
@@ -71,7 +72,7 @@ Agree on the complete change set before touching any file. For each proposed cha
 - The exact content
 - Whether a new subagent MD should be created vs updating an existing one
 
-New agent definitions live in `claude-config/agents/` (kebab-case: `migration-agent.md`) with frontmatter: `name`, `description` (dispatch criteria), `tools` allowlist, `model` default. New `subagent_type` values hot-load mid-session (verified 2026-07-01 — all 8 seed agents resolved without a fresh session). Routing-table and fable-lane edits (with date + evidence) go to `claude-config/skills/orchestrate/SKILL.md`.
+New agent definitions live in `claude-config/agents/` (kebab-case: `migration-agent.md`) with frontmatter: `name`, `description` (dispatch criteria), `tools` allowlist, `model` default. New `subagent_type` values hot-load mid-session (verified 2026-07-01 — all 8 seed agents resolved without a fresh session). Profile updates (with date + evidence, n≥2 for firm claims) go to `claude-config/agents/profiles/<type>.md`; staged agents (`~/.claude/agents/staged-*`) get promoted (rename into `claude-config/agents/`, commit, profile stub) or deleted per their performance-MD entries.
 
 ### Phase 5: Update
 
@@ -80,10 +81,19 @@ Apply all agreed changes using the Edit tool. Order:
 1. `~/code/CLAUDE.md` (workspace level — highest impact)
 2. Repo-level `CLAUDE.md`
 3. Existing agent definitions in `claude-config/agents/`
-4. New agent definitions in `claude-config/agents/`
-5. Skill files in `~/.claude/plugins/` if skill gaps were identified
+4. New agent definitions in `claude-config/agents/` + staged-agent promotions/deletions (`~/.claude/agents/staged-*`)
+5. Agent profiles in `claude-config/agents/profiles/`
+6. Skill files in `~/.claude/plugins/` if skill gaps were identified
 
 Show each diff to the user as it is applied. Do not batch silently.
+
+### Phase 5.5: Performance Rollup
+
+Sweep every performance MD in `~/code/docs/<project>/agent-logs/` for the wave:
+
+1. For each agent type graded in the logs, fold the evidence into `claude-config/agents/profiles/<type>.md` — strengths, weaknesses, model sweet spot, spawn-worthiness, each entry stamped with date + wave. One wave's data is provisional (n=1); mark it so. A claim goes firm only at n≥2 across waves.
+2. Promote or delete staged types (`~/.claude/agents/staged-*`) per their performance-MD entries — promotion = rename into `claude-config/agents/`, commit, seed a profile stub.
+3. Move processed logs to `~/code/docs/<project>/agent-logs/done/`.
 
 ### Phase 6: Context Cleanup
 

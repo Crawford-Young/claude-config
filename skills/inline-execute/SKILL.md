@@ -69,4 +69,4 @@ Never guess past a blocker.
 
 ## Workflow Routing
 
-See the `orchestrate` skill — tier formula decides: T1 → this skill, T2+ → `superpowers:subagent-driven-development`.
+See the `agent-factory` skill — orchestrator judges at execution time: no spawns needed → this skill.

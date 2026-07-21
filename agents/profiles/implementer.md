@@ -1,0 +1,38 @@
+# implementer — profile
+
+## Strengths
+- Bounded single-task TDD implementation with exact file scope (seed — routing-table default, evidence across waves since 2026-06)
+- Warm redos on fixable same-model failures — SendMessage beats cold re-dispatch (seed — redo protocol history)
+
+## Strengths (cont.)
+- **sonnet grade-5 on wide-but-mechanical breaking surgery when the brief names the freshest sibling to mirror** — w3L L2 (2-file threading copy, warm redo clean) + L5 (deletion+rebuild mirroring L4 conventions, 87 tool uses, 4 sound self-flagged deviations, diagnosed parallel-axe flake correctly instead of thrashing). Provisional: n=2 dispatches, one wave (2026-07-16 w3L)
+- opus recovers deleted patterns from git history unprompted when rebuilding over a stripped API (w3L L4: L1-deleted Days-toggle recovered from `9dabefe^`; n=1)
+- **sonnet grade-5 on combined many-file verbatim batches** — eb3 Tasks 2–4: ONE dispatch, 22 files (11 boundaries + 11 tests, near-identical canonical pattern), TDD per file honored, all gates first-pass, zero findings at review; surfaced the repo's coverage-exclude config unprompted. Batch-combining near-identical verbatim tasks beats per-task cold starts. Provisional: n=1 (2026-07-16 eb3)
+- **sonnet grade-5 on cross-repo verbatim rollout tasks — FIRM (n=4, eb4 w4a–w4d, 2026-07-16/17):** four dispatches across three repos, zero redos, zero escalations. Handles repo-specific traps from brief citations (port recon, gated-consume dist checks both directions, background-gate EXIT lines). Self-flagged deviations consistently sound (scoped CSS mock w4c, probe-reverted).
+- **sonnet grade-5 on bundled QA rounds — ONE dispatch with per-fix prescriptions** (4 user-reported fixes / 7 files incl. a coverage-gated branch addition; TDD per fix, no cross-fix confusion; cheaper than 4 dispatches). Provisional: n=1 (2026-07-18 marketing-reposition QA-R2)
+- **Exemplary NEEDS_CONTEXT discipline on structural blockers (n=1, eb4 w4d, 2026-07-17):** hit out-of-scope tsc break after dep bump → root-caused via stash→install-old→tsc-clean→pop bisection (proved bump-only causation), reverted its temp edits byte-identical, stopped exactly at scope boundary instead of migrating 4 out-of-scope files. Escape-hatch clause in brief was honored precisely; keep it in every dispatch. **n=3+ by cybond w3** (A8 teardown: NEEDS_CONTEXT ×2 with zero edits saved a live feature from silent deletion; A13: lib copy bug ISSUE-flagged not worked around).
+- **opus on known-red-window and integration-heavy calendar tasks — FIRM (n=4, cybond w3: A5 opener, A6 closer, A10, A11):** confinement/closure discipline consistent; self-flagged deviations sound every time. Warm redo after being REFUTED validated: A11 re-derived ground truth experimentally, superseded both its own and the reviewer's wrong hypotheses, stated "my prior claim was wrong" plainly — no anchoring (2026-07-19).
+- **opus on cross-wave squash-integration + semantic port** (rebuild branch on fresh main, 3-way merge overlap, port foreign wave's files onto new model, regenerate migrations) — w3 A14: 137 tool uses, zero redos, caught a rename-hidden deletion via --no-renames recompute, review PASS zero findings. Works when the brief pre-computes file sets + names port targets with their old-model symbols. Provisional n=1 (2026-07-21). Bonus lesson: drizzle-kit generate is TTY-interactive on create-vs-rename — two-pass generate (drop, then create) is the deterministic headless workaround.
+- **sonnet lanes proven in cybond w3 (2026-07-16→21):** pre-adjudicated hardening buckets (every design decision already made by reviews — pure execution, 5 cross-file fixes one dispatch, zero findings at review; n=1); gates-runner verification-only dispatches (full DoD suite, "report don't fix" constraint prevents scope drift; n=2 — both grade 5, second one correctly surfaced an audit FAIL rather than absorbing it, then took a warm scope-widening to fix it cleanly).
+
+## Standing brief lines (proven — include in every dispatch)
+- **prettier `--write` on new/hand-authored files BEFORE first `--check`** — eliminates the reflow round. FIRM: reflow rounds in 2 unbriefed dispatches (marketing-reposition T4/T6), zero in 3 briefed ones (T7/T9/QA-R2, 2026-07-18)
+- **Premise-verification checks listed in the brief** (verify cited file:line/patterns before writing tests) — 3 consecutive dispatches answered all checks in one pass, no NEEDS_CONTEXT round-trips (marketing-reposition T8/T9/QA-R2, 2026-07-18)
+- Escape-hatch clause (NEEDS_CONTEXT on out-of-scope blockers) — honored precisely, see strength above
+
+## Weaknesses
+- When the v8 reporter collapses fully-covered files, offers threshold-gate RC:0 assertion instead of the four quoted coverage lines — dispatches must name the acceptable alternative evidence form up front (2026-07-16 w3L L4; reviewer independent rerun closed it)
+- Documented AGENTS.md traps missed even on opus when the brief doesn't cite them — briefs MUST cite trap entries (2026-07-14, w2.6 S14: opus impl + opus review both missed the mocked-lib trap; redo cost a full round)
+- Shared spec files: bundles entries for other tasks' components unless brief says "ONLY your component" (2026-06-12, A1)
+- **sonnet treats `'use server'` constraints syntactically (async-only grep), not semantically (every export = endpoint needing auth)** — shipped an unauthenticated cross-user RPC on top of a plan that specified one (cybond w3 A3 Critical). Mitigation proven: state the threat model in the brief ("every async export is a client-callable POST") — produced correct auth-scoped code at A4 with zero redo. n=1 failure + n=1 mitigation (2026-07-17)
+
+## Model sweet spot
+- Default **sonnet**
+- **opus** when: 3+ files / shared state / integration flavor · novel pattern with nothing in repo to copy · high-stakes work (auth, payments, migrations) (seed — promoted from post-failure escalation signals)
+- Escalation: sonnet fail + signals → straight to opus, no retry; no signals → one retry then opus
+
+## Spawn-worthiness
+- Earns its cold start for any code task the spawner shouldn't hold inline (fable orchestrators never write implementation code themselves — 2026-07-02 user directive)
+
+## Open questions
+- Warm-redo regression rate (does the agent anchor on its mistake?) — data thin

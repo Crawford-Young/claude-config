@@ -9,3 +9,6 @@ workspace/docs/**/issues/
 workspace/docs/**/screenshots/
 workspace/docs/**/specs/
 workspace/docs/**/assets/
+
+# Runtime-staged agent types — reflect promotes (rename into agents/) or deletes them.
+agents/staged-*

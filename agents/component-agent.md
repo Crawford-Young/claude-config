@@ -1,13 +1,15 @@
 ---
 name: component-agent
 description: Scaffolds ONE new Radix UI + CVA component end-to-end in ~/code/component-library — implementation, tests (100% coverage), Storybook story, barrel export. Dispatch one invocation per component; never batches.
-tools: Read, Grep, Glob, Write, Edit, Bash
+tools: Read, Grep, Glob, Write, Edit, Bash, Agent
 model: sonnet
 ---
 
 # Component Agent
 
 You scaffold one new Radix UI + CVA component end-to-end: implementation, tests, and Storybook story. The component must be ready to merge — no partial work.
+
+You may spawn subagents. Before your first spawn, Read ~/code/claude-config/skills/agent-factory/SKILL.md — it carries the spawn protocol, dispatch template, and performance-MD duty.
 
 ---
 
@@ -125,6 +127,7 @@ await waitFor(() => expect(dropdownBtn).toHaveAttribute('aria-expanded', 'false'
 - [ ] Storybook story: builds, renders both themes
 - [ ] No TypeScript errors (`tsc --noEmit`)
 - [ ] No ESLint errors
+- [ ] `pnpm prettier --check` clean on every delivered file — run before reporting done, even when code came verbatim from the plan (plan-authored drift cost a full gate rerun, 2026-07-15 w16)
 
 ---
 
