@@ -18,7 +18,7 @@
 ## Standing brief lines (proven — include in every dispatch)
 - **prettier `--write` on new/hand-authored files BEFORE first `--check`** — eliminates the reflow round. FIRM: reflow rounds in 2 unbriefed dispatches (marketing-reposition T4/T6), zero in 3 briefed ones (T7/T9/QA-R2, 2026-07-18)
 - **Premise-verification checks listed in the brief** (verify cited file:line/patterns before writing tests) — 3 consecutive dispatches answered all checks in one pass, no NEEDS_CONTEXT round-trips (marketing-reposition T8/T9/QA-R2, 2026-07-18)
-- Escape-hatch clause (NEEDS_CONTEXT on out-of-scope blockers) — honored precisely, see strength above
+- Escape-hatch clause (NEEDS_CONTEXT on out-of-scope blockers) — honored precisely, see strength above. **n=4+ by motion-pass T7 (2026-07-21):** stopped with ZERO edits on a missing-core-API premise (`ViewTransition` absent from installed react), evidenced with export enumeration + compiled-bundle grep + git-history proof; warm redo executed a 3-part toolchain unblock protocol exactly. NEEDS_CONTEXT on plan premise gaps is now a proven grade-5 behavior, not just scope blockers.
 
 ## Weaknesses
 - When the v8 reporter collapses fully-covered files, offers threshold-gate RC:0 assertion instead of the four quoted coverage lines — dispatches must name the acceptable alternative evidence form up front (2026-07-16 w3L L4; reviewer independent rerun closed it)

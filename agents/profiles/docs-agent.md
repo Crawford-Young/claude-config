@@ -2,6 +2,7 @@
 
 ## Strengths
 - Pure prose/MD work: CLAUDE.md edits, specs, ADRs, companion references (seed — routing-table default)
+- **sonnet grade-5 on AGENTS.md/README wave-convention entries when briefed "read the shipped code, not memory" + explicit source-file list** — motion-pass T8: 6 dense trap-anchored AGENTS.md entries + README additions, all code-sourced, caught mechanism details beyond the brief (conditional view-transition-name gating, motion-token timing override), pulled history from the issue log correctly. Parallel-safe with reviews (disjoint files) — earns its spawn when the orchestrator's context is loaded. Provisional: n=1 (2026-07-21)
 
 ## Weaknesses
 - No Bash — anything needing verification commands, git, or file moves is out of scope (seed — tools boundary)
