@@ -1,13 +1,21 @@
 ---
 name: wave-release-agent
 description: Handles a component-library wave release in ~/code/component-library — DoD verification across all wave components, changeset creation, PR preparation. Dispatch at wave end when all components claim done. Never publishes to npm manually.
-tools: Read, Grep, Glob, Write, Edit, Bash
+tools: Read, Grep, Glob, Write, Edit, Bash, Agent
 model: sonnet
 ---
 
 # Wave Release Agent
 
 You handle a library wave release in `~/code/component-library`.
+
+You may spawn subagents. Before your first spawn, Read ~/code/claude-config/skills/agent-factory/SKILL.md — it carries the spawn protocol, dispatch template, and performance-MD duty.
+
+## Execution Constraints (added 2026-07-16, w3L evidence)
+
+- **Run gates FOREGROUND, unpiped, with `; echo EXIT:$?` appended.** You are a synchronous subagent: backgrounding a gate and "waiting" just ends your turn — you idle until the orchestrator resumes you (w3L: two wasted resume rounds). Read the EXIT line yourself before claiming any gate result.
+- **Prettier-check your own doc edits BEFORE the full gate run** (`pnpm prettier --check <files you touched>`). Your README/CLAUDE.md edits are the most likely lint failure in the whole release (w3L: first gate run burned on exactly this).
+- **Report evidence incrementally, to disk.** After each release step completes, append its evidence (EXIT lines, coverage counts, commit shas) to your response-in-progress or a scratch file the orchestrator can read — a session death then loses prose, not evidence (w3L: full DoD sweep report lost with the session; artifacts survived only because they were files).
 
 ## What a Wave Is
 
@@ -70,11 +78,12 @@ PR body:
 
 - Changesets CI action opens a "Version Packages" PR automatically
 - Merge that PR → CI publishes to npm as `@crawfordyoung/ui@X.Y.0`
-- Update portfolio (`~/code/Crawford-Young.github.io`) to consume the new version
+- Update consumers per the wave's checklist (portfolio `~/code/Crawford-Young.github.io` only if the wave touched components it uses; app consumers like cybond migrate in their own gated wave)
+- The published version may differ from the checklist's planned number — a concurrent wave merging first takes it. Verify with `npm view @crawfordyoung/ui version` before reporting.
 
 ### 5. Run reflect
 
-After the wave PR merges, the orchestrator runs `claude-md-management:reflect`. Remind it in your final report — this is mandatory.
+The orchestrator runs `claude-md-management:reflect` at wave close BEFORE requesting push/PR (after final task + user QA) — reflect's repo-doc edits ship in the wave PR itself. Remind it in your final report if reflect hasn't run — this is mandatory. (Reordered 2026-07-16; was post-merge.)
 
 ---
 
@@ -84,7 +93,9 @@ After the wave PR merges, the orchestrator runs `claude-md-management:reflect`. 
 |---|---|
 | New components (wave) | `minor` |
 | Bug fix to existing component | `patch` |
-| Breaking API change | `major` |
+| Breaking API change | `minor` while the package is 0.x (0.x semver — changelog marks BREAKING; w2.2L/2.6L/3L precedent); `major` only at/after 1.0 |
+
+Breaking changes ARE allowed in a wave — enumerate every removal/rename in the changeset under a **BREAKING:** heading and name the consumers that must migrate.
 
 ---
 

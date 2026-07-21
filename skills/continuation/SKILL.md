@@ -70,7 +70,7 @@ At the start of the next session, say:
 ## Current State
 
 **Checklist:** `docs/<project>/checklists/active/<file>.md` (or: phase closed, next checklist not yet written)
-**Tier / Profile:** <from checklist header, incl. any pivots> — Orchestration Log in checklist
+**Factory:** <spawn tree summary + open perf-MD paths> — Orchestration Log in checklist
 **Last completed task:** Task N — <name>
 **Next task:** Task N+1 — <name>, Step <X>
 

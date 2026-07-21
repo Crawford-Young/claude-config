@@ -1,5 +1,5 @@
 # ORCHESTRATOR.md — Moved
 
-Orchestration standards now live in the **`orchestrate` skill** — `claude-config/skills/orchestrate/SKILL.md`, linked at `~/.claude/skills/orchestrate`.
+Orchestration standards now live in the **`agent-factory` skill** — `claude-config/skills/agent-factory/SKILL.md`.
 
-Invoke the skill when orchestrating; do not load this file. Tier ladder (T1–T4), tier formula, plan profiles, model routing table, escalation rule, dispatch template, checklist template, and all protocols are there.
+Invoke the skill when orchestrating; do not load this file. Spawn protocol, dispatch template, performance-MD duty, profile routing (`claude-config/agents/profiles/`), type authoring, escalation ladder, checklist template, and all protocols are there. The tier ladder and plan profiles are retired (2026-07-15).

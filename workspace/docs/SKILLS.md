@@ -1,6 +1,6 @@
 # SKILLS.md — Skill Usage Reference
 
-> Canonical reference for which skill fires in which situation. The `orchestrate` skill and `CLAUDE.md` point here. When skill routing changes, update this file — nowhere else.
+> Canonical reference for which skill fires in which situation. The `agent-factory` skill and `CLAUDE.md` point here. When skill routing changes, update this file — nowhere else.
 
 ---
 
@@ -26,7 +26,7 @@
 | Starting any feature — **always first** (includes feature evolution on existing components) | `superpowers:brainstorming` |
 | Brainstorm hits a genuine design fork — 2+ viable approaches with material trade-offs, or user says "debate this" | `persona-debate` |
 | After brainstorm, before coding | `superpowers:writing-plans` |
-| Executing any multi-task plan/checklist, wave start, dispatch or model decisions, profile selection | `orchestrate` (routes to T1 `inline-execute` or T2+ `superpowers:subagent-driven-development`) |
+| Executing any multi-task plan/checklist, wave start, dispatch or model decisions, spawn decisions at any depth | `agent-factory` (factory decides inline vs spawn at execution time; `inline-execute` remains the no-spawn path) |
 | Executing a plan handed to a **separate fresh session** (rare — checklist workflows above are the default) | `superpowers:executing-plans` |
 | 2–4 independent subtasks, no shared state | `superpowers:dispatching-parallel-agents` |
 | Any bug, test failure, or unexpected behavior — before proposing fixes | `superpowers:systematic-debugging` |
@@ -46,7 +46,7 @@
 | Session-end CLAUDE.md learnings | `claude-md-management:revise-claude-md` |
 | Creating or editing a skill | `superpowers:writing-skills` (process) + `skill-creator:skill-creator` (evals/optimization) |
 
-**Routing rule:** `superpowers:executing-plans` is for plans executed in a separate session with review checkpoints. For checklists in the current session, the tier formula in the `orchestrate` skill decides: T1 → `inline-execute`, T2+ → `subagent-driven-development` — those two are the default executors.
+**Routing rule:** `superpowers:executing-plans` is for plans executed in a separate session with review checkpoints. For checklists in the current session, the `agent-factory` skill governs: orchestrator judges at execution time — no spawns needed → `inline-execute`; spawns needed → dispatch per the factory protocol (profiles are the routing authority).
 
 ## Custom Skills (this repo, `skills/`)
 
@@ -60,7 +60,7 @@ Inline (current session) → use the skill. Subagent dispatch → use the predef
 | Doc/MD-only work via dispatch | — | `docs-agent` |
 | Recon, implementation, review, workstream management | — | `recon` / `implementer` / `reviewer` / `manager` |
 | Executing a small-task checklist inline | `inline-execute` | — |
-| Tier/profile selection, dispatch, model routing, orchestration metrics | `orchestrate` | — |
+| Spawn decisions, dispatch, model routing (via profiles), performance MDs, type authoring | `agent-factory` | — |
 | Spec-time debate at a design fork — personas argue, user picks | `persona-debate` | — |
 | Handoff before `/clear` (auto-triggers after reflect, spec approval, wave end) | `continuation` | — |
 
