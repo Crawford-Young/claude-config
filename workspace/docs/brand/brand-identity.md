@@ -180,11 +180,11 @@ Anything with a visual opinion — buttons, cards, inputs, effects, motion — g
 | Component | Principle | Status |
 |---|---|---|
 | `CountUp` | Animated number reveal with easing (spec'd as `NumberTicker`) | ✅ Shipped in `@crawfordyoung/ui` (wave 5a) |
-| `SplitText` | Staggered character reveal | ⚠️ Lives in portfolio `src/components/effects/` — still needs moving into library |
+| `SplitText` | Staggered character reveal | ✅ Shipped in `@crawfordyoung/ui` (wave 15) — `STAGGER.charMs` cadence, reduced-motion plain text |
 | `Spotlight` / `SpotlightCard` | Cursor-following radial gradient within card bounds | ⚠️ Lives in portfolio `src/components/effects/` — still needs moving into library |
 | `Marquee` | Infinite scroll — CSS linear infinite, pause on hover, bidirectional | ❌ Not built |
 | `BorderTrail` | Animated gradient tracing the border | ❌ Not built |
-| `MagneticButton` | Button attracted toward cursor via Framer `useMotionValue`; hero CTA only | ❌ Not built (optional) |
+| `MagneticButton` | Button attracted toward cursor via Framer `useMotionValue`; hero CTA only | ✅ Shipped in `@crawfordyoung/ui` (wave 15) — ≤8px pull, `SPRING_MAGNETIC`, plain `Button` on touch / reduced motion |
 
 ---
 

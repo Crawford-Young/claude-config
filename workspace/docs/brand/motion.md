@@ -148,6 +148,8 @@ Content arrives, it doesn't snap. Hero text: SplitText 30ms word stagger, `trans
 
 **Precision foundation (2026-07-01, component-library wave 13):** the trace loop, `BrandSplash` phases, and all their transitions now run on the `MOTION`/`EASE` tokens (trace `1.2s var(--ease-in-out)`; splash dwells `MOTION.slow`/`MOTION.hero`, exit `MOTION.base` on `ease-exit`; entrance keyframe `brand-enter 400ms var(--ease-out) both`). Pending indicators respect an **appearance threshold** — `appearDelayMs` (default 150 = `MOTION.fast`) renders nothing for sub-threshold waits, killing the flash; `0` disables. Reduced motion gets a designed still-state: full static ring (`motion-reduce:[stroke-dasharray:none]`), not a stalled arc.
 
+**Resolve vocabulary (2026-07-02, component-library wave 15):** the anti-spinner closes the loop on success instead of vanishing mid-lap. `BorderTrace`/`TraceBorder` take `resolved` + `onResolveComplete`: on `resolved` the arc expands to the full ring, settles briefly in emerald, then departs on `ease-exit` (~3× `MOTION.base` total) and fires the callback for teardown. Reduced motion gets the designed still equivalent — full ring, brief settle, no lap. Same wave: `Skeleton` shimmer re-eased onto the brand curve on a fixed `SHIMMER_PERIOD_MS` (1500ms) period, and `STAGGER.charMs` (28ms) added for `SplitText` character cadence.
+
 ### Known divergence — `Spinner`
 
 Resolved 2026-06-09: `Spinner` is deprecated in favor of `BorderTrace` / `TraceBorder` (see `docs/component-library/specs/2026-06-09-loading-indicator-design.md`); removal scheduled for the next major. `BorderTrace` traces a border stroke rather than spinning a ring, satisfying the "no spinners" rule while covering inline / button-level pending states.
