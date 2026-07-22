@@ -117,6 +117,10 @@ If Playwright MCP is unavailable or wedged (calls timing out): verify generated 
 
 **Transparent-bg PNG export: Playwright CLI `screenshot` cannot** — use a node script with `page.screenshot({ omitBackground: true })`; for scratchpad scripts, resolve playwright via `createRequire('<repo-with-playwright>/package.json')`. (2026-07-22 carsickyak watermark set.)
 
+**Packaging/CTR surfaces (thumbnails, titles, social hooks) optimize for click-through, not brand consistency** — face/stakes/curiosity beats brand-minimalism, and brand-lens reasoning actively harms them. Get the user's packaging direction BEFORE rendering; the user is the authority on what lands with their audience. (2026-07-22 carsickyak P1: two brand-lens thumbnails rejected — "won't land", "powerpoint opening"; user's own face+stakes composite won. n=1.)
+
+**Assets with an update cycle (data-driven graphics) commit their generator + data into the asset repo** — scratchpad generators die with the session; the update cycle is edit data → run generator → re-render. (2026-07-22 carsickyak P1: `ranks.json` + `generate-yak2peak.mjs` persisted beside outputs.)
+
 ### 3. Branch Strategy
 
 - New branch per feature/fix — never commit to `main`
