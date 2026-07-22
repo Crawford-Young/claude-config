@@ -52,6 +52,21 @@ addons/gut/         # the GUT testing framework itself
 
 ---
 
+## Godot Gotchas
+
+- New `class_name` scripts are invisible to headless GUT until Godot rebuilds its global script-class cache — run `godot --headless --editor --quit --path .` once after adding one. `--import` does NOT rebuild this cache. (Hit 3× in one wave: what-is-dark T5/T6/T7, 2026-07.)
+- Reimport after every `.tscn`/asset edit before any headless run: `godot --headless --path . --import` (wrap as `just import`).
+
+---
+
+## Plan-Time Checks (games)
+
+- **Respawn/reset math verified at BOUNDARY markers (first/last) at plan time.** A zero-floor progress clamp + `>=` catch check = infinite instant-recatch at marker 0 — shipped in plan-verbatim code, structurally uncatchable by per-task review, found only in playtest. (what-is-dark T7, 2026-07-22.)
+- **Screen-covering / volumetric visuals get a "camera inside it" pass**, not just distant-view — a paper-thin QuadMesh void wall showed the unswallowed world at camera contact during the swallow fade. (what-is-dark T7, 2026-07-22.)
+- **"Auto" traversal mechanics (auto-vault, auto-step, auto-climb) are spec-time user questions, never plan walk-rules** — auto-vault shipped built-and-reviewed-green and was cut on first play. Games instance of the universal value-judgment-UX rule. (what-is-dark T4, 2026-07-21.)
+
+---
+
 ## TDD Scope
 
 Full TDD with a 100% coverage expectation applies to **pure logic**: state machines, damage/score calculation, inventory, save/load serialization — anything expressible as a plain script with no node-tree dependency. Scene and node-tree tests are smoke-level (does it instantiate, does `_ready` run without error) — the scene runtime depends on the engine's frame loop and node lifecycle, which GUT can drive but cannot meaningfully assert against line-by-line. **There is no coverage gate on visual scenes.** State this explicitly in any review or checklist so it is never mistaken for an oversight.
@@ -60,7 +75,7 @@ Full TDD with a 100% coverage expectation applies to **pure logic**: state machi
 
 ## Playtest Gate (mandatory)
 
-Automated coverage, GUT, and a clean headless run do not catch what a human playing the game catches. The `duel` project (2026-06-30) shipped a missing HUD, two copy bugs, and a contrast regression past full automated coverage, axe, and Lighthouse — a two-minute playtest caught all four. Every games task ends with the equivalent: drive the actual running build, not just its tests, before calling it done.
+Automated coverage, GUT, and a clean headless run do not catch what a human playing the game catches. The `duel` project (2026-06-30) shipped a missing HUD, two copy bugs, and a contrast regression past full automated coverage, axe, and Lighthouse — a two-minute playtest caught all four. n=2: what-is-dark phase 1 (2026-07) had user-caught issues on 4 of 8 code tasks that green suites + clean reviews missed — two design rulings (auto-vault cut, wall-climb adopted) and two plan-authored bug pairs. Every games task ends with the equivalent: drive the actual running build, not just its tests, before calling it done. Playtest verdicts can be design rulings, not just bug reports — treat them as spec input.
 
 ---
 

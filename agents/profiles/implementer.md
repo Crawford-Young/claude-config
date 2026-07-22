@@ -17,6 +17,9 @@
 - **sonnet grade-5 on behavioral single-component slices within a verbatim wave (n=3, lib slot-W1, 2026-07-21):** T3 full-component rewrite with test latitude, T7 controlled/uncontrolled dual-mode state rework, T9 multi-component file + fragile merge-order fix. Zero redos; self-flagged deviations sound (T7 test mock removeItem). Routing split that held: haiku when plan contains complete code, sonnet floor when task needs any judgment (state semantics, merge order, existing-test latitude).
 - **sonnet lanes proven in cybond w3 (2026-07-16→21):** pre-adjudicated hardening buckets (every design decision already made by reviews — pure execution, 5 cross-file fixes one dispatch, zero findings at review; n=1); gates-runner verification-only dispatches (full DoD suite, "report don't fix" constraint prevents scope drift; n=2 — both grade 5, second one correctly surfaced an audit FAIL rather than absorbing it, then took a warm scope-widening to fix it cleanly).
 
+- **sonnet grade-5 on GDScript/GUT verbatim lane incl. hand-authored `.tscn` scene files** — what-is-dark phase 1: 6 dispatches (scaffold, 2 pure-logic TDD, node+tscn authoring, 7-file wiring, swallow director), zero redos, zero escalations; applied the class_name-cache lesson cross-task unprompted; first-import success on hand-authored tscn every time. Provisional: one wave (2026-07-21/22)
+- **opus on greybox/layout tasks with design latitude surfaces contradictions instead of silently deciding** — what-is-dark T8: brief carried 4 m gap vs ≤3 m jumpable hard constraint; resolved toward the hard constraint, made the wall-run route optional, flagged both calls with geometry proof. n=2 incl. side-trough falls defense at round 1 (2026-07-22)
+
 ## Standing brief lines (proven — include in every dispatch)
 - **prettier `--write` on new/hand-authored files BEFORE first `--check`** — eliminates the reflow round. FIRM: reflow rounds in 2 unbriefed dispatches (marketing-reposition T4/T6), zero in 3 briefed ones (T7/T9/QA-R2, 2026-07-18)
 - **Premise-verification checks listed in the brief** (verify cited file:line/patterns before writing tests) — 3 consecutive dispatches answered all checks in one pass, no NEEDS_CONTEXT round-trips (marketing-reposition T8/T9/QA-R2, 2026-07-18)
@@ -38,4 +41,4 @@
 - Earns its cold start for any code task the spawner shouldn't hold inline (fable orchestrators never write implementation code themselves — 2026-07-02 user directive)
 
 ## Open questions
-- Warm-redo regression rate (does the agent anchor on its mistake?) — data thin
+- Warm-redo regression rate (does the agent anchor on its mistake?) — data growing: what-is-dark phase 1 ran 4/4 warm redos PASS grade 5 with zero anchoring (T3 visuals addendum, T4 feature removal, T7 4-fix TDD round, T8 4-workstream tuning round) — warm lane holds for post-review addendums, design-change removals, AND multi-fix rounds when the redo brief carries orchestrator-traced root causes (2026-07-21/22)
