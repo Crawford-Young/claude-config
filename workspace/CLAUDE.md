@@ -111,6 +111,12 @@ Always write and commit the spec before producing an implementation plan. No exc
 
 If Playwright MCP is unavailable or wedged (calls timing out): verify generated SVGs/images textually instead — grep output for `NaN|Infinity|undefined`, inspect the header (width/height/viewBox) and key coordinates — and note the deviation rather than fighting the browser. (2026-06-10: MCP wedged mid-session; textual verification caught everything the eyeball pass would have.)
 
+**Brand/visual asset waves: plans lock pipeline, sizes, palette — never *look*.** Aesthetic decisions (mark form, composition language, copy placement) are per-asset user gates with rendered references; plan-locked composition prose was rejected on sight 3× in one wave — badge composition, flat-vector banner, mark-as-pfp all reversed at gate (2026-07-22 carsickyak P0).
+
+**Organic/illustrative shapes: never hand-author SVG paths blind.** Trace a user-approved raster (potrace) from the start; carry `fill-rule` (or split subpaths explicitly) when re-emitting traced paths. (2026-07-22 carsickyak P0: 3 failed hand-author rounds — sheep/mammoth/rodent reads — before trace pivot; a regex re-emit dropped `fill-rule="evenodd"` and silently filled the negative-space crescent.)
+
+**Transparent-bg PNG export: Playwright CLI `screenshot` cannot** — use a node script with `page.screenshot({ omitBackground: true })`; for scratchpad scripts, resolve playwright via `createRequire('<repo-with-playwright>/package.json')`. (2026-07-22 carsickyak watermark set.)
+
 ### 3. Branch Strategy
 
 - New branch per feature/fix — never commit to `main`
