@@ -70,7 +70,7 @@ Every Scope line ends with the escape hatch: "if the constraint blocks the corre
 
 Every agent that spawned children writes ONE performance MD: `docs/<project>/agent-logs/<date>-<wave>-<agent-role>.md`. Project working artifact — never in junctioned claude-config dirs.
 
-- **Write-as-you-go (mandatory):** append the child's entry immediately after it returns — never batch at the end. An agent death then loses at most one entry.
+- **Write-as-you-go (mandatory):** append the child's entry immediately after it returns — never batch at the end. An agent death then loses at most one entry. **The wave's FIRST spawn creates the perf-MD file in the same action batch as the dispatch itself** — file existence survives compaction; a remembered duty does not. (2026-07-21 restructure w1: 2 early spawns in a long inline wave, Orchestration Log lines written, MD skipped until reflect — second recurrence of this class after the 2026-07-16 ambiguity kill.)
 - **The managing agent is the sole judge.** Record effort from your own observation: redo count, escalations, dispatch duration, output quality. Grades anchor to verifiable outcomes (gates passed, redo count), not impressions.
 - **The orchestrator is a managing agent too** — it writes its own performance MD (`docs/<project>/agent-logs/<date>-<wave>-orchestrator.md`) for every dispatch it makes, write-as-you-go, same as any manager. IN ADDITION, its top-level dispatch outcomes get one-line grades in the checklist Orchestration Log (e.g. `· PASS · grade 5`) so the checklist stays self-contained. The log line never replaces the MD entry. (2026-07-15 bootstrap reflect; ambiguity killed 2026-07-16 after an orchestrator skipped the MD citing this line.)
 
