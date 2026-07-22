@@ -158,6 +158,7 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 - **Mocked-component prop assertions cannot catch a library overriding those props internally.** When wiring a library component whose props interact (an enable flag that changes how other props are read — e.g. `sleepEnabled=true` makes `WeekCalendarView` force a 24h grid and IGNORE `hourStart`/`hourCount`), read the shipped dist source for the interaction at plan time and verify the *visible behavior* at the Preview Gate. Unit tests against a mock only prove props were passed, not that they do anything. (2026-07-01 cybond: inverted sleep window shipped through 100% coverage + green two-stage reviews; only the Preview Gate caught it.)
 
 **Dependencies:**
+- **`@ai-sdk/codemod` is unusable on Windows** (spawnSync ENOBUFS on every invocation — 5 attempts, 2026-07-21 GS-P0 T2). Plan AI SDK major bumps as 100% manual migrations: verify the installed dist export surface (`dist/index.d.ts`) per consumed API at bump time, record a verification table, feed it to implementation briefs as pre-verified cites (zero NEEDS_CONTEXT across the GS-P0 4→7 triple-major this way).
 - **`file:` workspace packages + gitignored `dist/`:** pnpm copies dist at install time, not a live symlink. After adding exports to a library: `just build` in the library → `pnpm install` in the consuming repo.
 
 **Security:**
