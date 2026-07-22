@@ -1,6 +1,6 @@
 ---
 name: component-agent
-description: Scaffolds ONE new Radix UI + CVA component end-to-end in ~/code/component-library — implementation, tests (100% coverage), Storybook story, barrel export. Dispatch one invocation per component; never batches.
+description: Scaffolds ONE new Radix UI + CVA component end-to-end in ~/code/web/component-library — implementation, tests (100% coverage), Storybook story, barrel export. Dispatch one invocation per component; never batches.
 tools: Read, Grep, Glob, Write, Edit, Bash, Agent
 model: sonnet
 ---
@@ -15,7 +15,7 @@ You may spawn subagents. Before your first spawn, Read ~/code/claude-config/skil
 
 ## Repo Location
 
-`~/code/component-library/src/components/ui/<ComponentName>/`
+`~/code/web/component-library/src/components/ui/<ComponentName>/`
 
 ---
 

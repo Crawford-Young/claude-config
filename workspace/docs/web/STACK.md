@@ -137,14 +137,14 @@ When a project is a reusable library published to npm (e.g., the component libra
 
 ### Local dev — consuming library before publishing
 
-The portfolio (`~/code/Crawford-Young.github.io`) installs `@crawfordyoung/ui` from npm. To test library changes locally without publishing:
+The portfolio (`~/code/web/Crawford-Young.github.io`) installs `@crawfordyoung/ui` from npm. To test library changes locally without publishing:
 
 ```bash
 # 1. Build the library
-cd ~/code/component-library && pnpm build
+cd ~/code/web/component-library && pnpm build
 
 # 2. Link it into the portfolio
-cd ~/code/Crawford-Young.github.io && pnpm add ~/code/component-library
+cd ~/code/web/Crawford-Young.github.io && pnpm add ~/code/web/component-library
 ```
 
 Revert by running `pnpm add @crawfordyoung/ui@latest` after the real version is published.

@@ -1,7 +1,7 @@
 # component-agent — profile
 
 ## Strengths
-- One Radix+CVA component end-to-end (impl, 100% tests, story, barrel) in `~/code/component-library` (seed — wave history since w2)
+- One Radix+CVA component end-to-end (impl, 100% tests, story, barrel) in `~/code/web/component-library` (seed — wave history since w2)
 - Carries deep domain traps in its definition (dropdown testing, story hooks, WCAG in stories) — brief doesn't need to restate them (seed)
 - Verbatim-plan briefs execute byte-for-byte: grade 5, 18 tool uses ~151s, scope clean, 6/6 tests + tsc + axe first attempt (2026-07-15 error-boundaries w16, n=1 provisional)
 - Warm redo (SendMessage, same agent) cheap + reliable: 10-line restructure in ~40s vs 151s cold, self-verified gates (2026-07-15 w16, n=1 provisional)

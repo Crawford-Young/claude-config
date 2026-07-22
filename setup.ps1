@@ -48,11 +48,35 @@ function Link-Item($linkPath, $targetPath, $kind) {
     Write-Host "Linked: $linkPath"
 }
 
+$domains = 'web', 'games', 'apps'
+
 Link-Item "$code\CLAUDE.md" "$wsRepo\CLAUDE.md" SymbolicLink
+
+# Domain standards — one CLAUDE.md symlink per domain folder
+foreach ($domain in $domains) {
+    New-Item -ItemType Directory -Force "$code\$domain" | Out-Null
+    Link-Item "$code\$domain\CLAUDE.md" "$wsRepo\$domain\CLAUDE.md" SymbolicLink
+}
+
+# Universal reference docs at the docs root
 Get-ChildItem "$wsRepo\docs" -File -Filter *.md | ForEach-Object {
     Link-Item "$code\docs\$($_.Name)" $_.FullName SymbolicLink
 }
-Get-ChildItem "$wsRepo\docs" -Directory | ForEach-Object {
+
+# Domain reference docs — real directories in the docs repo, individual file symlinks inside.
+# NEVER junction the whole directory: ~/code/docs/<domain>/ also holds the docs repo's own
+# project folders, and a junction would relocate them into this repo.
+foreach ($domain in $domains) {
+    $src = Join-Path "$wsRepo\docs" $domain
+    if (-not (Test-Path $src)) { continue }
+    New-Item -ItemType Directory -Force "$code\docs\$domain" | Out-Null
+    Get-ChildItem $src -File -Filter *.md | ForEach-Object {
+        Link-Item "$code\docs\$domain\$($_.Name)" $_.FullName SymbolicLink
+    }
+}
+
+# Cross-domain reference directories (brand) stay whole-directory junctions
+Get-ChildItem "$wsRepo\docs" -Directory | Where-Object { $_.Name -notin $domains } | ForEach-Object {
     Link-Item "$code\docs\$($_.Name)" $_.FullName Junction
 }
 

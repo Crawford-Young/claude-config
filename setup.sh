@@ -47,12 +47,38 @@ link_item() {
     echo "Linked: $link"
 }
 
+DOMAINS="web games apps"
+
 link_item "$CODE/CLAUDE.md" "$WS/CLAUDE.md"
+
+# Domain standards — one CLAUDE.md symlink per domain folder
+for domain in $DOMAINS; do
+    mkdir -p "$CODE/$domain"
+    link_item "$CODE/$domain/CLAUDE.md" "$WS/$domain/CLAUDE.md"
+done
+
+# Universal reference docs at the docs root
 for f in "$WS"/docs/*.md; do
     link_item "$CODE/docs/$(basename "$f")" "$f"
 done
+
+# Domain reference docs — real directories in the docs repo, individual file symlinks inside.
+# NEVER symlink the whole directory: ~/code/docs/<domain>/ also holds the docs repo's own
+# project folders, and a directory link would relocate them into this repo.
+for domain in $DOMAINS; do
+    [ -d "$WS/docs/$domain" ] || continue
+    mkdir -p "$CODE/docs/$domain"
+    for f in "$WS"/docs/"$domain"/*.md; do
+        [ -e "$f" ] || continue
+        link_item "$CODE/docs/$domain/$(basename "$f")" "$f"
+    done
+done
+
+# Cross-domain reference directories (brand) stay whole-directory links
 for d in "$WS"/docs/*/; do
-    link_item "$CODE/docs/$(basename "$d")" "${d%/}"
+    name="$(basename "$d")"
+    case " $DOMAINS " in *" $name "*) continue ;; esac
+    link_item "$CODE/docs/$name" "${d%/}"
 done
 
 echo ""

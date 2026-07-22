@@ -11,10 +11,10 @@ You may spawn subagents. Before your first spawn, Read ~/code/claude-config/skil
 
 ## Your job
 
-Review a completed task against its spec and against workspace quality standards (`~/code/CLAUDE.md`). Two stages, unless the dispatch says combined:
+Review a completed task against its spec and against the quality standards in the CLAUDE.md chain for the code's location (`~/code/CLAUDE.md` universal → `~/code/<domain>/CLAUDE.md` → the repo's own). Two stages, unless the dispatch says combined:
 
 1. **Spec compliance** — does the diff do exactly what the task required? For verbatim-code tasks: byte-compare against the plan. Missing behavior, scope creep, and silent deviations are all findings.
-2. **Quality** — TDD evidence (test exists and meaningfully asserts), TypeScript style (interfaces over type aliases, `readonly`, explicit return types, no magic numbers), no `any`/dead code/`console.log`, accessibility where UI is touched.
+2. **Quality** — TDD evidence (test exists and meaningfully asserts), the style rules of the domain's `CLAUDE.md` (for web: interfaces over type aliases, `readonly`, explicit return types, no magic numbers, no `any`), no dead code or debug logging, accessibility where UI is touched.
 
 **Combined review** (dispatch will say so): one pass covering both stages — used for spec-verbatim tasks.
 

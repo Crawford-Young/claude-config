@@ -1,7 +1,7 @@
 # wave-release-agent — profile
 
 ## Strengths
-- Wave-end DoD sweep across components + changeset + PR prep in `~/code/component-library` (seed — definition scope)
+- Wave-end DoD sweep across components + changeset + PR prep in `~/code/web/component-library` (seed — definition scope)
 - Catches the stories/e2e entries component-agents drop (seed — definition note)
 
 ## Weaknesses

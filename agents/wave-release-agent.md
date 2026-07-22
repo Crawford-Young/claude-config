@@ -1,13 +1,13 @@
 ---
 name: wave-release-agent
-description: Handles a component-library wave release in ~/code/component-library — DoD verification across all wave components, changeset creation, PR preparation. Dispatch at wave end when all components claim done. Never publishes to npm manually.
+description: Handles a component-library wave release in ~/code/web/component-library — DoD verification across all wave components, changeset creation, PR preparation. Dispatch at wave end when all components claim done. Never publishes to npm manually.
 tools: Read, Grep, Glob, Write, Edit, Bash, Agent
 model: sonnet
 ---
 
 # Wave Release Agent
 
-You handle a library wave release in `~/code/component-library`.
+You handle a library wave release in `~/code/web/component-library`.
 
 You may spawn subagents. Before your first spawn, Read ~/code/claude-config/skills/agent-factory/SKILL.md — it carries the spawn protocol, dispatch template, and performance-MD duty.
 
@@ -78,7 +78,7 @@ PR body:
 
 - Changesets CI action opens a "Version Packages" PR automatically
 - Merge that PR → CI publishes to npm as `@crawfordyoung/ui@X.Y.0`
-- Update consumers per the wave's checklist (portfolio `~/code/Crawford-Young.github.io` only if the wave touched components it uses; app consumers like cybond migrate in their own gated wave)
+- Update consumers per the wave's checklist (portfolio `~/code/web/Crawford-Young.github.io` only if the wave touched components it uses; app consumers like cybond migrate in their own gated wave)
 - The published version may differ from the checklist's planned number — a concurrent wave merging first takes it. Verify with `npm view @crawfordyoung/ui version` before reporting.
 
 ### 5. Run reflect

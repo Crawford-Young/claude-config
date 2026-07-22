@@ -1,19 +1,29 @@
 # claude-config
 
-Personal Claude Code skills and workspace standards for Next.js fullstack development.
+Personal Claude Code skills and workspace standards across three development domains — web, games, and apps.
 
 ## Layout
 
 | Path | What | Linked to |
 |---|---|---|
 | `skills/` | Custom skills | `~/.claude/skills/<name>` (junction/symlink) |
+| `agents/` | Predefined subagent definitions + routing profiles | `~/.claude/agents/` (junction) |
 | `overrides/` | Edited official plugin skills | plugin cache dir (junction) |
-| `workspace/CLAUDE.md` | Master development standards | `~/code/CLAUDE.md` (symlink) |
-| `workspace/docs/` | Workspace reference docs — STACK, PATTERNS, TEMPLATES, ENV, COMPONENT-LIBRARY, TYPESCRIPT-STYLE, ORCHESTRATOR, **SKILLS** (skill routing), `agents/`, `brand/` | `~/code/docs/<name>` (symlinks for files, junctions for dirs) |
+| `workspace/CLAUDE.md` | **Universal** standards — workflow, planning discipline, git, commit policy, context hygiene, security | `~/code/CLAUDE.md` (symlink) |
+| `workspace/web/CLAUDE.md` | Web domain — Next.js, TypeScript, Radix+CVA, Vitest, Playwright, Vercel | `~/code/web/CLAUDE.md` (symlink) |
+| `workspace/games/CLAUDE.md` | Games domain — Godot 4, GDScript, GUT | `~/code/games/CLAUDE.md` (symlink) |
+| `workspace/apps/CLAUDE.md` | Apps domain — Expo (React Native), Tauri v2 | `~/code/apps/CLAUDE.md` (symlink) |
+| `workspace/docs/*.md` | Universal reference docs — ORCHESTRATOR, **SKILLS** (skill routing) | `~/code/docs/<name>` (symlinks) |
+| `workspace/docs/web/*.md` | Web reference docs — STACK, PATTERNS, TEMPLATES, ENV, COMPONENT-LIBRARY, TYPESCRIPT-STYLE | `~/code/docs/web/<name>` (symlinks) |
+| `workspace/docs/brand/` | Cross-domain brand + design system | `~/code/docs/brand` (junction) |
 | `docs/` | Repo-only docs (daily updates, prompts) | — |
 | `scripts/` | Workspace utility scripts | — |
 
-Per-project planning docs (`~/code/docs/<project>/`) stay local — churn, not standards.
+Claude Code loads every `CLAUDE.md` from the working directory upward, root first, so a session in `~/code/web/<repo>` gets universal → web → repo rules, each overriding the last.
+
+Domain reference docs are linked **file-by-file into a real directory**, never as a whole-directory junction — `~/code/docs/<domain>/` also holds the docs repo's own project folders, and a directory link would relocate them into this repo.
+
+Per-project planning docs (`~/code/docs/<domain>/<project>/`) stay local — churn, not standards.
 
 **Skill usage routing** lives in [`workspace/docs/SKILLS.md`](./workspace/docs/SKILLS.md) — the canonical situation→skill table. `ORCHESTRATOR.md` and `CLAUDE.md` point to it.
 
