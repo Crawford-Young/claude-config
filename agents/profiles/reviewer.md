@@ -11,9 +11,11 @@
 - **"Try to construct a bypass" phrasing in security probes → actual attack attempts with per-attempt disposition** — stronger than "verify the check works" (w3 A9-hardening: 3 bypasses constructed and held; A10: 2 genuine spec-edge findings routed to issue log). n=3 (2026-07-17/18)
 - **Implementer environment-limitation claims are adjudicable against installed dist source** — "read the .mjs render path" refuted an opus mis-diagnosis evidenced with a DOM dump (w3 A11, 2026-07-19). Standardize the probe for any "test env can't do X" deviation. n=1
 - **sonnet combined review widened to small behavioral patches with latitude — FIRM (n=4: w3 A12/A13 + motion-pass T8a lib patch + T6):** all zero-real-finding, mechanism-level adjudications. T8a additionally verified fail-first by running new tests against the PARENT commit (`git show <sha>~1:`) unprompted, and correctly self-diagnosed its scoped-coverage EXIT:1 as a global-threshold artifact instead of reporting a false FAIL. (2026-07-20/21)
+- **opus whole-branch final review with a verbatim global-constraints block → constraint-by-constraint verification with file:line cites, zero false flags** — slot-W1: adjudicated `??` node-slots vs the `!== undefined` render-fn rule correctly instead of false-flagging, checked axe story-ID resolution + README row coverage unprompted, correctly separated pre-existing style debt from wave-introduced findings. Provisional n=1 (2026-07-21)
 - **`git diff -w` disambiguates prettier-reflow from content drift on large verbatim diffs** — motion-pass T7: a 260-line reindented page verified as zero-content-drift in one command instead of a false drift flag. Cheap, decisive; standardize in byte-compare briefs. n=1 (2026-07-21)
 
 ## Weaknesses
+- **Def has no Write tool** — briefs asking for a report FILE get an inline report instead; request "return full report inline; orchestrator persists" in every reviewer dispatch (slot-W1 final review, 2026-07-21 — handled gracefully, zero cost, but the brief contract was unfulfillable as written)
 - Nonzero false-Critical rate — orchestrator verifies every Critical against source before dispatching a fix (2026-06-10; a wrong fix cycle costs a full dispatch + re-review)
 - Same trap-blindness as implementer when brief omits AGENTS.md citations (2026-07-14, w2.6 S14)
 
