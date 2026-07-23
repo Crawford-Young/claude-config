@@ -21,3 +21,9 @@ TikTok — https://www.tiktok.com/@carsick_yak
 Instagram — https://www.instagram.com/carsickyak/
 X — https://x.com/CarsickYak
 ```
+
+## Video description — yak2peak ep 1 (2026-07-23, acceptance pick; slot text, assembled from user's own words)
+
+yak2peak — a challenge where I try to reach my peak rank in games I used to be good at. Ep 1: new account. Leveling up for ranked is my warm up. Then it gets down to business.
+
+Register note: "leveling up for ranked is my warm up" is LITERAL (warm-up phase = leveling, then ranked climb) — not a flex. User correction 2026-07-23: "im not trying to be cocky... im just explaning". Never amplify lines into swagger.

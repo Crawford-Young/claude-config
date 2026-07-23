@@ -13,3 +13,7 @@ Mechanics: all lowercase, no colons. Exclamation only when user writes it.
 Notes:
 - Series brand (yak2peak) carries ranked titles — rank goal stated flat, no hype adjectives.
 - Coined words ("friendslop") are in-voice — user generates these naturally; offer, never force.
+
+## Video titles (2026-07-23, acceptance round)
+
+- the climb starts - yak2peak ep 1 — user-edited pick; pattern `<flat statement> - <series tag> ep <n>`

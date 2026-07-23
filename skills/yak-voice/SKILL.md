@@ -18,6 +18,12 @@ Base directory: `~/code/claude-config/skills/yak-voice/` (junction-visible at `~
 5. **Present options. User picks/edits.** Never present one finished answer. Trim-only on user edits: delete, reorder, fix mechanics — never add content words.
 6. **Append the final picked text verbatim to the bucket** (with date). Then remind: commit claude-config — verify tree on `main` first (`git -C ~/code/claude-config status --short --branch`); foreign branch → defer commit, file edit persists.
 
+## Voice notes (evidence-backed, from accepted copy — NOT adjectives to generate from)
+
+- **Register is literal-practical.** Lines that scan as flex are literal explanations ("leveling up for ranked is my warm up" = the warm-up phase, nothing more). Never amplify a line into swagger; user correction 2026-07-23: "im not trying to be cocky... im just explaning."
+- **Personality carriers observed in accepted copy:** parentheticals ("(if I'm not outside touching grass)"), self-aware callbacks ("and yes, still gaming"), coined words ("friendslop"), inside-joke names with zero explanation ("Do the Face"). Options stripping ALL carriers read flat/vague — first acceptance round failed exactly this way (T6, 2026-07-23). Carriers come from the user's material, never invented.
+- **PROVISIONAL — persona grasp incomplete.** User 2026-07-23: "you dont seem to have a good grasp of my personality." Two misreads in one session (vague-flat options, cocky misinterpretation). Until a persona deep-dive lands more raw material, flag every generation "low confidence" and lean harder on verbatim user phrasing.
+
 ## Hard rules
 
 - Corpus files accept ONLY user-picked text. Never append a generated option the user didn't pick.
