@@ -163,6 +163,7 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 **Dependencies:**
 - **`@ai-sdk/codemod` is unusable on Windows** (spawnSync ENOBUFS on every invocation — 5 attempts, 2026-07-21 GS-P0 T2). Plan AI SDK major bumps as 100% manual migrations: verify the installed dist export surface (`dist/index.d.ts`) per consumed API at bump time, record a verification table, feed it to implementation briefs as pre-verified cites (zero NEEDS_CONTEXT across the GS-P0 4→7 triple-major this way).
 - **`file:` workspace packages + gitignored `dist/`:** pnpm copies dist at install time, not a live symlink. After adding exports to a library: `just build` in the library → `pnpm install` in the consuming repo.
+- **pnpm `minimumReleaseAge` silently skips same-day publishes** — `pnpm update <pkg>` reports "Already up to date" with no warning when the target version is younger than the age gate. Consuming a same-day lib release needs BOTH the exact version appended to `minimumReleaseAgeExclude` AND a `^<new>` floor in package.json, so a skip fails resolution loudly instead of silently keeping the old dist. (2026-07-22 slot-W2: 0.28.1 skipped twice before the pattern landed.)
 
 **Security:**
 - Hardened security headers in `next.config.ts`

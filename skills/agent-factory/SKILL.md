@@ -66,6 +66,8 @@ Every Scope line ends with the escape hatch: "if the constraint blocks the corre
 
 **Pre-verified API cites (2026-07-21, w3):** when a task consumes a library API, the brief cites the installed dist (`dist/index.d.ts` file:line for each shape) verified by the orchestrator at dispatch time — removes the implementer's whole assumption-risk class for free (A13: zero API re-derivation, zero redos). Corollary for verification-only gate-suite briefs: carry the FULL prior-run exemption record verbatim (every accepted gap's file:line), not a paraphrase — a line-shift plus one undocumented-to-the-agent gap cost an adjudication round-trip (w3 A9-close).
 
+**No commit steps in implementer briefs (2026-07-23, slot-W2):** the implementer definition assigns git to the orchestrator — a brief instructing a commit creates a def/brief conflict the agent correctly refuses, burning a round-trip beat. Orchestrator verifies, then commits. (QA-R1: opus implementer refused the brief's commit step per role boundary; second occurrence of the class.)
+
 ## Performance MDs
 
 Every agent that spawned children writes ONE performance MD: `docs/<project>/agent-logs/<date>-<wave>-<agent-role>.md`. Project working artifact — never in junctioned claude-config dirs.

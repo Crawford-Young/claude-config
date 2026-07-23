@@ -6,7 +6,7 @@
 - Root-cause classification after repeated failure: plan defect vs wrong assumption vs environment (seed — diagnostic lane)
 
 ## Strengths (cont.)
-- sonnet surface-extraction recon: exact file:line anchors across 10-item briefs, both grade 4 (2026-07-16 w3L, n=2 one wave); gs-p1 12-item brief graded 5 — "if absent, find where it lives" clause returned absent items WITH where-they-live evidence plus 2 unprompted discrepancy flags + 1 ISSUE line (2026-07-22, n=3)
+- sonnet surface-extraction recon: exact file:line anchors across 10-item briefs, both grade 4 (2026-07-16 w3L, n=2 one wave); gs-p1 12-item brief graded 5 — "if absent, find where it lives" clause returned absent items WITH where-they-live evidence plus 2 unprompted discrepancy flags + 1 ISSUE line (2026-07-22, n=3); slot-W2 both grade 5 (n=5): contract-surface enum found 2 unmocked real-lib test files the spec missed + flagged a stale foreign checklist premise as ISSUE; lib-premise recon handled a git-show-vs-working-tree split cleanly when briefed "report against origin/main via git show" — repeat that instruction verbatim whenever the checkout holds a parked branch (2026-07-22)
 
 ## Weaknesses
 - "Confirm X exists on component Y" briefs: reports absence without locating where X actually lives — brief must add "if absent, find where it lives" (w3L recon 1). Mitigation proven grade-5 at gs-p1 (2026-07-22) — keep the clause in every recon brief
