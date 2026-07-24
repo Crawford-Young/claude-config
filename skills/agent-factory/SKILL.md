@@ -257,6 +257,7 @@ The checklist is the sole source of truth across compaction boundaries. Marker s
 - **Per-component test entries only.** Shared spec files (axe, e2e): "add ONLY entries for your component." (2026-06-12)
 - **Zero-output dispatch death = infra failure, not FAIL.** A dispatch returning 0 tokens with a session-limit message is not a model failure: re-dispatch identical once the limit resets — do not count it toward escalation. Log as `dispatch died (session limit) → re-dispatch clean`. (2026-07-02)
 - **Stalled-agent recovery.** A watchdog-killed dispatch whose work is already on disk is also infra, not FAIL: verify the claimed artifacts hands-on, then resume the SAME agent with a report-only message — never redo the work or re-dispatch cold. (2026-07-08)
+- **Value-judgment changes ride before review.** When a landed change encodes a product-feel judgment the user may reject on sight (tuning constant, parity break, presentation choice), get the user verdict BEFORE dispatching its review — reviewing a value the user rejects wastes the round. Log the review debt explicitly in the Orchestration Log with its close condition ("bundle into next stack review after user verdict") and close it at the stated point; the deferred review still runs at full rigor (momentum-lab close review caught a real Major). (2026-07-24 momentum-lab, n=1 provisional.)
 
 ## Phase Complete Protocol
 

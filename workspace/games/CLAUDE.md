@@ -67,6 +67,13 @@ addons/gut/         # the GUT testing framework itself
 
 ---
 
+## Telemetry & Debug Probes
+
+- **Temporary probe code lands as ONE purely-additive commit and is removed by `git revert`, never hand-deletion.** Hand-removal of a probe passed grep-zero (probe markers), full GUT, and a clean headless launch — and still left a structural residue (a variable extraction the probe diff introduced) that only a byte-diff against the pre-probe commit caught. Grep-zero proves marker removal, not structural revert; revert is byte-exact by construction. Mark every probe block `DEBUG PROBE — remove before gates` regardless, and verify removal with `git diff <pre-probe-sha> HEAD -- <files>` expecting empty. (what-is-dark momentum-lab, 2026-07-24.)
+- **Rates/derivatives from tick telemetry: compute from position/state deltas over the measured span, never from stride-sampled per-tick delta rows.** A sampling stride sharing a factor with any buffering window (input drain, interpolation) phase-locks onto one step of the split and reports a systematically wrong rate — stride-2 prints over a 2-tick yaw drain reported −57°/s where truth was −118.8°/s, convicting a phantom engine bug. (what-is-dark momentum-lab R13, 2026-07-24.)
+
+---
+
 ## TDD Scope
 
 Full TDD with a 100% coverage expectation applies to **pure logic**: state machines, damage/score calculation, inventory, save/load serialization — anything expressible as a plain script with no node-tree dependency. Scene and node-tree tests are smoke-level (does it instantiate, does `_ready` run without error) — the scene runtime depends on the engine's frame loop and node lifecycle, which GUT can drive but cannot meaningfully assert against line-by-line. **There is no coverage gate on visual scenes.** State this explicitly in any review or checklist so it is never mistaken for an oversight.
@@ -76,6 +83,8 @@ Full TDD with a 100% coverage expectation applies to **pure logic**: state machi
 ## Playtest Gate (mandatory)
 
 Automated coverage, GUT, and a clean headless run do not catch what a human playing the game catches. The `duel` project (2026-06-30) shipped a missing HUD, two copy bugs, and a contrast regression past full automated coverage, axe, and Lighthouse — a two-minute playtest caught all four. n=2: what-is-dark phase 1 (2026-07) had user-caught issues on 4 of 8 code tasks that green suites + clean reviews missed — two design rulings (auto-vault cut, wall-climb adopted) and two plan-authored bug pairs. Every games task ends with the equivalent: drive the actual running build, not just its tests, before calling it done. Playtest verdicts can be design rulings, not just bug reports — treat them as spec input.
+
+**Feel-gate tuning loop** (evaluation/tuning waves; proven over 15 rounds, momentum-lab 2026-07): each round runs ride → symptom split (one focused question if the complaint is ambiguous) → probe-verified diagnosis → user pick → warm redo to the owning implementer chain → re-review. Two hard rules inside the loop: (1) **no constant or geometry change ships without a probe-verified diagnosis first** — three separate rounds found the physics authentic and the real defect elsewhere (layout, scale, turn-window law); an unverified "fix" would have masked each; (2) **any fork encoding a product-feel judgment (parity break, cap widening, geometry redesign) is a user pick, never an orchestrator walk-rule** — games instance of the universal value-judgment rule, and ride-BEFORE-review is the right order for those changes (review a value the user may reject and the round is wasted; log the review debt explicitly with its close condition instead).
 
 ---
 
