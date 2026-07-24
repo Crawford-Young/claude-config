@@ -7,6 +7,13 @@ Real accepted CarsickYak copy — few-shot source. Append user picks only; never
 Started as gaming. Evolved into who I am — music, poems, philosophy, fitness, building apps and games, and yes, still gaming.
 A community built on self growth.
 
+## Trailer description (2026-07-23 — thesis text reused as trailer slot, user pick)
+
+Started as gaming. Evolved into who I am — music, poems, philosophy, fitness, building apps and games, and yes, still gaming.
+A community built on self growth.
+
+(Replaced a user draft opening "Welcome to the channel" with an "if you're looking for X, you're in the right place" closer — bans 4+1 in the wild. User picked thesis-verbatim over trailer-specific alternatives.)
+
 ## Video-description template, long form (2026-07-23)
 
 `{}` = per-video slot; slot can grow "depending on the video".
