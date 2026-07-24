@@ -38,9 +38,12 @@
 - Default **opus** — but **sonnet matches opus when the brief is adjudication-style** (enumerated probes + flagged decisions): cybond w3 ran sonnet on ALL 10 app-wave reviews incl. security-load-bearing and integration diffs, ten grade-5s, zero false alarms (2026-07-21). Route sonnet by default when the orchestrator writes enumerated probes; keep opus for reviews where the orchestrator cannot pre-frame the holes.
 - **sonnet** for mechanical spec-verbatim byte-compare (seed)
 - **fable** for high-stakes design review (auth/payments/migration specs) — per-run user clearance required (seed fable lane)
+- Route Opus 5 first for high-stakes design review — half fable cost, no clearance overhead; fable narrows to exceptional-stakes specs or after an Opus-5 review misses (release-note 2026-07-24, unvalidated — confirm at first reflect)
+- Severity-filter recall depression is unchanged on Opus 5 (same as 4.7/4.8) — the existing report-everything, filter-downstream adjudication-brief pattern stays correct as-is (release-note 2026-07-24, unvalidated — confirm at first reflect)
 
 ## Spawn-worthiness
 - Earns its cost after every implementer task with latitude; combined single-pass review suffices for verbatim tasks (2026-06-10)
 
 ## Open questions
 - Fable design-review lane value — no scorecard has yet proven it earns its cost over opus
+- With fable narrowed to exceptional-stakes-only, does Opus 5 close the gap on the remaining high-stakes (non-exceptional) design reviews fable used to take? First-wave evidence should confirm. (release-note 2026-07-24, unvalidated — confirm at first reflect)

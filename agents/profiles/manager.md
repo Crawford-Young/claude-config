@@ -11,6 +11,7 @@
 ## Model sweet spot
 - Default **opus**
 - **fable** when the wave has coupling risk (independence on paper, shared invariants underneath) — per-run user clearance (seed fable lane)
+- Try Opus 5 manager first (release notes cite strong multi-agent coordination and low subagent collision) — fable clearance only when Opus 5 proves insufficient for the coupling (release-note 2026-07-24, unvalidated — confirm at first reflect)
 
 ## Spawn-worthiness
 - Earns its cold start ONLY for genuinely independent workstreams with a clean file-set boundary; anything less → spawner runs the tasks itself (seed)
@@ -19,3 +20,4 @@
 ## Open questions
 - Depth-3+ management chains (manager under manager) — zero data; first factory waves should scorecard any occurrence
 - Smoke test (2026-07-15) proved depth-2 mechanics only — no data yet on manager judgment quality under a real multi-task workstream
+- Does Opus 5's cited multi-agent coordination strength hold on a real coupled-workstream manager task, or does fable still earn its clearance? First Opus-5 manager wave should scorecard this. (release-note 2026-07-24, unvalidated — confirm at first reflect)

@@ -15,9 +15,11 @@
 ## Model sweet spot
 - Default **haiku**
 - **fable** for the diagnostic lane after an opus implementation failure (systematic-debugging framing; per-run user clearance) (seed fable lane)
+- Ladder unchanged structurally, but the opus rung is now Opus 5 — fable diagnostics fire only after an Opus-5 failure; expected fable volume drops accordingly (release-note 2026-07-24, unvalidated — confirm at first reflect)
 
 ## Spawn-worthiness
 - Earns its cost whenever the spawner would otherwise read >10 files or burn context on fan-out fact-finding (seed — efficiency playbook)
 
 ## Open questions
 - Haiku ceiling: which recon dispatches actually needed sonnet?
+- Does actual fable diagnostic-dispatch volume drop post-Opus-5, as predicted? First-wave count should confirm. (release-note 2026-07-24, unvalidated — confirm at first reflect)

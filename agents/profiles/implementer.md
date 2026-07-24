@@ -50,6 +50,7 @@
 - Default **sonnet**
 - **haiku** when the plan/brief contains the complete code byte-for-byte (verbatim transcription + tests) — provisional, n=7 zero-redo one wave (slot-W1 2026-07-21); requires pre-briefed gate semantics + orchestrator diff-verification
 - **opus** when: 3+ files / shared state / integration flavor · novel pattern with nothing in repo to copy · high-stakes work (auth, payments, migrations) (seed — promoted from post-failure escalation signals)
+- **opus alias = Opus 5 as of 2026-07-24; same override conditions apply.** Opus 5 dispatch briefs should now: (a) omit verify-your-work scaffolding — Opus 5 self-verifies unprompted and the old scaffolding causes over-verification; (b) add a scope-discipline line ("deliver what was asked at the scope intended") — Opus 5 can expand task scope; (c) cap delegation explicitly if the agent has Agent tool access — Opus 5 delegates to subagents more readily than 4.8, the inverse of the old under-delegation tuning. (release-note 2026-07-24, unvalidated — confirm at first reflect)
 - Escalation: sonnet fail + signals → straight to opus, no retry; no signals → one retry then opus
 
 ## Spawn-worthiness
@@ -57,3 +58,4 @@
 
 ## Open questions
 - Warm-redo regression rate (does the agent anchor on its mistake?) — data growing: what-is-dark phase 1 ran 4/4 warm redos PASS grade 5 with zero anchoring (T3 visuals addendum, T4 feature removal, T7 4-fix TDD round, T8 4-workstream tuning round) — warm lane holds for post-review addendums, design-change removals, AND multi-fix rounds when the redo brief carries orchestrator-traced root causes (2026-07-21/22)
+- Does the Opus-5 scope-discipline / delegation-cap brief line actually change measured behavior, or is it a no-op? First Opus-5 wave should scorecard delegation count and scope drift against the pre-5 baseline. (release-note 2026-07-24, unvalidated — confirm at first reflect)
