@@ -131,6 +131,10 @@ If Playwright MCP is unavailable or wedged (calls timing out): verify generated 
 
 **Assets with an update cycle (data-driven graphics) commit their generator + data into the asset repo** — scratchpad generators die with the session; the update cycle is edit data → run generator → re-render. (2026-07-22 carsickyak P1: `ranks.json` + `generate-yak2peak.mjs` persisted beside outputs.)
 
+**Theme/palette waves ask "where does color live" (interactive elements vs surfaces vs grounds) as an explicit gate question with rendered candidates** — a brand palette table alone underdetermines a UI theme; applying it literally to surface tokens invites wholesale rejection. Ambiguous feel-words in gate feedback ("cold") get one clarifying read-back before generating the next round. (2026-07-24 cy-theme W0: 4 gate rounds — palette-literal charcoal/offwhite rejected, "cold"-as-tint misread cost round 2, colored card backgrounds rejected round 3; landed = neutral grounds + color in buttons only. n=1, provisional.)
+
+**CSS-var-override preview capture waits ~400ms after style injection** — `transition-colors` elements screenshot their STALE pre-injection colors otherwise; a contact sheet can lie about every button. Probe computed styles when a rendered color contradicts the injected vars. (2026-07-24 cy-theme W0, mechanism-verified.)
+
 ### 3. Branch Strategy
 
 - New branch per feature/fix — never commit to `main`
