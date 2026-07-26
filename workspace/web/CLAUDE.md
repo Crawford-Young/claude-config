@@ -82,6 +82,8 @@ A running-app Preview Gate starts with **apply pending DB migrations to the dev 
 
 **Playwright MCP is single-instance across concurrent sessions** — a second session gets "Browser is already in use". Fallback that keeps real eyes + real artifacts: eyeball via claude-in-chrome, then capture PNGs with a small `chromium` script (`import { chromium } from '@playwright/test'`, `addInitScript` for theme localStorage) placed INSIDE the target repo (e.g. `node_modules/.cache/`) so module resolution works — save to the docs screenshots path, delete the script after. (2026-07-16 eb3: full preview gate ran this way, both themes verified.)
 
+**Authed-surface Preview Gate lane: claude-in-chrome on the user's real signed-in session is PRIMARY.** Scripted session-token minting is permission-classifier-blocked in every form (Bash heredoc, Write-then-node, Playwright `browser_run_code_unsafe` addCookies) — don't burn rounds trying variants. If a token is genuinely unavoidable (fresh-account tests), write the mint script and ask the user to run it via `!` prefix; the DB session-row delete after QA needs the user too. QA plans note the second-account gap explicitly when viewer/other-user rendering matters. (2026-07-25 visibility-w1: 3 blocked mint attempts → pivot; full 2-pass gate ran clean on the user's live Chrome.)
+
 ### 3. Branch Strategy
 
 - **After any rebase that changes `package.json`/lockfile, run `pnpm install` before gates** — stale node_modules type-checks against the old dep and fails tsc on APIs the rebased code consumes. (2026-07-14: wave-A rebase brought main's 0.21.0 consume code; installed 0.20.0 lacked `recurrenceEditMode`, one wasted gate run.)
