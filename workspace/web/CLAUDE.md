@@ -13,6 +13,7 @@ Applies to every repo under `~/code/web/`.
 > - [`../docs/web/ENV.md`](../docs/web/ENV.md) — environment variable conventions (load when setting up env or .env.example)
 > - [`../docs/web/COMPONENT-LIBRARY.md`](../docs/web/COMPONENT-LIBRARY.md) — Radix+CVA component guide (load when building UI)
 > - [`../docs/web/TYPESCRIPT-STYLE.md`](../docs/web/TYPESCRIPT-STYLE.md) — full TypeScript style guide with real-world examples
+> - [`../docs/claude-api-reference.md`](../docs/claude-api-reference.md) — Claude API capabilities for app AI features (structured outputs, caching, batch, Tool Runner; load when building an LLM feature)
 > - [`../docs/brand/`](../docs/brand/) — brand identity + design system + motion (cross-domain; load `brand-identity.md` for tokens/colors, `design-system.md` for layout/states/composition, `motion.md` for transitions/loading/animation)
 
 ---
