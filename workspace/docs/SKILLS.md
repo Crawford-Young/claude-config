@@ -61,6 +61,7 @@ Inline (current session) → use the skill. Subagent dispatch → use the predef
 | Recon, implementation, review, workstream management | — | `recon` / `implementer` / `reviewer` / `manager` |
 | Executing a small-task checklist inline | `inline-execute` | — |
 | Spawn decisions, dispatch, model routing (via profiles), performance MDs, type authoring | `agent-factory` | — |
+| Enumeration-shaped fan-out (consumer sweeps, adversarial verify) — propose Workflow tool | `agent-factory` §Workflow Lane | — |
 | Spec-time debate at a design fork — personas argue, user picks | `persona-debate` | — |
 | Handoff before `/clear` (auto-triggers after reflect, spec approval, wave end) | `continuation` | — |
 

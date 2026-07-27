@@ -99,6 +99,7 @@ When no roster or staged type fits:
 3. Body: skeleton only — role identity, boundaries, output contract, ISSUE/NEEDS_CONTEXT block, and the factory pointer line.
 4. **Proliferation guard:** prefer briefing a general type; author a new type only when the specialization would repeat.
 5. `staged-*` is gitignored in claude-config. At reflect: promote (rename into `claude-config/agents/`, commit, create profile stub) or delete, per its performance-MD entries.
+6. Agent frontmatter also supports `memory:` (user/project/local scopes), per-agent `hooks:`, and `skills:` preload (docs-verified 2026-07-27). Adopt per-type only on profile evidence at reflect — no blanket adoption.
 
 ## Escalation Ladder (anti-thrash)
 
@@ -131,6 +132,19 @@ Worktree-parallelize ONLY task clusters the plan explicitly annotates `**Paralle
 ## Session Overflow Lane
 
 `claude --bg "<prompt>"` spawns a full background Claude Code session with its own depth-5 tree — for whole-wave parallelism (e.g. two repos at once). **Orchestrator-only, user-cleared per launch** — it runs unattended and bills independently. Results come back via files/repo, not conversation.
+
+- `claude --bg` dispatches prefer `--output-format json --json-schema <schema-file>` when the result feeds orchestration (typed results, no prose parsing), and `--bare` for reproducible gate runs (skips hooks/skills/MCP/CLAUDE.md discovery — no local-config bleed). Background-task grace at exit is capped (~10 min default); raise via `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` if a `--bg` wave legitimately outlives it. (Docs-verified 2026-07-27.)
+
+## Workflow Lane (added 2026-07-27)
+
+The Workflow tool runs deterministic JS orchestration (`agent()`, `pipeline()`, up to 16 concurrent, resumable, per-agent `schema` for validated structured outputs). It stays USER OPT-IN — never auto-run. The orchestrator's duty is to PROPOSE it when work is enumeration-shaped:
+
+- contract-surface consumer sweeps (grep every emitter/importer, verify each)
+- invariant-consumer verification (one verifier per consumer)
+- adversarial verify rounds over a findings list
+- migration/transform fan-outs over a file list
+
+Proposal format: one line — expected agent count, per-agent schema, rough cost — then wait for the user's go. On approval, prefer `pipeline()` over barriers, `schema` on every result-bearing agent.
 
 ## Efficiency Playbook
 
