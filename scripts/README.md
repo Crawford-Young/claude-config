@@ -28,16 +28,45 @@ then run it after every edit.
 
 It proves **presence**: every baseline paragraph appears in some destination file.
 
-It does **not** prove **reachability**. Nothing checks that anything ever *loads* the
-destination. A live rule relocated into a history file, an archive, or an un-junctioned
-skill directory passes the gate and is lost exactly as thoroughly as a rule deleted.
-**Verify by hand that each destination is on a load path for the situation its rules
-govern.** (2026-07-28: an active workflow rule was moved into `web/component-library/docs/WAVES.md`,
-which nothing loads. The gate passed it, correctly by its own definition. Caught by a
-cold plan reviewer, not by the gate and not by its author.)
+Until 2026-07-28 it proved **only** presence — nothing checked that anything ever *loads*
+the destination, so a live rule relocated into a history file, an archive, or an
+un-junctioned skill directory passed and was lost exactly as thoroughly as a rule deleted.
+(That is not hypothetical: an active workflow rule was moved into
+`web/component-library/docs/WAVES.md`, which nothing loads. The gate passed it, correctly
+by its own definition. Caught by a cold plan reviewer, not by the gate and not by its author.)
 
-Classifying destinations as loaded vs. archival — so an archival destination reads
-MISSING — is a queued upgrade, not yet implemented.
+**Implemented 2026-07-28.** Every destination carries a load class, and a paragraph whose
+only hits are archival reads `UNREACHABLE` — a blocker, listed separately from `MISSING`
+because the remedies differ: `MISSING` means text vanished, `UNREACHABLE` means it survived
+somewhere nothing reads.
+
+| class | members | gates? |
+| --- | --- | --- |
+| `always` | the `CLAUDE.md` chain | reachable |
+| `on-demand` | junctioned skills, repo-local `.claude/skills`, `docs/SKILLS.md` | reachable |
+| `archival` | `web/component-library/docs/WAVES.md` | **fails** |
+
+A skill directory under `claude-config/skills/` is `on-demand` only when its junction exists
+under `~/.claude/skills/` — `setup.ps1` creates one junction per skill and is not re-run when
+a skill is added, so an un-junctioned skill is an archival destination. Repo-local skills
+need no junction. A destination in no class **aborts**; there is no default in either
+direction, because defaulting to reachable is exactly the bug this class system fixes.
+
+The check is `existsSync` on the junction root, so a plain directory of the right name
+satisfies it as well as a real junction. That is the honest limit of a cheap check: it
+catches the skill that was never wired, not a junction that was replaced by a folder.
+
+Content that is *correctly* archival — history filed in a history file — would otherwise
+read as a blocker, so `INTENTIONAL_ARCHIVES` exempts it by matched string, with the same
+audit shape as `INTENTIONAL_EDITS`: each entry names its task, its reason, and what was
+verified by other means, and stale-entry detection removes it the moment it stops firing.
+This is the one place a live rule could hide behind an exemption; the reason field is what
+keeps that visible rather than silent.
+
+Hand-verification still covers what the classes cannot: whether a destination is on the load
+path **for the situation its rules govern**. A rule that only matters during a games wave,
+relocated into a web-only skill, is reachable by every mechanical test and useless in
+practice.
 
 ### Paragraph ≠ rule
 
