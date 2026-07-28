@@ -95,7 +95,14 @@ const INTENTIONAL_EDITS = [
  *  its task, its reason, and what was verified by other means, and stale-entry detection
  *  removes it the moment it stops firing. This is a place a live rule could hide — the
  *  reason field is what makes that visible rather than silent. */
-const INTENTIONAL_ARCHIVES = [];
+const INTENTIONAL_ARCHIVES = [
+  {
+    match: '| Wave | Components | Status |',
+    task: 'Task 6 (routing-verification wave); relocated by the context-restructure wave, Task 14',
+    reason:
+      'The component-library wave-status table is history, and WAVES.md is the history file — its only hits being archival is correct, not a loss. Verified three ways before this entry was written: it is a status table and not a rule; it is the ONLY unreachable paragraph on the tree (listing length 1); and the active convention rule that sits beside it in web/component-library/CLAUDE.md:27 ("The wave\'s own status row is written in the wave branch as the post-merge truth") is present there and absent from WAVES.md — the rule stayed live, only the history moved. CLAUDE.md also keeps the three current wave rows; the 8,870-char full table is what went to the archive. Issue #9 of the context-restructure wave records the relocation and the user approval for it.',
+  },
+];
 
 function parseArgs(argv) {
   const out = { baselines: [], dests: [], verbose: false, skillsRoot: null, junctionRoot: null };
