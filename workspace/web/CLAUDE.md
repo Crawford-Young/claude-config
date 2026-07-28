@@ -15,6 +15,8 @@ Applies to every repo under `~/code/web/`.
 > - [`../docs/web/TYPESCRIPT-STYLE.md`](../docs/web/TYPESCRIPT-STYLE.md) — full TypeScript style guide with real-world examples
 > - [`../docs/claude-api-reference.md`](../docs/claude-api-reference.md) — Claude API capabilities for app AI features (structured outputs, caching, batch, Tool Runner; load when building an LLM feature)
 > - [`../docs/brand/`](../docs/brand/) — brand identity + design system + motion (cross-domain; load `brand-identity.md` for tokens/colors, `design-system.md` for layout/states/composition, `motion.md` for transitions/loading/animation)
+> - `visual-asset-gates` skill — preview gate, asset pipelines, theme work (load before any visual or preview-gate task)
+> - `live-qa-traps` skill — the unit-green/live-broken bug family (load before writing tests or QA for interactive UI)
 
 ---
 
@@ -73,17 +75,7 @@ stories/
 
 ### 2. Visual / Token Work — Preview Gate
 
-For any color, token, or design system change: open Storybook first, verify dark + light mode visually, then write tests. Token changes are visual — they need eyes before engineering.
-
-**Playwright screenshots taken before hydration completes can fabricate React hydration-mismatch console errors** — `screenshot()` defaults `caret: 'hide'`, injecting `caret-color: transparent` into focusable inputs mid-SSR; React then reports a mismatch that no real browser produces. Console-cleanliness assertions in capture scripts must screenshot only after `networkidle`, or pass `caret: 'initial'`. (2026-07-21 motion-pass: flaky error perfectly correlated with screenshot-during-load across 5 runs; cost a full root-cause hunt.)
-
-A running-app Preview Gate starts with **apply pending DB migrations to the dev database** — a wave that added a migration but never ran it opens the gate on an error page and burns a debugging cycle on a non-bug. (2026-07-01 cybond: migration 0010 unapplied → "Failed to load calendar" at gate open.) On Windows, `drizzle-kit migrate` now REPORTS EXIT:0 WHILE APPLYING NOTHING (worse than the earlier silent-death mode; 2026-07-23 event-series A1: `to_regclass` null after a "successful" run) — after EVERY migrate, verify against the live DB (`to_regclass` / `information_schema` for the changed objects) before trusting it; the working fallback is a one-off script using drizzle-orm's `neon-http` migrator, which updates the journal identically.
-
-**A UI-facing wave's Preview Gate is TWO passes, both mandatory before claiming QA-ready:** (a) the scripted spec-path playthrough, and (b) a naive-user exploratory pass — exercise EVERY visible control and input on each changed surface (each dialog field, each button), not just the feature under test. Additionally, any wave whose diff removes or hides a user-facing affordance presents an explicit removed-affordance list at the user-QA prompt — teardown waves especially, and the list accumulates across waves until the user rules on each item. (2026-07-24 event-series: orchestrator claimed "full QA" off pass (a) alone; the user's first two pokes — a dialog date field never exercised, a visibility feature w3's teardown removed silently two waves earlier — both landed outside the script.)
-
-**Playwright MCP is single-instance across concurrent sessions** — a second session gets "Browser is already in use". Fallback that keeps real eyes + real artifacts: eyeball via claude-in-chrome, then capture PNGs with a small `chromium` script (`import { chromium } from '@playwright/test'`, `addInitScript` for theme localStorage) placed INSIDE the target repo (e.g. `node_modules/.cache/`) so module resolution works — save to the docs screenshots path, delete the script after. (2026-07-16 eb3: full preview gate ran this way, both themes verified.)
-
-**Authed-surface Preview Gate lane: claude-in-chrome on the user's real signed-in session is PRIMARY.** Scripted session-token minting is permission-classifier-blocked in every form (Bash heredoc, Write-then-node, Playwright `browser_run_code_unsafe` addCookies) — don't burn rounds trying variants. If a token is genuinely unavoidable (fresh-account tests), write the mint script and ask the user to run it via `!` prefix; the DB session-row delete after QA needs the user too. QA plans note the second-account gap explicitly when viewer/other-user rendering matters. (2026-07-25 visibility-w1: 3 blocked mint attempts → pivot; full 2-pass gate ran clean on the user's live Chrome.)
+**All rules for this section now live in the `visual-asset-gates` skill** — load it before any visual, asset, or preview-gate task.
 
 ### 3. Branch Strategy
 
@@ -123,17 +115,7 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 
 ## TDD Requirement
 
-**Vitest patterns:**
-- Theme-dependent e2e specs seed BOTH themes explicitly (localStorage via `addInitScript` + class guard), never relying on the app default for one of them — the suite becomes default-agnostic and survives a theme-default flip with zero churn. (2026-07-24 carsickyak QA-R1: light→dark default flip, e2e untouched.)
-- Mocking `auth()` returning null: `vi.mocked(auth).mockResolvedValueOnce(null as never)` — `null as never` required because `auth` has middleware + callback overloads; plain `null` fails type-check.
-- Component mocks (dialogs especially) must render the DATA props they receive (dates, times, ids as visible text/attrs), not just component identity — identity-only mocks have hidden real contract bugs (2026-06-10: full datetime passed where date-only was required; test passed, save silently wiped data).
-- Structurally unreachable guard statements (e.g. `if (!x) return` where render conditions guarantee `x`) block the 100%-statements gate — restructure as a statement-free JSX inline guard (`{x && handler(x)}`); the untaken branch then falls under the DoD branch exemption.
-- Tests for user-facing copy must assert the INTENDED wording, written independently — not whatever the component currently renders. A test written to match the rendered output locks in the bug: "P1 's turn" (stray space) was asserted by 3 unit tests + 1 e2e, all green, and only a manual playtest caught it (2026-06-30). When changing any user-facing string, grep ALL test directories for the old text including `e2e/` — `src/__tests__` alone misses Playwright specs.
-- Any widget that fetches-and-caches state on mount AND unmounts on close (popups, drawers, panels) needs an explicit close→reopen test asserting FRESH data renders after reopen. First-open tests alone pass a load-once guard that serves stale state on every reopen — 18 green tests + a clean review shipped exactly that; only live browser QA caught it (2026-07-15, chat popup `hasLoadedRef`).
-- **Drag/pointer-capture UIs are a live-QA-only bug class.** happy-dom/jsdom click simulation does not reproduce pointer-capture click retargeting (a captured drag's release click targets the common ancestor of the pointerdown and pointerup targets — the capture element, not the button — so the button's `onClick` never fires after a real drag). Any consume-flag or click-gating logic keyed to that click passes unit tests while broken in every real browser; stale one-shot flags need their reset on the NEXT interaction's start (pointerdown), not in the click they gate. Live browser QA is the only gate for this class (2026-07-22, fab `pendingConsumeRef` — 4th user-caught bug of the "unit green, live broken" family with `hasLoadedRef`).
-- **Programmatic nav under `experimental.viewTransition` is live-QA-only.** A raw `router.push` from a component event handler throws `InvalidStateError: Transition was aborted because of invalid state` and the navigation is silently dropped — `<Link>` navs work because Next wraps them in a React transition internally; programmatic pushes need `React.startTransition(() => router.push(...))`. Mocked-router unit tests structurally cannot see it. (2026-07-22 gs-p1 fix `78aa39e` — 5th "unit green, live broken" member.)
-- **Presence-selector state variants are live-QA-only.** `data-[disabled]:pointer-events-none` matches attribute PRESENCE, and cmdk renders `data-disabled="false"` on ENABLED items — every item computes `pointer-events:none`, pointer clicks fall through to an ancestor while keyboard selection works (no hit-testing). happy-dom does no hit-testing, so unit tests pass. Write state variants value-scoped (`data-[disabled=true]:`), diagnose live via `elementFromPoint` + computed-style probes. (2026-07-22 gs-p1: `@crawfordyoung/ui` CommandItem click-dead for every consumer — 6th family member; app carries a `pointer-events-auto!` override until the lib fix ships.)
-- **Live-verify a fix through the exact input modality the user reported.** Two independent bugs can stack behind one symptom: gs-p1 verified the View-Transition nav fix via Enter while the user reported CLICKS — declared fixed, clicks stayed dead (the pointer-events bug above), cost a full QA round (2026-07-22).
+**Vitest patterns and the unit-green/live-broken bug family** now live in the `live-qa-traps` skill — load it before writing tests or QA for any interactive UI.
 
 ---
 

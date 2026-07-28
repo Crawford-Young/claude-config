@@ -60,6 +60,11 @@ const INTENTIONAL_EDITS = [
     reason:
       'Task 7 Step 4: the Orchestration block is one paragraph of 4 rules; its auto-mode line was rewritten for the 2026-07-28 defaultMode:auto reversal (issue #3). The other 3 rules in the block are unchanged.',
   },
+  {
+    match: '**Vitest patterns:** - Theme-dependent e2e specs seed BOTH themes explicitly',
+    reason:
+      'Task 8: the "**Vitest patterns:**" label and its 10 bullets are one paragraph. All 10 bullets moved verbatim into the live-qa-traps skill (checked individually, 0 missing); only the label was dropped, since a label with no bullets under it is dead structure.',
+  },
 ];
 
 function parseArgs(argv) {
