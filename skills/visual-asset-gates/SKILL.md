@@ -1,6 +1,6 @@
 ---
 name: visual-asset-gates
-description: Use when doing brand, asset, theme, or preview-gate work — image generation, SVG and raster pipelines, palette and theme decisions, screenshot capture, and the running-app preview gate before user QA.
+description: Use when generating or iterating on images and brand assets, tracing or emitting SVGs, deciding palettes or themes, capturing screenshots, or running the preview gate before user QA — including while still scoping or planning such work, since art direction and composition are per-asset user gates rather than plan-locked decisions.
 ---
 
 # Visual & Asset Gates
