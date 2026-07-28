@@ -127,6 +127,7 @@ Inline (current session) → use the skill. Subagent dispatch → use the predef
 ## Maintenance
 
 - Custom skills live in `claude-config/skills/`, linked into `~/.claude/skills/` by `setup.ps1` / `setup.sh`.
+- **Creating `claude-config/skills/<name>/` is HALF the wiring.** The junction is per-skill, so a new directory is invisible to every session until `setup.ps1` is re-run — authoring is not installing. Re-run it in the same batch that creates the skill, then confirm the name appears in `~/.claude/skills/`. Junctions hot-load: a newly linked skill is live in the current session, no restart. (2026-07-28: `yak-voice` sat un-junctioned for 4 days, discovered only when a later wave audited the set — issue #2. Repo-local `.claude/skills/` inside a project needs no junction and no setup run.)
 - Plugin skill overrides live in `claude-config/overrides/` — see README for the junction-repair procedure after plugin updates.
 - `claude-md-management:reflect` Phase 5 is where skill gaps become skill edits — when reflect identifies a vague trigger or missing guidance, edit the skill in this repo, not the plugin cache.
 - New skill candidates surface in reflect: any subprocess repeated more than once with no skill coverage.
