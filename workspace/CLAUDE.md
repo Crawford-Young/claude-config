@@ -28,7 +28,7 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
 
 `~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`brand/`, root reference MDs) are gitignored — their history lives in `claude-config`. **Commit with explicit paths, never `git add -A`** — the repo is shared by concurrent sessions; `-A` sweeps another session's in-flight checklists/issues into your commit (2026-07-01: 2a spike commit swept w2.2L + cybond-w2.2 files). (`git add -A`/`--all` deny-ruled + hook-enforced since 2026-07-27.)
 
-**claude-config is config + reference docs only.** Never write project working artifacts (specs, checklists, issues, screenshots, continuation handoffs, assets) into junctioned dirs — they land in the claude-config repo. Brand/design-system project work uses `docs/brand-design/` as its project dir; junctioned `docs/brand/` holds only the living reference MDs + README.
+**claude-config is config + reference docs only.** Never write project working artifacts (specs, checklists, issues, screenshots, assets) into junctioned dirs — they land in the claude-config repo. Brand/design-system project work uses `docs/brand-design/` as its project dir; junctioned `docs/brand/` holds only the living reference MDs + README.
 
 **Structure per project:**
 ```
@@ -43,8 +43,6 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
   screenshots/
     <issue-or-checklist-slug>/   # scoped to one issue/checklist/wave
       <timestamp>-<description>.png
-  continuation/
-    <YYYY-MM-DD-HH-MM>-handoff.md   # written by `continuation` skill before /clear; delete after resumed
 ```
 
 `<domain>` is `web`, `games`, or `apps`, mirroring `~/code`. Meta/workspace projects (agent-factory, superpowers, claude-config, brand-design, workspace-restructure) live at `docs/` root with no domain folder.

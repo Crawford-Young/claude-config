@@ -70,6 +70,16 @@ const INTENTIONAL_EDITS = [
     reason:
       'Task 12a (user-requested, mid-wave): the §7 Context Hygiene bullet list is one paragraph. A NEW `/compact <focus>` rule was inserted after the first bullet — additive, not a rewrite. All 13 original lines of the block verified present verbatim in the current root (line-by-line normalized compare, 0 missing). Nothing was lost; the block text simply no longer matches the baseline byte-for-byte.',
   },
+  {
+    match: '**Structure per project:**',
+    reason:
+      'Post-wave (2026-07-28, user directive): the continuation skill no longer writes handoff files — it emits a paste-ready resume prompt instead — so the `continuation/` folder and its `<timestamp>-handoff.md` line documented a directory that no longer exists. Deleted as a falsehood, same class as issue #10 stale-derivation. This is a DELETION, not a relocation: the two lines describe a retired mechanism and survive nowhere, by design. Bounded and verified: the fenced block holds 13 content lines, exactly 2 are gone, the other 11 are present verbatim in the current root (normalized line-by-line compare).',
+  },
+  {
+    match: '**claude-config is config + reference docs only.** Never write project working artifacts',
+    reason:
+      'Post-wave (2026-07-28, user directive): same change as above. The artifact list named "continuation handoffs" among things never to write into junctioned dirs; that artifact type no longer exists. Verified byte-exact — the baseline paragraph with the literal string "continuation handoffs, " removed is character-for-character identical to the current one, so nothing else in the paragraph moved.',
+  },
 ];
 
 function parseArgs(argv) {
