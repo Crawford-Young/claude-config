@@ -26,11 +26,14 @@
 | Starting any feature — **always first** (includes feature evolution on existing components) | `superpowers:brainstorming` |
 | Brainstorm hits a genuine design fork — 2+ viable approaches with material trade-offs, or user says "debate this" | `persona-debate` |
 | After brainstorm, before coding | `superpowers:writing-plans` |
+| Writing or reviewing any plan or checklist — premise checks, contract-surface and invariant-consumer enumeration, verbatim-code checks, spec-time user questions | `plan-premises` (relocated from root `CLAUDE.md` §1, 2026-07-28) |
 | Executing any multi-task plan/checklist, wave start, dispatch or model decisions, spawn decisions at any depth | `agent-factory` (factory decides inline vs spawn at execution time; `inline-execute` remains the no-spawn path) |
 | Executing a plan handed to a **separate fresh session** (rare — checklist workflows above are the default) | `superpowers:executing-plans` |
 | 2–4 independent subtasks, no shared state | `superpowers:dispatching-parallel-agents` |
 | Any bug, test failure, or unexpected behavior — before proposing fixes | `superpowers:systematic-debugging` |
 | Implementing any feature or bugfix — before writing implementation code | `superpowers:test-driven-development` |
+| Writing tests or QA for interactive UI — the unit-green/live-broken bug family, Vitest mocking traps | `live-qa-traps` (relocated from `web/CLAUDE.md`, 2026-07-28) |
+| Godot diagnostic or tuning work — telemetry, debug probes, feel-gate tuning loop | `games-diagnostics` (relocated from `games/CLAUDE.md`, 2026-07-28) |
 | After every implementation pass | `simplify` |
 | Before claiming work is done | `superpowers:verification-before-completion` + `vercel:verification` |
 | Confirm a fix or feature works by running the app | `verify` |
@@ -41,6 +44,7 @@
 | Finishing a branch / ready to merge | `superpowers:finishing-a-development-branch` |
 | Isolated feature work | `superpowers:using-git-worktrees` |
 | Building any UI | `frontend-design:frontend-design` |
+| Any visual, asset, theme, or image-pipeline task — before the preview gate | `visual-asset-gates` (relocated from root `CLAUDE.md` §2 + `web/CLAUDE.md`, 2026-07-28) |
 | Phase ends (branch merged, wave done) — **mandatory** | `claude-md-management:reflect` |
 | After reflect, spec approval, or wave boundary — before `/clear` | `continuation` |
 | Session-end CLAUDE.md learnings | `claude-md-management:revise-claude-md` |
