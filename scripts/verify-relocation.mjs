@@ -19,9 +19,11 @@
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
+import { homedir } from 'node:os';
 
 const REPO = resolve(import.meta.dirname, '..', '..');
 const BASELINE_DIR = resolve(import.meta.dirname, 'baseline');
+const DEFAULT_JUNCTION_ROOT = join(homedir(), '.claude', 'skills');
 
 /** Paragraphs shorter than this are structural (headings, table rows, list scaffolding)
  *  and too generic to match uniquely. Matching them produces noise, not signal. */
@@ -44,9 +46,6 @@ const DESTINATIONS = [
   { path: 'web/component-library/CLAUDE.md', load: 'always' },
   { path: 'web/component-library/docs/WAVES.md', load: 'archival' },
 ];
-
-/** Directories whose *.md files are all destinations, if present. */
-const DEFAULT_DEST_DIRS = ['claude-config/skills', 'web/component-library/.claude/skills'];
 
 /** Paragraphs that legitimately live in more than one file. Each domain's Definition of
  *  Done deliberately repeats the verification line — that is intentional duplication, not
@@ -141,11 +140,35 @@ function walkMd(dir, acc = []) {
   return acc;
 }
 
-/** Replaced in the next commit by the real junction-aware implementation. Declared here,
- *  with the other helpers, because its final form carries a module-level `const` — placing
- *  it below the top-level execution would leave that const in the temporal dead zone. */
-function skillDestinations() {
-  return [];
+/** Skill directories are auto-walked, so their class cannot come from a static list.
+ *  A `claude-config/skills/<name>/` directory is reachable only if `<name>` exists under
+ *  the junction root — `setup.ps1` creates one junction per skill and is NOT re-run when
+ *  a skill is added, so authoring a skill directory is only half the wiring.
+ *  `web/component-library/.claude/skills/` needs no junction: repo-local skills load from
+ *  the repo itself.
+ *
+ *  Declared here, with the other helpers, because it reads module-level consts — placing it
+ *  below the top-level execution that calls it would leave those in the temporal dead zone
+ *  (the function declaration hoists; a const does not). */
+function skillDestinations(args) {
+  const out = [];
+
+  const junctionRoot = args.junctionRoot ? resolve(args.junctionRoot) : DEFAULT_JUNCTION_ROOT;
+  for (const file of walkMd(SKILLS_ROOT)) {
+    const name = relative(SKILLS_ROOT, file).split(/[\\/]/)[0];
+    const load = existsSync(join(junctionRoot, name)) ? 'on-demand' : 'archival';
+    out.push({ path: file, load });
+  }
+
+  // A scoped self-test supplies its own skills root; pulling the real repo-local skills in
+  // alongside its fixtures would make the fixture case unmeasurable.
+  if (!args.skillsRoot) {
+    for (const file of walkMd(join(REPO, 'web/component-library/.claude/skills'))) {
+      out.push({ path: file, load: 'on-demand' });
+    }
+  }
+
+  return out;
 }
 
 /** Collapse all whitespace so a reflowed line still matches its source. */
