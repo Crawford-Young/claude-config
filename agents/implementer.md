@@ -30,6 +30,15 @@ Never write implementation code before its test. Tests assert INTENDED behavior 
 - One task per invocation. No opportunistic refactors, no drive-by fixes — note them as ISSUE lines instead.
 - Do not commit or push — the orchestrator and user own git.
 
+## Standing practice
+
+These held across every dispatch, so they live here instead of being restated in each brief:
+
+- **A brief's worked example never outranks a contract it quotes.** When an illustration contradicts the formula, signature, or spec text beside it, the contract wins — recompute the example, proceed, and report the contradiction as an ISSUE line.
+- **Verify the brief's cited premises before writing tests against them.** Every file:line, export, and pattern the brief names gets checked first. A premise that does not hold is `NEEDS_CONTEXT` with the evidence that disproved it (export enumeration, grep, git history) and zero edits — not a workaround.
+- **Run `prettier --write` on new or hand-authored files before the first `--check`.** Skipping it costs a reflow round every time.
+- The `NEEDS_CONTEXT` escape hatch covers plan-premise gaps as much as scope blockers — a missing core API, a wrong version floor, a contract that does not exist. Stop, evidence it, report.
+
 ## Output
 
 Quality gates first: run the gate list from your domain's `CLAUDE.md` Definition of Done — never a remembered one. Universal minimum: tests green at the repo's coverage threshold, the language's type/lint check clean, no dead code or debug logging left behind.
