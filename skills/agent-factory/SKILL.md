@@ -16,6 +16,11 @@ Two audiences:
 1. **The orchestrator** (main session) — follows everything here.
 2. **Any spawned agent about to spawn its own children** — reads this file first (your definition's pointer line sent you here), then follows §Spawn Model through §Performance MDs.
 
+## Reference files
+
+- `checklist-protocol.md` — checklist template, orchestration log, wave scorecard, reflect integration, checklist editing, phase complete. **Read when authoring or updating a checklist, or at wave close.**
+- `session-protocol.md` — session start, compact discipline, continuation handoff, overflow lane. **Read at session start or when approaching a compact boundary.**
+
 ## Spawn Model
 
 **Default is inline.** Spawning is the exception that must argue for itself. Justified triggers:
@@ -129,12 +134,6 @@ If a subagent's transcript is lost (session death, post-compaction resume failur
 
 Worktree-parallelize ONLY task clusters the plan explicitly annotates `**Parallel-safe with:**` (no shared files, no Consumes/Produces edge). Unannotated tasks run serial — most plans are dependency chains where parallelism buys nothing, and Windows worktree overhead (removal fights, per-worktree install + `.env` copies, gate CPU contention) makes speculative parallelism a net loss. Cross-repo parallel dispatches (disjoint repos) need no worktrees.
 
-## Session Overflow Lane
-
-`claude --bg "<prompt>"` spawns a full background Claude Code session with its own depth-5 tree — for whole-wave parallelism (e.g. two repos at once). **Orchestrator-only, user-cleared per launch** — it runs unattended and bills independently. Results come back via files/repo, not conversation.
-
-- `claude --bg` dispatches prefer `--output-format json --json-schema <schema-file>` when the result feeds orchestration (typed results, no prose parsing), and `--bare` for reproducible gate runs (skips hooks/skills/MCP/CLAUDE.md discovery — no local-config bleed). Background-task grace at exit is capped (~10 min default); raise via `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` if a `--bg` wave legitimately outlives it. (Docs-verified 2026-07-27.)
-
 ## Workflow Lane (added 2026-07-27)
 
 The Workflow tool runs deterministic JS orchestration (`agent()`, `pipeline()`, up to 16 concurrent, resumable, per-agent `schema` for validated structured outputs). It stays USER OPT-IN — never auto-run. The orchestrator's duty is to PROPOSE it when work is enumeration-shaped:
@@ -157,108 +156,6 @@ Mandatory for every managing agent:
 - Background tasks (`run_in_background`) for long-running commands — **orchestrator only.** Synchronous subagents cannot await background completions (their "wait" ends the turn → idle until resumed); brief any gate-running subagent to run gates FOREGROUND, unpiped, `; echo EXIT:$?` appended (w3L: two wasted resume rounds)
 - More than 10 files read → offload remaining research to a focused subagent
 
-## Checklist Template
-
-```markdown
-<!-- ORCHESTRATOR ONLY — update checkboxes, Orchestration Log, and Reflect Log. Subagents: read-only. -->
-# <project> — <Phase/Wave Name>
-**Branch:** feat/<name>
-**Factory:** <starting shape — e.g. "inline until spawn triggers fire"; spawn tree lives in the Orchestration Log>
-**Spec:** docs/<project>/specs/<spec-file>.md
-
----
-
-## Tasks
-
-- [ ] **Task 0 — Issue log created** at `docs/<project>/issues/<date>-<wave>-issues.md` (orchestrator, same breath as checklist approval — never optional; missed 3× when left to memory, last 2026-07-15)
-
-- [ ] **Task 1** — ...
-
-<!-- COMPACT POINT -->
-
----
-
-- [ ] **Reflect** — Run `claude-md-management:reflect` · orchestrator
-
----
-
-## Orchestration Log
-<!-- one line per spawn/escalation: parent → child-type/model · task · outcome · perf-MD path for managing children -->
-
-## Wave Scorecard
-<!-- reflect fills: spawn-tree review (justification quality · depth · count) · routing accuracy vs profiles · perf-MD completeness · redo warm/cold · context % at wave end (/context) · /usage summary -->
-
-## Reflect Log
-```
-
-Any checklist with 8+ tasks MUST include `<!-- COMPACT POINT -->` markers every 3–4 tasks.
-
-Markers go at genuine sync points. When tasks will execute as one parallel batch (fan-out installs/gates across repos), place the marker AFTER the batch completes, never between batched tasks — a marker inside a parallel batch gets blown past structurally. (2026-07-16 eb2 w2.)
-
-## Orchestration Log Protocol
-
-Append one line per spawn, escalation, and structural change — at the moment it happens, not retroactively:
-
-```
-- spawn: orchestrator → implementer/sonnet · task3 · PASS
-- spawn: orchestrator → manager/opus · workstream-B · PASS · perf-MD: docs/<project>/agent-logs/2026-07-15-wB-manager.md
-- escalate: task4 impl · sonnet FAIL×2 → opus · PASS · signal: integration-heavy
-```
-
-One line each. Never paste raw subagent output into the log.
-
-## Wave Scorecard Protocol (at reflect)
-
-Reflect Phase 1 reads the checklist and finds the Orchestration Log + empty Scorecard. During reflect Phase 3, before the `/usage` prompt, also ask the user to run `/context` and paste both. Then fill:
-
-- **Spawn-tree review** — every spawn's justification: did it earn its cold start? Depth and count vs what the work needed
-- **Routing accuracy** — dispatches that matched profile guidance vs misroutes; escalation count + signals fired
-- **Perf-MD completeness** — every managing agent wrote one, write-as-you-go honored, grades outcome-anchored
-- **Redo economics** — `redo-warm` vs `redo-cold` counts and outcomes
-- **Context efficiency** — `/context` % at wave end · `/usage` totals
-
-Scorecard evidence drives profile updates at reflect. The scorecard travels with the checklist to `done/` as the historical record.
-
-## Reflect Integration
-
-**Timing (2026-07-16, w3L):** reflect runs at wave close BEFORE requesting push/PR — after the final task + user QA, while the wave branch is still open. Its repo-level doc proposals (README/CLAUDE.md rules, wave-table status flip written as the post-merge truth) commit to the wave branch and ship in the wave PR — never a follow-up micro-docs PR. Only post-publish corrections (e.g. a version number stolen by a concurrent wave) go in a later branch. Workspace/claude-config edits are unaffected — different repo, any time.
-
-At every wave-end reflect:
-
-1. Sweep `docs/<project>/agent-logs/` (entries since last reflect)
-2. Update `claude-config/agents/profiles/<type>.md` — new claims carry date + wave evidence; n=1 marked provisional; firm claims need n≥2; discount grades not grounded in verifiable outcomes
-3. Promote or delete staged types (`~/.claude/agents/staged-*`) per their performance entries
-4. Move swept logs to `docs/<project>/agent-logs/done/`
-
-## Session Start Protocol
-
-1. Scan `docs/<project>/checklists/active/` — each file is an in-flight phase
-2. Read the checklist header: branch, factory line, spec path
-3. **Worktree check (mandatory before first spawn that edits code, 2026-06-12):** if the target repo has another branch in flight, work in a worktree (`superpowers:using-git-worktrees`)
-4. Find the first unchecked task — resume there
-5. Do not re-read specs or full plan prose unless a specific task requires design decisions
-
-## Checklist Editing Protocol
-
-**Only the orchestrator writes to checklist files. Spawned agents are read-only.**
-
-- Tick `- [x]` immediately after a task completes; ticks + log lines land in the same action batch as the commit they record
-- Add `> ⚠️ NOTE FOR TASK N:` inline below a completed task only when the outcome changes how a future task should be approached
-- Append to `## Reflect Log` when lessons surface — format: `- YYYY-MM-DD: <lesson>`
-- On phase complete: move checklist to `done/`, then run `claude-md-management:reflect`
-
-## Compact Discipline
-
-At every `<!-- COMPACT POINT -->` marker:
-
-1. Read subagent result
-2. Extract lessons → append ≤3 bullets to Reflect Log if anything surfaced
-3. Discard full subagent output — never accumulate raw responses in context
-4. Stop and prompt the user to run `/compact` — do not continue past the marker until compaction or explicit go-ahead
-5. After compaction: re-orient by reading the checklist only
-
-The checklist is the sole source of truth across compaction boundaries. Marker stop is absolute — blanket task approval never waives it.
-
 ## Judgment Rules
 
 - **Verify reviewer Criticals before dispatching fixes.** Read the cited source lines yourself first — reviewers false-alarm; a wrong fix cycle costs a full dispatch + re-review. (2026-06-10)
@@ -273,17 +170,6 @@ The checklist is the sole source of truth across compaction boundaries. Marker s
 - **Zero-output dispatch death = infra failure, not FAIL.** A dispatch returning 0 tokens with a session-limit message is not a model failure: re-dispatch identical once the limit resets — do not count it toward escalation. Log as `dispatch died (session limit) → re-dispatch clean`. (2026-07-02)
 - **Stalled-agent recovery.** A watchdog-killed dispatch whose work is already on disk is also infra, not FAIL: verify the claimed artifacts hands-on, then resume the SAME agent with a report-only message — never redo the work or re-dispatch cold. (2026-07-08)
 - **Value-judgment changes ride before review.** When a landed change encodes a product-feel judgment the user may reject on sight (tuning constant, parity break, presentation choice), get the user verdict BEFORE dispatching its review — reviewing a value the user rejects wastes the round. Log the review debt explicitly in the Orchestration Log with its close condition ("bundle into next stack review after user verdict") and close it at the stated point; the deferred review still runs at full rigor (momentum-lab close review caught a real Major). (2026-07-24 momentum-lab, n=1 provisional.)
-
-## Phase Complete Protocol
-
-1. All checklist tasks ticked `[x]`
-2. Move checklist `active/` → `done/`
-3. **Run `claude-md-management:reflect` — mandatory.** Fill the Wave Scorecard; run the profile rollup (§Reflect Integration)
-4. Reflect Phase 6 prompts `/usage`, then `/clear` if the project is fully done
-
-## Continuation Handoff
-
-When the `continuation` skill writes a handoff, the Current State block includes the `**Factory:**` line (spawn tree summary + open perf-MD paths) and a pointer to the Orchestration Log so the next session re-enters without re-deriving.
 
 ## Skills Reference
 
