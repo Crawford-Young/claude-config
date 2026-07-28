@@ -27,9 +27,32 @@ At every `<!-- COMPACT POINT -->` marker:
 2. Extract lessons → append ≤3 bullets to Reflect Log if anything surfaced
 3. Discard full subagent output — never accumulate raw responses in context
 4. Stop and prompt the user to run `/compact` — do not continue past the marker until compaction or explicit go-ahead
-5. After compaction: re-orient by reading the checklist only
+5. **Hand them a focus string with the prompt.** `/compact` takes free-form instructions that steer what the summary keeps. Write them for the NEXT task, not the finished one
+6. After compaction: re-orient by reading the checklist only
 
 The checklist is the sole source of truth across compaction boundaries. Marker stop is absolute — blanket task approval never waives it.
+
+### Compact focus strings
+
+Left unfocused, the summarizer weights the turns it just read — a long finished task crowds out the two lines the next one needs, and the resume session pays a re-derivation pass. The focus string is the cheapest fix: one line, pasted with the command.
+
+Give the user the literal string to paste, in a copyable block. It carries four things:
+
+- the **next task** by number and name — what the summary is FOR
+- the **files and paths** that task touches, so their state survives
+- **open blockers** and their close conditions
+- **deviations and decisions** already taken that the next task must not re-litigate
+
+Drop the finished task's mechanics — the checklist and git history hold those.
+
+```
+/compact Focus on Task 13 (claude-config gate): the harness gate command + its
+EXIT line, byte accounting for the 4 rightsized files, and the open issue-#5
+blocker (main unpushed, push-don't-rebase). Keep the Task 11 frontmatter
+deviation. Drop the Task 10 slicing mechanics — the script is on disk.
+```
+
+Same duty at a `continuation` handoff and at any ad-hoc compact the user calls mid-task.
 
 ## Continuation Handoff
 
