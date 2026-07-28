@@ -45,6 +45,23 @@ const DEFAULT_DEST_DIRS = ['claude-config/skills', 'web/component-library/.claud
  *  an untrimmed source. Substring match against the normalized paragraph. */
 const INTENTIONAL_DUPLICATES = ['Run `superpowers:verification-before-completion` before declaring anything done.'];
 
+/** Baseline paragraphs the wave deliberately REWROTE rather than relocated. A rewritten
+ *  paragraph cannot match its baseline, so it reads as MISSING — indistinguishable from a
+ *  loss without this record. Each entry needs the task that changed it and why, so the
+ *  exemption is auditable rather than a silencer. Substring match against the normalized
+ *  baseline paragraph; keep the match text long enough to be unique.
+ *
+ *  Note on granularity: these files run rules as consecutive lines with no blank line
+ *  between, so one "paragraph" can hold several unrelated rules. Editing any one of them
+ *  invalidates the whole block's match. */
+const INTENTIONAL_EDITS = [
+  {
+    match: 'Agent factory: spawn protocol, dispatch template, performance-MD duty, escalation, type authoring',
+    reason:
+      'Task 7 Step 4: the Orchestration block is one paragraph of 4 rules; its auto-mode line was rewritten for the 2026-07-28 defaultMode:auto reversal (issue #3). The other 3 rules in the block are unchanged.',
+  },
+];
+
 function parseArgs(argv) {
   const out = { baselines: [], dests: [], verbose: false };
   for (let i = 0; i < argv.length; i++) {
@@ -113,13 +130,16 @@ const haystack = destFiles.map((f) => ({ file: f, text: normalize(readFileSync(f
 let checked = 0;
 const missing = [];
 const duplicated = [];
+const rewritten = [];
 
 for (const baseFile of baselineFiles) {
   for (const para of paragraphs(readFileSync(baseFile, 'utf8'))) {
     checked++;
     const hits = haystack.filter((h) => h.text.includes(para));
     const intentional = INTENTIONAL_DUPLICATES.some((d) => para.includes(d));
-    if (hits.length === 0) missing.push({ baseFile, para });
+    const edit = INTENTIONAL_EDITS.find((e) => para.includes(e.match));
+    if (hits.length === 0 && edit) rewritten.push(edit);
+    else if (hits.length === 0) missing.push({ baseFile, para });
     else if (hits.length > 1 && !intentional) duplicated.push({ para, files: hits.map((h) => h.file) });
     else if (args.verbose) {
       console.log(`  ok  ${relative(REPO, hits[0].file)}  ${para.slice(0, 70)}…`);
@@ -130,6 +150,23 @@ for (const baseFile of baselineFiles) {
 console.log(`\nbaselines:    ${baselineFiles.length} file(s)`);
 console.log(`destinations: ${destFiles.length} file(s)`);
 console.log(`paragraphs:   ${checked} checked (>= ${MIN_PARAGRAPH_CHARS} chars)`);
+
+if (rewritten.length) {
+  console.log(`\n--- DELIBERATELY REWRITTEN (${rewritten.length}) — exempt, not lost ---`);
+  for (const r of rewritten) {
+    console.log(`  ${r.match.slice(0, 78)}…`);
+    console.log(`      ${r.reason}`);
+  }
+}
+
+// An exemption that never fires is a silencer for a condition that no longer exists —
+// it would mask a real loss in that paragraph later. Surface it.
+const unusedEdits = INTENTIONAL_EDITS.filter((e) => !rewritten.includes(e));
+if (unusedEdits.length && !args.baselines.length) {
+  console.log(`\n--- STALE EXEMPTIONS (${unusedEdits.length}) ---`);
+  console.log('Listed in INTENTIONAL_EDITS but the paragraph matched normally. Remove them.\n');
+  for (const e of unusedEdits) console.log(`  ${e.match.slice(0, 78)}…`);
+}
 
 if (duplicated.length) {
   console.log(`\n--- FOUND IN MULTIPLE FILES (${duplicated.length}) ---`);
