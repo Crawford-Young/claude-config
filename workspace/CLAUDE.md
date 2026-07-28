@@ -128,6 +128,7 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 ### 7. Context Hygiene
 
 - Orchestrator stops at `<!-- COMPACT POINT -->` markers and prompts the user to run `/compact` (the agent cannot invoke it) — not ad-hoc
+- **Every marker prompt hands the user a `/compact <focus>` string to paste.** `/compact` accepts free-form instructions that steer what the summary keeps; write them for the NEXT task, not the finished one — task name, files it touches, open blockers, deviations the summary must not drop. Unfocused, the summarizer over-weights the turns it just read, so a long finished task crowds out the two lines the next one needs. Full form → `agent-factory` `session-protocol.md`.
 - **Marker stop is absolute.** Blanket task approval ("i trust you, go for it") never waives it — only an explicit user instruction to skip compaction itself does. (2026-07-01: two markers passed under a blanket go-ahead; user corrected.)
 - **If no checklist exists, compact at every major task boundary** — a 5h+ uncompacted session is unacceptable regardless of marker presence
 - **Any checklist with 8+ tasks MUST include `<!-- COMPACT POINT -->` markers every 3–4 tasks** — writing the checklist without them is incomplete. **A finalization task (full gates + preview + Lighthouse + docs + reflect + release tails) gets its own marker immediately BEFORE it** — those tails run long and unmarked; motion-pass ran T7+T8 on one context stretch and `/usage` showed 68% of spend at >150k context (2026-07-21).

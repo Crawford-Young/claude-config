@@ -65,6 +65,11 @@ const INTENTIONAL_EDITS = [
     reason:
       'Task 8: the "**Vitest patterns:**" label and its 10 bullets are one paragraph. All 10 bullets moved verbatim into the live-qa-traps skill (checked individually, 0 missing); only the label was dropped, since a label with no bullets under it is dead structure.',
   },
+  {
+    match: 'Orchestrator stops at `<!-- COMPACT POINT -->` markers and prompts the user to run `/compact`',
+    reason:
+      'Task 12a (user-requested, mid-wave): the §7 Context Hygiene bullet list is one paragraph. A NEW `/compact <focus>` rule was inserted after the first bullet — additive, not a rewrite. All 13 original lines of the block verified present verbatim in the current root (line-by-line normalized compare, 0 missing). Nothing was lost; the block text simply no longer matches the baseline byte-for-byte.',
+  },
 ];
 
 function parseArgs(argv) {
