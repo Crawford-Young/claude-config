@@ -11,6 +11,38 @@
 - **User instructions say WHAT, not HOW.** "Add X" does not mean skip the workflow.
 - **Announce on invoke:** "Using [skill] to [purpose]."
 
+## Writing a Skill `description`
+
+**A domain skill that a process skill can precede MUST claim the scoping/planning phase in
+its own `description`, or it will not load in the sessions that need it most.** Scope alone
+is not enough. `visual-asset-gates` already said "image generation" and still failed to fire
+on an image-generation request — in three fresh sessions, across two cwds, with the Tier-1
+pointer removed as a variable and every relevant asset already found. It did not fire late
+or partially; it did not fire at all, because `superpowers:brainstorming` legitimately owns
+the front of those turns and a description implying execution gives a brainstorm no reason to
+load it. The rewrite that fixed it added one clause: *"including while still scoping or
+planning such work."* (2026-07-28 routing-verification, P1, resolved at ladder rung 1.)
+
+The cost is inverted from what it looks like: a skill whose body is mostly *planning* rules —
+batch this, anchor direction on shipped assets, defer that to a user gate — is unreachable
+during exactly the phase those rules govern. **The rules most expensive to miss are the ones
+structurally guaranteed to be missing.**
+
+Shape that works, from the three descriptions that passed unmodified: open on **what the user
+is in the middle of doing** (`live-qa-traps` "writing tests or running QA", `games-diagnostics`
+"feel-tuning rounds", `cl-gates` "authoring stories"), not on a noun phrase with the verbs
+buried in a dash-clause.
+
+**Never tune a description to the prompt you are testing it with.** Adding the probe's own
+keywords makes a subsequent pass unfalsifiable — the routing equivalent of putting the pass
+criterion in the prompt.
+
+**Routing is audited by tool trace, not by the announce line.** The "Using [skill]" rule above
+holds, but skills were observed firing without it in 3 of 4 probes — a `Skill` tool call with
+no announcement. Anything that verifies routing reads the call list; an absent announce line
+is not evidence a skill did not load, and a present one is not evidence it did. (2026-07-28,
+routing-verification issue #6.)
+
 ## Cost Notes
 
 - `update-config` and `claude-md-management:claude-md-improver` load very large payloads — weigh the cost before invoking them for trivial edits.

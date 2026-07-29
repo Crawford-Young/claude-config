@@ -34,16 +34,26 @@ test('an always-loaded destination passes too', () => {
   assert.equal(status, 0);
 });
 
+// Exit contract: 0 = pass, 1 = the gate found a real problem, 2 = the gate could not run.
+// Asserted as exact codes, not `notEqual(0)` — a config error reporting the same code as a
+// genuine loss is a small version of what this gate exists to catch.
 test('a destination with no class aborts rather than defaulting', () => {
   const { status, out } = runGate([...BASELINE, '--dest', resolve(FIX, 'live.md')]);
-  assert.notEqual(status, 0);
+  assert.equal(status, 2);
   assert.match(out, /classify/i);
 });
 
 test('a destination with an unknown class aborts', () => {
   const { status, out } = runGate([...BASELINE, '--dest', `${resolve(FIX, 'live.md')}:sometimes`]);
-  assert.notEqual(status, 0);
+  assert.equal(status, 2);
   assert.match(out, /classify/i);
+});
+
+test('a config abort and a real failure are distinguishable by exit code', () => {
+  const cannotRun = runGate([...BASELINE, '--dest', resolve(FIX, 'live.md')]);
+  const realFailure = runGate([...BASELINE, '--dest', `${resolve(FIX, 'archive.md')}:archival`]);
+  assert.equal(cannotRun.status, 2);
+  assert.equal(realFailure.status, 1);
 });
 
 test('an un-junctioned skill directory is archival, so its content reads UNREACHABLE', () => {
