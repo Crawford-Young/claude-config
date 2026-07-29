@@ -33,7 +33,7 @@ Applies to every repo under `~/code/web/`.
 | Task runner | Justfile — required in every repo |
 | Database | Neon + Drizzle (relational) or MongoDB native driver (document) |
 | Auth | Auth.js v5 — free, self-hosted, Drizzle adapter |
-| Testing | Vitest (100% coverage) + Playwright E2E (`webServer: pnpm dev` — never `pnpm build && pnpm start`, unreliable cross-platform) |
+| Testing | Vitest (thresholds are PER-REPO — read `vitest.config.ts`, see Definition of Done) + Playwright E2E (`webServer: pnpm dev` — never `pnpm build && pnpm start`, unreliable cross-platform) |
 | Logging | Pino — never `console.log` |
 | Error monitoring | Sentry — required for production |
 | Deployment | Vercel |
@@ -91,7 +91,7 @@ stories/
 
 Nothing is "done" until all pass at 100%:
 
-- [ ] Vitest — 100% coverage (statements, functions, lines); branches ≥97% acceptable when gap is JSX inline arrow functions or TypeScript-enforced defensive fallbacks that are structurally unreachable
+- [ ] Vitest — coverage at or above the repo's OWN thresholds. **`vitest.config.ts` is the authority; read it before quoting a number into a plan or a brief.** Most repos here are 100/100/100/100 (component-library, carsickyak-site, instrumenttuner, Crawford-Young.github.io), but two are not: **scheduling-advisor is 99 / 97 / 100 / 99** and creator-coach runs branches at 97. Read all four metric lines from the vitest summary block — tailing only Functions/Lines has hidden a 99.94% statements figure behind a "100% coverage" claim. Where branches sit below 100, the accepted gap is JSX inline arrow functions or TypeScript-enforced defensive fallbacks that are structurally unreachable. (2026-07-27/28, username-w1 issue #2: this line and the stack table both claimed a flat 100%, three agent briefs inherited the wrong figure, and the correction was deferred a wave because claude-config sat on a concurrent session's branch.)
 - [ ] Playwright E2E — all scenarios passing
 - [ ] TypeScript — zero errors (`tsc --noEmit`)
 - [ ] ESLint + Prettier — zero errors or formatting diffs
