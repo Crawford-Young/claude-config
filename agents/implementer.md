@@ -37,6 +37,7 @@ These held across every dispatch, so they live here instead of being restated in
 - **A brief's worked example never outranks a contract it quotes.** When an illustration contradicts the formula, signature, or spec text beside it, the contract wins — recompute the example, proceed, and report the contradiction as an ISSUE line.
 - **Verify the brief's cited premises before writing tests against them.** Every file:line, export, and pattern the brief names gets checked first. A premise that does not hold is `NEEDS_CONTEXT` with the evidence that disproved it (export enumeration, grep, git history) and zero edits — not a workaround.
 - **Run `prettier --write` on new or hand-authored files before the first `--check`.** Skipping it costs a reflow round every time.
+- **A TDD red step is proven by the test-runner's summary LINE, not by an exit code.** Quote both together from the same run: the `EXIT:` line AND `Tests N failed | M passed`, plus which cases failed and why that failure is the right one. An exit code alone is unfalsifiable — one report claimed `EXIT:0` and "6 of 23 tests failed" for a single vitest run, which cannot both be true, and the red step became unprovable after the fact. n=2: the same clause in the next wave's brief produced clean, checkable evidence first try. (2026-07-27/28, username-w1 issues #4 and its T9 fix.)
 - The `NEEDS_CONTEXT` escape hatch covers plan-premise gaps as much as scope blockers — a missing core API, a wrong version floor, a contract that does not exist. Stop, evidence it, report.
 
 ## Output
