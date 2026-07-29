@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # An unmatched glob makes `node --test` print `tests 0` and exit 0 — a silent pass that
+      # looks identical to a green suite. The exit code alone is therefore not evidence the
+      # tests ran, so the `tests N` line is asserted explicitly.
+      - name: Test suite
+        run: |
+          node --test "scripts/test/*.test.mjs" > test-output.txt 2>&1 || {
+            cat test-output.txt
+            exit 1
+          }
+          cat test-output.txt
+          grep -qE '^ℹ tests [1-9]' test-output.txt || {
+            echo "::error::No tests ran — the glob matched nothing."
+            exit 1
+          }
+
+      # Catches the class verify-relocation.mjs is structurally blind to: a SKILL.md whose
+      # frontmatter fails to parse is listed with no description at all and becomes unroutable,
+      # while the relocation gate stays green because it only ever reads body paragraphs.
+      - name: Skill frontmatter publishes
+        run: node scripts/verify-frontmatter.mjs
+
+# Deliberately NOT run here: scripts/verify-relocation.mjs.
+#
+# That gate resolves its destinations as `resolve(scripts/, '..', '..')` — it assumes
+# claude-config is checked out INSIDE ~/code and walks out to its siblings (web/, docs/,
+# games/), and it classifies a skill as loadable by looking for its junction under
+# ~/.claude/skills/. A CI runner has no siblings and no junctions, so the gate exits 2
+# ("could not run") on every invocation. Verified 2026-07-28 in a clean worktree.
+#
+# It audits a multi-repo workspace tree, so it can only run where that tree exists. Enforcement
+# lives in a local hook instead. If you are here to "fix" CI by adding it back, it will be red
+# forever, not green.

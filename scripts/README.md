@@ -7,6 +7,7 @@ know that no script can enforce on itself.
 | Script | Purpose |
 | --- | --- |
 | `verify-relocation.mjs` | Zero-loss gate for text relocation waves (see below) |
+| `verify-frontmatter.mjs` | Every `SKILL.md` publishes a usable `name` + `description` (see below) |
 | `export-harness.ps1` / `import-harness.ps1` | Move harness config between machines |
 | `open-admin-shells.ps1` | Spawn elevated shells for junction work |
 | `baseline/` | Frozen pre-change copies of the files a relocation wave rewrites |
@@ -176,6 +177,53 @@ was neither, overstating a −21.4% cut as −25.9%.
 wc -c < path/to/before.md; wc -c < path/to/after.md          # on-disk
 git show HEAD:path/to/file.md | wc -c                        # blob
 ```
+
+---
+
+## Skill frontmatter (`verify-frontmatter.mjs`)
+
+A skill whose frontmatter fails to parse is listed by its H1 with **no description at all** —
+the most unreachable a skill can be, and strictly worse than a badly-worded description.
+`verify-relocation.mjs` cannot see this class: it compares body paragraphs and never reads
+frontmatter, so a skill can be entirely unroutable while that gate is green.
+
+The load-bearing rule is the colon. In an unquoted YAML scalar, a colon followed by whitespace
+or ending the line terminates the value, so
+
+```
+description: Use when scoping X: which bug classes are invisible decides the plan.
+```
+
+is not a long description — it is a parse error. Quoting the value makes it legal, so quoted
+and block scalars (`'`, `"`, `|`, `>`) are exempt rather than banned. Prefer an em-dash.
+
+This one is caught by CI, unlike the relocation gate — it needs nothing but the repo itself.
+Exit contract matches the relocation gate exactly: `0` clean, `1` a real problem, `2` could not
+run. (2026-07-28 description-audit issue #3: a `: ` written into a description silently
+unpublished a skill mid-wave, in a wave whose entire subject was unreachable skills. It was
+caught by a chance listing re-render, which is not a control.)
+
+---
+
+## What CI covers, and what it structurally cannot
+
+`.github/workflows/ci.yml` runs the `node --test` suite and `verify-frontmatter.mjs`. It
+asserts the `ℹ tests N` line rather than trusting the exit code, because an unmatched glob
+makes `node --test` print `tests 0` and exit **0** — a silent no-op indistinguishable from a
+green suite.
+
+**`verify-relocation.mjs` is deliberately absent from CI and cannot be added.** It resolves
+destinations as `resolve(scripts/, '..', '..')` — it assumes claude-config is checked out
+*inside* `~/code` and walks out to `web/`, `docs/`, and `games/`, and it classifies a skill as
+loadable by looking for its junction under `~/.claude/skills/`. A runner has neither, so the
+gate exits `2` ("could not run") on every invocation; verified in a clean worktree on
+2026-07-28. It audits a multi-repo workspace tree, so it only runs where that tree exists.
+
+Enforcement lives in `hooks/pretooluse-guard.ps1` instead, which warns on a red gate when a
+claude-config commit is attempted. It **warns rather than blocks** on purpose: the gate reads
+the whole `~/code` tree, so it goes red on other sessions' in-flight edits, and blocking would
+wedge a commit on a failure its author did not cause. Flip it to `exit 2` once the gate is
+reliably green.
 
 ---
 

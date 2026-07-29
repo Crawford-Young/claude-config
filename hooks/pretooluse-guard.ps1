@@ -23,6 +23,23 @@ try {
     exit 2
   }
 
+  # Relocation gate on claude-config commits. WARN, never block: the gate audits the whole
+  # ~/code tree, so it can go red on another session's in-flight edits, and blocking would
+  # wedge a commit on a failure its author did not cause. CI cannot cover this - the gate
+  # needs sibling repos and ~/.claude junctions that no runner has (see .github/workflows/ci.yml).
+  # Flip to exit 2 once the gate is reliably green; until then a warning at commit time is the
+  # only moment anyone is positioned to act on it.
+  if ($cmd -match 'git\b.*\bcommit\b' -and ($cmd -match 'claude-config' -or $payload.cwd -match 'claude-config')) {
+    $gate = 'C:/Users/young/code/claude-config/scripts/verify-relocation.mjs'
+    if (Test-Path $gate) {
+      $out = & node $gate 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        $summary = ($out | Select-String -Pattern '^(FAIL|ABORT|UNREACHABLE)' | Select-Object -First 3) -join '; '
+        [Console]::Error.WriteLine("WARNING (not blocking): verify-relocation.mjs exits $LASTEXITCODE. $summary  Run it before assuming this commit is clean - a relocated rule may be lost.")
+      }
+    }
+  }
+
   exit 0
 } catch {
   try { Add-Content -Path (Join-Path $env:USERPROFILE '.claude\hook-errors.log') -Value "$(Get-Date -Format o) pretooluse-guard: $_" } catch {}

@@ -4,7 +4,7 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 
 | Script | Event | Does |
 |---|---|---|
-| `pretooluse-guard.ps1` | PreToolUse (`Bash\|PowerShell`) | Blocks 3 CLAUDE.md incident classes: PS `Set-Content`/`Out-File`/`Add-Content` on text files, gate commands piped to `tail`/`head`, `git add -A`/`--all`. Block = exit 2 + stderr reason. |
+| `pretooluse-guard.ps1` | PreToolUse (`Bash\|PowerShell`) | Blocks 3 CLAUDE.md incident classes: PS `Set-Content`/`Out-File`/`Add-Content` on text files, gate commands piped to `tail`/`head`, `git add -A`/`--all`. Block = exit 2 + stderr reason. Plus one **warn-only** rule: a claude-config commit runs `verify-relocation.mjs` and reports a red gate without blocking. |
 | `precompact-archive.ps1` | PreCompact | Copies transcript to `~/.claude/compact-archives/<sid>-<stamp>.jsonl` before every compaction. |
 | `subagentstop-log.ps1` | SubagentStop | Appends line to `~/.claude/subagent-stops.log`. |
 
@@ -16,3 +16,15 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 - **Unit-test via direct stdin pipe:** `'{"tool_input":{"command":"..."}}' | powershell -File <script>` — check exit code + stderr. Live verification only in interactive sessions.
 - **`claude -p` child sessions:** settings hooks unverified there (possibly the path bug; not re-tested). Don't rely on hooks firing in headless children — use unit tests.
 - **Extend the guard, don't add prose-only rules** for mechanically blockable incident classes.
+- **Warn instead of blocking when the check reads state the committer does not own.** The
+  relocation gate audits the whole `~/code` tree, so it goes red on another session's in-flight
+  edits — and with several sessions running in parallel that is the normal case, not the edge
+  case. A blocking rule there would wedge commits on failures their authors did not cause.
+  Blocking is right for "this command is wrong" (the three rules above); warning is right for
+  "the workspace is currently in a bad state". Flip the relocation rule to `exit 2` once the
+  gate is reliably green. (2026-07-28 description-audit.)
+- **Self-collision when testing the guard:** a test command containing a literal trigger
+  (`Set-Content`, `just check | tail`, `git add -A`) is blocked by the *live* guard before it
+  can pipe anything. Split the literal across shell concatenation so the outer command does not
+  match while the JSON payload still does. Being blocked this way is itself a live confirmation
+  the rule fires.
