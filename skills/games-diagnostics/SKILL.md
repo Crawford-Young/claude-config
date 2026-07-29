@@ -1,6 +1,6 @@
 ---
 name: games-diagnostics
-description: Use for Godot telemetry, debug probes, and feel-tuning rounds — probe lifecycle and removal, rate and derivative measurement from tick data, and the feel-gate tuning loop.
+description: Use when scoping or running any Godot work that touches movement, physics, or game feel — telemetry and debug-probe lifecycle, rate and derivative measurement from tick data, and the feel-gate tuning loop. Load while the wave is still being shaped — probe-commit discipline and the tuning-round loop are wave-shape decisions, made before implementation rather than after.
 ---
 
 # Games Diagnostics

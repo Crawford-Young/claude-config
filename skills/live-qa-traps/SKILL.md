@@ -1,6 +1,6 @@
 ---
 name: live-qa-traps
-description: Use when writing tests or running QA for interactive UI — covers the bug family that passes unit tests, coverage gates, and code review while broken in every real browser, plus the Vitest mocking patterns that hide contract bugs.
+description: Use when planning, scoping, writing tests for, or hand-QAing interactive UI — the bug family that passes unit tests, coverage gates, and code review while broken in every real browser, plus the Vitest mocking patterns that hide contract bugs. Load while the work is still being scoped — which bug classes are structurally unit-invisible decides the test plan and the gate budget before any code is written.
 ---
 
 # Live-QA Traps

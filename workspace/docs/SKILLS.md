@@ -28,10 +28,41 @@ batch this, anchor direction on shipped assets, defer that to a user gate — is
 during exactly the phase those rules govern. **The rules most expensive to miss are the ones
 structurally guaranteed to be missing.**
 
-Shape that works, from the three descriptions that passed unmodified: open on **what the user
-is in the middle of doing** (`live-qa-traps` "writing tests or running QA", `games-diagnostics`
-"feel-tuning rounds", `cl-gates` "authoring stories"), not on a noun phrase with the verbs
-buried in a dash-clause.
+**The shape advice that stood here is retracted (2026-07-28, description-audit).** It read:
+open on *what the user is in the middle of doing*, citing `live-qa-traps`, `games-diagnostics`,
+and `cl-gates` as "the three descriptions that passed unmodified". Two of the three were then
+re-probed on scoping-shaped prompts and **missed every time — 10 fresh sessions, through ladder
+rung 0 and rung 1**. Their original passes came from already-mid-activity prompts, and the
+passage generalized a shape recommendation out of that one narrow condition. Worse, the shape it
+recommended — open on the activity in progress — is precisely the execution-flavored shape that
+does not fire while work is still being scoped. The advice pointed the wrong way.
+`cl-gates` was never probed at scope time; treat it as **unverified**, not as an exemplar.
+
+What survives is narrower than "add a scoping clause", because that was tried and failed. Both
+descriptions were rewritten to lead with "planning, scoping" and both still missed, with no
+false fire on the near controls. The distinction against the one description that *did* get
+fixed: `visual-asset-gates` enumerates **concrete artifact nouns** — images, brand assets, SVGs,
+palettes, screenshots — and passed against a request that literally named one. "Interactive UI"
+and "Godot work that touches movement, physics, or game feel" require a session to first
+classify its own work into the category before any match can occur, and that inferential step is
+where both die. Whether concrete nouns would fix it is **untested**: the nouns that would match
+are the probe prompts' own words, barred by the rule below without new prompts.
+
+One thing the failure did settle. A rival explanation — that no second skill loads once
+`superpowers:brainstorming` claims the turn — is **false**: on the passing `visual-asset-gates`
+re-probe, brainstorming fired first and the target second, inside brainstorming's own
+context-exploration step. Co-fire works. Description matching is the broken link, not turn
+ownership.
+
+**Practical consequence: a rule that must be reachable while work is still being scoped cannot
+rely on its `description` alone.** When routing fails at the ladder's end, promote the trigger —
+an imperative load instruction in an always-loaded file, so the load is the orchestrator's job
+rather than the router's. The skill body stays where it is; only the trigger moves.
+
+**A `description` containing `: ` is silently unpublished.** Colon-space terminates an unquoted
+YAML scalar, the frontmatter fails to parse, and the harness lists the skill by its H1 with no
+description at all — maximally unreachable. `verify-relocation.mjs` is blind to it (body
+paragraphs only); `verify-frontmatter.mjs` now catches it in CI. Use an em-dash.
 
 **Never tune a description to the prompt you are testing it with.** Adding the probe's own
 keywords makes a subsequent pass unfalsifiable — the routing equivalent of putting the pass

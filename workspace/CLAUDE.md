@@ -28,6 +28,8 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
 
 `~/code/docs` is its own **local-private git repo** (no remote — initialized 2026-06-11). Commit planning docs there at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`brand/`, root reference MDs) are gitignored — their history lives in `claude-config`. **Commit with explicit paths, never `git add -A`** — the repo is shared by concurrent sessions; `-A` sweeps another session's in-flight checklists/issues into your commit (2026-07-01: 2a spike commit swept w2.2L + cybond-w2.2 files). (`git add -A`/`--all` deny-ruled + hook-enforced since 2026-07-27.)
 
+**Correction 2026-07-28 — `~/code/docs` DOES have a remote.** The line above says "no remote"; that has not been true for some time. `Crawford-Young/docs` exists and is private, and the local repo had drifted **227 commits** ahead of it before anyone checked — the stale line is why nobody thought to look. Push at wave close alongside the commit, not "eventually". (Left as an addendum rather than an edit because the paragraph above is a frozen baseline; rewriting it in place would read as a lost rule.)
+
 **claude-config is config + reference docs only.** Never write project working artifacts (specs, checklists, issues, screenshots, assets) into junctioned dirs — they land in the claude-config repo. Brand/design-system project work uses `docs/brand-design/` as its project dir; junctioned `docs/brand/` holds only the living reference MDs + README.
 
 **Structure per project:**
@@ -75,6 +77,17 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
 > - `live-qa-traps` — the unit-green/live-broken bug family and Vitest mocking traps. **Load before writing tests or QA for interactive UI.**
 > - `games-diagnostics` — Godot telemetry, probes, feel-gate tuning. **Load for games diagnostic or tuning work.**
 
+**Two of those skills do not load themselves at scope time — load them by hand.** Scoping UI
+interaction work (drag, reorder, dialogs, popovers, keyboard/pointer input) → load
+`live-qa-traps` before choosing an approach. Scoping Godot movement, physics, or feel work →
+load `games-diagnostics` before shaping the wave. The table above is a routing table: it works
+only if the harness matches the request against a skill's `description`, and for these two that
+matching is measured broken — 10 fresh probe sessions, ladder rungs 0 and 1, zero fires on
+build-shaped prompts. The load is therefore the orchestrator's job, not the router's. Do not
+"fix" this by rewriting their descriptions; that was rung 1 and it failed. (2026-07-28
+description-audit, ladder TERMINAL. Full evidence in `docs/SKILLS.md` §Writing a Skill
+`description`.)
+
 ### 1. Planning Phase
 
 Always write and commit the spec before producing an implementation plan. No exceptions.
@@ -104,6 +117,8 @@ Always write and commit the spec before producing an implementation plan. No exc
   - Merge commits in a branch break GitHub's "Rebase and merge" PR strategy
   - **PR merge method: "Rebase and merge" ONLY — never squash-merge** (user directive 2026-07-21, after motion-pass PR #35 was squashed following the then-established squash practice). Branch commits land individually on main, staying true ancestors — so plain `git rebase origin/main` works for every follow-on branch. `gh pr merge <n> --rebase --delete-branch`.
   - **A branch built on a SQUASH-merged base, when main has diverged, must be SQUASH-integrated onto fresh main — not `rebase --onto`.** (HISTORICAL-BASE CASE ONLY as of 2026-07-21 — PRs merged before then were squashed, so branches based on that history still need this; rebase-merged PRs keep their commits as true ancestors and plain rebase works.) When the base was squash-merged, the previous wave's individual commits are NOT ancestors of main (only the squashed commit is), so `git rebase --onto origin/main <old-base>` replays the already-merged work and conflicts on every touched file. Instead: `git checkout -B <branch> origin/main`, bring the new wave's files (`git diff --name-only <wave-base> <wave-head> | grep -vxF <files-main-also-changed> | xargs git checkout <wave-head> --`), 3-way-merge (`git merge-file`) only the handful of files main independently changed (docs, schema), REGENERATE any colliding migration via `drizzle-kit generate` (never hand-edit the snapshot JSON), `pnpm install`, full gate, one integration commit. History loss is fine — the PR squash-merges anyway. (2026-07-17 chat wave B: 30 commits on a squash-merged base; main +4 PRs incl. a ui major bump + a migration-number collision; `rebase --onto` conflicted on commit 1/30, squash-integration was clean.)
+
+**`claude-config` cannot take the worktree escape hatch for LIVE edits, but it can for COMMITS.** `skills/` junctions into `~/.claude/skills/` and `workspace/` into `~/code`, so the copy every session actually loads is the main checkout — a worktree edit changes files nothing reads. Consequence: check `git branch --show-current` before **any** claude-config edit, not only before committing, because a file already in another session's dirty set blocks the EDIT too. When blocked, the fix is not to wait: edit the live file on disk so routing stays correct, then cut a worktree from `origin/main`, apply the same change there, and PR it independently — the junction governs what loads, never where content is committed. Never commit onto another session's open branch; their PR stops describing its own contents. (2026-07-28: two payloads deferred against one branch in a day, with `/context` showing 50% of recent usage at 4+ parallel sessions — this is the steady state, not bad luck. The worktree route is what actually unblocked it.)
 
 ### 4. Commit & Push Policy
 
@@ -165,6 +180,8 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 - **Bash cwd persists across tool calls.** After committing in another repo (claude-config, docs), the next git command runs THERE — a fetch+rebase once targeted claude-config instead of the working worktree, blocked only by a foreign dirty file. Multi-repo git ops use `git -C <path>` or re-`cd` in the same call. (2026-07-01.)
 - **A local-only lint/format failure may be a line-ending checkout artifact, not real drift.** Before mass-rewriting (`prettier --write .`), check `git diff --numstat` (empty = EOL-only) and the committed blob's EOL (`git show HEAD:<file> | cat -A`); on Windows with `core.autocrlf=true` + no `.gitattributes`, CRLF-on-disk trips prettier's default `endOfLine:lf` while CI (Linux, LF) is already green. Fix at the source (`.gitattributes` `* text=auto eol=lf` + `.prettierrc` `endOfLine:"auto"`), don't churn files. (2026-06-30: a "repo-wide prettier drift, run prettier --write" flag was carried across two sessions as a blocker — it was a no-op CRLF artifact.)
 - **When a library component generalizes app-local code, port the ACTUAL source's staging/timing verbatim — read the shipped file, not the spec's paraphrase.** The spec may describe intent ("Cy's bond" with a space) while the working code achieves it differently (gap from a CSS translate, no space char). Re-tune pixel/duration constants for the library's context (product `text-4xl` → library `text-7xl` needed the split translate to go ±12px→±32px or glyphs overlap). (2026-07-01: BrandSplash first port paraphrased the spec — wrong `'s` staging, dropped quote fade, an `animate-pulse` the product never had; cost a full re-QA round.)
+
+**The Edit tool refuses to write through a symlink — pass the real target path.** `docs/SKILLS.md` and the other junctioned reference MDs resolve into `claude-config/workspace/`, and an edit aimed at the link is rejected rather than silently followed. The refusal is a guard, not a bug: writing through the link would land the change in a repo that does not track the file. (2026-07-28 description-audit.)
 
 **Dependencies:**
 - Always use the latest stable major version — stale majors are a blocker, not deferred debt
