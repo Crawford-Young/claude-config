@@ -13,8 +13,14 @@
  *   node ... --verbose                                          # list every paragraph
  *
  * Exit 0 = every baseline paragraph found exactly once.
- * Exit 1 = at least one MISSING. Duplicates warn but do not fail: a paragraph legitimately
- *          reads as "found twice" mid-wave, while its source file is still to be trimmed.
+ * Exit 1 = the gate RAN and found a real problem — MISSING, UNREACHABLE, or a stale
+ *          exemption. Duplicates warn but do not fail: a paragraph legitimately reads as
+ *          "found twice" mid-wave, while its source file is still to be trimmed.
+ * Exit 2 = the gate could NOT run — an unclassified destination, no baselines, no
+ *          destinations. Kept distinct from 1 on purpose: a config error that reports the
+ *          same code as a genuine loss is a small version of the failure this gate exists
+ *          to catch. (Harmonized 2026-07-28 at the routing-verification wave's reflect;
+ *          the two abort sites below used to exit 1.)
  */
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -208,7 +214,7 @@ if (args.baselines.length) {
 } else {
   if (!existsSync(BASELINE_DIR)) {
     console.error(`ABORT: no baseline directory at ${BASELINE_DIR}`);
-    process.exit(1);
+    process.exit(2);
   }
   baselineFiles = readdirSync(BASELINE_DIR)
     .filter((f) => f.endsWith('.md'))
@@ -231,7 +237,7 @@ if (args.dests.length) {
 
 if (!destFiles.length) {
   console.error('ABORT: no destination files resolved.');
-  process.exit(1);
+  process.exit(2);
 }
 
 const haystack = destFiles.map((d) => ({

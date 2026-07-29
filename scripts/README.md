@@ -68,6 +68,30 @@ path **for the situation its rules govern**. A rule that only matters during a g
 relocated into a web-only skill, is reachable by every mechanical test and useless in
 practice.
 
+### Exit codes, and running the suite
+
+`0` = pass. `1` = the gate **ran** and found a real problem (MISSING, UNREACHABLE, stale
+exemption). `2` = the gate **could not run** (unclassified destination, no baselines, no
+destinations). The 1/2 split was harmonized 2026-07-28 — two abort sites used to exit `1`,
+the same code a genuine loss uses, which is a small version of the failure this gate exists
+to catch. The suite asserts the exact codes rather than `notEqual(0)`.
+
+**The suite's invocation is load-bearing, and both wrong forms are worse than they look:**
+
+```bash
+cd /c/Users/young/code && node --test "claude-config/scripts/test/*.test.mjs"   # correct
+```
+
+- `node --test <dir>` resolves the directory as a module, dies `MODULE_NOT_FOUND`, exits 1
+  and prints `fail 1` — it reads exactly like a red suite. Ask for test NAMES; getting none
+  is the tell.
+- `node --test` with an absolute MSYS-style glob (`/c/Users/...`) matches nothing, prints
+  `tests 0`, and exits **0** — indistinguishable from a green run. Strictly worse than the
+  first: that one at least fails.
+
+**Read the `tests N` line, never the exit code alone.** Same family as the piped-gate rule in
+root `CLAUDE.md`: a green exit proves a command finished, not that it did anything.
+
 ### Paragraph ≠ rule
 
 The gate splits on blank lines and skips anything under `MIN_PARAGRAPH_CHARS` (60).
