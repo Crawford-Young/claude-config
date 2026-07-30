@@ -63,6 +63,7 @@ rather than the router's. The skill body stays where it is; only the trigger mov
 YAML scalar, the frontmatter fails to parse, and the harness lists the skill by its H1 with no
 description at all — maximally unreachable. `verify-relocation.mjs` is blind to it (body
 paragraphs only); `verify-frontmatter.mjs` now catches it in CI. Use an em-dash.
+(2026-07-28: caught by luck, one listing re-render — hence the CI gate.)
 
 **Never tune a description to the prompt you are testing it with.** Adding the probe's own
 keywords makes a subsequent pass unfalsifiable — the routing equivalent of putting the pass
