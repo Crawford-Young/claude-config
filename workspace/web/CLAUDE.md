@@ -53,6 +53,8 @@ Applies to every repo under `~/code/web/`.
 - **Zod at all system boundaries** — Server Actions, API routes, forms, env vars, DB docs, external API responses
 - **Dark mode by default** — every component designed and tested in dark mode first
 
+**A canonical origin is a published fact about the host, not a per-env knob.** Hardcode `SITE_URL` in a coverage-counted `src/lib/site-routes.ts`, pin `metadataBase` to it, and assert `og:url === SITE_URL` in e2e — an assertion that fails against a localhost origin is the only gate that can catch this class. No local gate can: locally the env value IS correct, so unit tests, tsc, lint, axe, and the full e2e suite pass while the deployed artifact advertises `og:url = http://localhost:3000`. **The ABSENCE of canonical metadata is the same defect wearing a disguise** — a `curl | grep og:url` returning nothing reads as "nothing wrong here" and is the harder half to notice. Env-derived origins legitimately survive in exactly one place: an OUTBOUND redirect handed to a third party (Stripe `success_url`/`cancel_url`/`return_url`), which differs per deployment and so cannot be hardcoded — those become dashboard-verification items logged in the issue log for the user, never silent assumptions. **Enumerate every consumer of an app-origin env var, not just the metadata one.** (2026-07-28/29 AdSense W1: carsickyak shipped a Vercel `NEXT_PUBLIC_APP_URL` still holding the `.env.example` localhost value, so every production page advertised a localhost `og:url` + OG image — found only because the plan included an explicit production `curl`; cybond had no `metadataBase` at all, the opposite shape, same defect; and cybond's copy of the same var builds three Stripe redirect URLs, still unverified. n=2 firm.)
+
 ---
 
 ## Custom Component Library
@@ -80,6 +82,10 @@ stories/
 ### 3. Branch Strategy
 
 - **After any rebase that changes `package.json`/lockfile, run `pnpm install` before gates** — stale node_modules type-checks against the old dep and fails tsc on APIs the rebased code consumes. (2026-07-14: wave-A rebase brought main's 0.21.0 consume code; installed 0.20.0 lacked `recurrenceEditMode`, one wasted gate run.)
+
+**A fresh worktree has no Playwright browsers** — `pnpm exec playwright install chromium` (~294 MB) runs before its first e2e, alongside the `.env`/`.env.local` copy the universal rule already requires. Budget it per worktree, not per repo. (2026-07-28 AdSense W1: hit in 4 of 5 clusters.)
+
+**`just check` composition differs per repo, so "the gate passed" does not mean the same thing twice — read the recipe before quoting a gate as coverage for anything.** Verified 2026-07-28 across the wave's five repos: `instrumenttuner` is `typecheck lint test` with **no e2e at all** (a new e2e spec there never executes in the gate and must be run separately); `carsickyak-site` is `lint typecheck test storybook-build e2e`, the only one running both a Storybook build and e2e; the portfolio's e2e recipe passes no `PORT`, so `reuseExistingServer: !CI` silently drives a foreign session's dev server. Run every e2e segment with an explicit `PORT=`, and record what each repo's gate actually runs in that repo's own `CLAUDE.md`.
 
 ### 5. Pre-commit Hooks (Husky)
 
