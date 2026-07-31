@@ -107,6 +107,7 @@ routing-verification issue #6.)
 | Receiving code review feedback | `superpowers:receiving-code-review` |
 | Finishing a branch / ready to merge | `superpowers:finishing-a-development-branch` |
 | Isolated feature work | `superpowers:using-git-worktrees` |
+| A rebase conflicts on every touched file, or a Windows worktree refuses removal | `git-recovery-ops` (relocated from root `CLAUDE.md` §3, 2026-07-30 — recovery only, not the routine branch flow) |
 | Building any UI | `frontend-design:frontend-design` |
 | Any visual, asset, theme, or image-pipeline task — before the preview gate | `visual-asset-gates` (relocated from root `CLAUDE.md` §2 + `web/CLAUDE.md`, 2026-07-28) |
 | Phase ends (branch merged, wave done) — **mandatory** | `claude-md-management:reflect` |

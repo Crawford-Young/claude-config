@@ -68,41 +68,12 @@ const INTENTIONAL_DUPLICATES = ['Run `superpowers:verification-before-completion
  *  between, so one "paragraph" can hold several unrelated rules. Editing any one of them
  *  invalidates the whole block's match. */
 const INTENTIONAL_EDITS = [
-  {
-    match: 'Agent factory: spawn protocol, dispatch template, performance-MD duty, escalation, type authoring',
-    reason:
-      'Task 7 Step 4: the Orchestration block is one paragraph of 4 rules; its auto-mode line was rewritten for the 2026-07-28 defaultMode:auto reversal (issue #3). The other 3 rules in the block are unchanged.',
-  },
-  {
-    match: '**Vitest patterns:** - Theme-dependent e2e specs seed BOTH themes explicitly',
-    reason:
-      'Task 8: the "**Vitest patterns:**" label and its 10 bullets are one paragraph. All 10 bullets moved verbatim into the live-qa-traps skill (checked individually, 0 missing); only the label was dropped, since a label with no bullets under it is dead structure.',
-  },
-  {
-    match: 'Orchestrator stops at `<!-- COMPACT POINT -->` markers and prompts the user to run `/compact`',
-    reason:
-      'Task 12a (user-requested, mid-wave): the §7 Context Hygiene bullet list is one paragraph. A NEW `/compact <focus>` rule was inserted after the first bullet — additive, not a rewrite. All 13 original lines of the block verified present verbatim in the current root (line-by-line normalized compare, 0 missing). Nothing was lost; the block text simply no longer matches the baseline byte-for-byte.',
-  },
-  {
-    match: '**Structure per project:**',
-    reason:
-      'Post-wave (2026-07-28, user directive): the continuation skill no longer writes handoff files — it emits a paste-ready resume prompt instead — so the `continuation/` folder and its `<timestamp>-handoff.md` line documented a directory that no longer exists. Deleted as a falsehood, same class as issue #10 stale-derivation. This is a DELETION, not a relocation: the two lines describe a retired mechanism and survive nowhere, by design. Bounded and verified: the fenced block holds 13 content lines, exactly 2 are gone, the other 11 are present verbatim in the current root (normalized line-by-line compare).',
-  },
-  {
-    match: '- [ ] Vitest — 100% coverage (statements, functions, lines); branches ≥97% acceptable',
-    reason:
-      'username-w1 issue #2 (2026-07-27/28): the flat "100% coverage; branches >=97%" figure was FALSE for two repos — `vitest.config.ts` is the authority and scheduling-advisor runs 99/97/100/99. Replaced at web/CLAUDE.md:100 by a rule that names the config as the authority and enumerates the per-repo numbers, so the substance (which gaps are acceptable) survives while the wrong universal figure does not. Adjudicated in the description-audit issue log #4 and verified line-by-line 2026-07-29: of the 17 lines in that Definition-of-Done block, 16 are present verbatim in web/CLAUDE.md and only this one changed.',
-  },
-  {
-    match: '| Testing | Vitest (100% coverage) + Playwright E2E',
-    reason:
-      'Same correction, same wave, same reason as the Definition-of-Done entry above: the stack table row also claimed a flat 100%. Replaced at web/CLAUDE.md:36 by "thresholds are PER-REPO — read `vitest.config.ts`". Verified line-by-line 2026-07-29: of the 14 rows in that table, 13 are present verbatim and only the Testing row changed; the table also lives in docs/web/STACK.md, so nothing about the stack was lost.',
-  },
-  {
-    match: '**claude-config is config + reference docs only.** Never write project working artifacts',
-    reason:
-      'Post-wave (2026-07-28, user directive): same change as above. The artifact list named "continuation handoffs" among things never to write into junctioned dirs; that artifact type no longer exists. Verified byte-exact — the baseline paragraph with the literal string "continuation handoffs, " removed is character-for-character identical to the current one, so nothing else in the paragraph moved.',
-  },
+  // Emptied 2026-07-30 at the claim+cite compression epoch reset: the workspace baselines
+  // (root.md, web.md, games.md) were refreshed to the compressed post-relocation files, so
+  // every prior entry — all keyed on pre-compression baseline text — stopped firing and was
+  // removed per the stale-exemption rule below. The retired entries and their audit reasons
+  // live in git history (pre-refresh revision of this file). Rule-preservation for the
+  // compression itself was verified rule-by-rule in PR #13 and the payload-landing PR.
 ];
 
 /** Baseline paragraphs that live in an archival destination BY DESIGN — history relocated
