@@ -83,6 +83,7 @@ At every wave-end reflect:
 **Only the orchestrator writes to checklist files. Spawned agents are read-only.**
 
 - Tick `- [x]` immediately after a task completes; ticks + log lines land in the same action batch as the commit they record
+- **Before ticking a step, grep the wave issue log for `Owner:` lines naming it** — issue entries accrete deliverables onto later steps mid-wave, and a tick written from the plan text alone misses them. The step's annotation cites the issue-owned deliverable explicitly. (2026-07-31 what-is-dark 4.0: issue #11 assigned Step 11.1 a correction to a 3b log entry; 11.1 ticked without it, caught only by the whole-branch close review — MAJ-2, wave issue #25.)
 - Add `> ⚠️ NOTE FOR TASK N:` inline below a completed task only when the outcome changes how a future task should be approached
 - Append to `## Reflect Log` when lessons surface — format: `- YYYY-MM-DD: <lesson>`
 - On phase complete: move checklist to `done/`, then run `claude-md-management:reflect`
