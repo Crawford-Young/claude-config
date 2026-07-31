@@ -1,8 +1,6 @@
 # CLAUDE.md — Apps Domain Standards
 
-**Inherits:** `~/code/CLAUDE.md` (universal rules — workflow, git, planning discipline, security). This file adds the mobile/desktop stack on top and overrides it only where explicitly stated.
-
-Applies to every project under `~/code/apps/`.
+**Inherits:** `~/code/CLAUDE.md` (universal rules). Adds the mobile/desktop stack; overrides only where explicitly stated. Applies to every project under `~/code/apps/`.
 
 ---
 
@@ -29,28 +27,21 @@ Applies to every project under `~/code/apps/`.
 
 ## Carries Over Unchanged From Web
 
-No re-derivation needed — these apply exactly as written in `web/CLAUDE.md`:
-
-- TypeScript strict, no `any`
-- Zod at all system boundaries
-- TanStack Query for all client-side async state
-- Zustand for UI state only — never as a data cache
-- Conventional Commits
-- Dark mode by default — every component designed and tested in dark mode first
+TypeScript strict/no `any` · Zod at all system boundaries · TanStack Query for client async state · Zustand for UI state only · Conventional Commits · dark mode by default (designed and tested dark-first).
 
 ---
 
 ## Differs From Web
 
-Each of these is a habit to actively unlearn, not just a swapped tool name:
+Each is a habit to actively unlearn, not just a swapped tool name:
 
-- **Expo Router, not App Router** — file-based routing is the same idea, but Expo Router resolves routes client-side only; there is no server to render on.
-- **No RSC and no Server Actions** — a React Native app has no Node server process to run them on. The backend is a separate service; every mutation goes through a typed API client instead.
-- **NativeWind, not raw Tailwind** — NativeWind compiles Tailwind class syntax into React Native `StyleSheet` objects. There is no DOM or CSS engine on-device, so raw Tailwind (which emits CSS) does not apply here.
-- **Jest + RNTL, not Vitest** — React Native's Metro bundler and native-module mocks need Jest's RN preset; Vitest's transform pipeline targets browser/Node ESM and doesn't ship one.
-- **Maestro, not Playwright** — Playwright drives a browser over CDP; there is no browser here. Maestro drives the actual installed iOS/Android app through the platform's native UI-automation layer.
-- **EAS, not Vercel** — Vercel deploys server-rendered or static web output; a mobile app ships as a signed binary through app-store review, which is what EAS Build/Submit exists to manage.
-- **No Lighthouse** — Lighthouse audits page-load web vitals inside a browser. The equivalent perf gate here is cold-start time and sustained frame rate, measured on a physical device.
+- **Expo Router, not App Router** — routes resolve client-side only; there is no server to render on.
+- **No RSC, no Server Actions** — no Node server process; the backend is a separate service, every mutation goes through a typed API client.
+- **NativeWind, not raw Tailwind** — Tailwind syntax compiled to RN `StyleSheet`; no DOM or CSS engine on-device.
+- **Jest + RNTL, not Vitest** — Metro bundler and native-module mocks need Jest's RN preset.
+- **Maestro, not Playwright** — no browser to drive; Maestro drives the installed app through the platform's native UI-automation layer.
+- **EAS, not Vercel** — a mobile app ships as a signed binary through app-store review.
+- **No Lighthouse** — the perf gate is cold-start time and sustained frame rate on a physical device.
 
 ---
 
@@ -73,4 +64,4 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 
 ## Tauri Note
 
-No desktop project exists yet under this domain. When the first one starts, brainstorm whether it shares a codebase with the Expo app — Tauri hosts a web frontend, which opens a real option to share business logic with an Expo/RN app — or is built as a fully separate repo. Do not assume either shape going in.
+No desktop project exists yet. When the first one starts, brainstorm whether it shares a codebase with the Expo app (Tauri hosts a web frontend — real option to share business logic) or is a fully separate repo. Do not assume either shape going in.
