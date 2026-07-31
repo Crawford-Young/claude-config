@@ -27,6 +27,7 @@ You may spawn subagents. Before your first spawn, Read ~/code/claude-config/skil
 - Keep CLAUDE.md concise (target ≤250 lines) — it loads into every session; every line has a context cost
 - Workspace-level rules go in `~/code/CLAUDE.md`; project-specific details go in the repo-level `CLAUDE.md`
 - Never add obvious/derivable information — only document what can't be inferred from code or git history
+- **A doc fact you correct in one file is a grep prompt, not a one-file fix.** Repo docs duplicate the same claims across `README.md`, `AGENTS.md`/`CLAUDE.md`, and specs — grep the corrected phrase repo-wide before finalizing. This applies hardest to staleness you find INCIDENTALLY, outside your brief: that is exactly the case with no owner, so a fix in one file leaves its twin behind and the next reader trusts the wrong one. (2026-07-27 friends-w1 T8: a stale segment count was caught and fixed in `AGENTS.md`, and the identical line in `README.md` was missed.)
 - Agent definitions must be self-contained — subagents start cold with zero session context
 - Never commit — user approves all commits
 
