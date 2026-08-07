@@ -10,13 +10,20 @@ $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Script = Join-Path (Split-Path -Parent $Here) 'usage-statusline.ps1'
 $Fixtures = Join-Path $Here 'fixtures'
 $Arrow = [char]8594
-$Full  = [char]9608
-$Empty = [char]9617
+$Tick  = [char]9648
+$Blank = [char]9649
+$Dot   = [char]183
 
-# Bar helper mirrors the script's spec: 8 cells, filled = min(8, ceil(pct/12.5)).
+# Bar helper mirrors the script's spec: 10 cells, 1 cell = 10%,
+# filled = min(10, ceil(pct/10)) so any nonzero usage shows one cell.
 function Get-Bar([int]$Pct) {
-    $n = [Math]::Min(8, [int][Math]::Ceiling($Pct / 12.5))
-    return ("$Full" * $n) + ("$Empty" * (8 - $n))
+    $n = [Math]::Min(10, [int][Math]::Ceiling($Pct / 10.0))
+    return ("$Tick" * $n) + ("$Blank" * (10 - $n))
+}
+
+# ANSI-stripped view: layout asserted plain, colors asserted separately on raw.
+function Get-Plain([string]$s) {
+    return ($s -replace "$([char]27)\[[0-9;]*m", '')
 }
 
 $script:Pass = 0
@@ -44,26 +51,35 @@ function Invoke-Statusline([string]$FixturePath, [hashtable]$EnvVars) {
     }
 }
 
-# ---- D1: full fixture renders both windows as bars, no caveman badge ----
+# ---- D1: full fixture renders model/effort, ctx bar with token counts,
+#          both rate windows as bars, and session cost ----
+# ctx tokens = sum of current_usage fields in full.json:
+# 2 + 2062 + 726 + 99099 = 101,889 -> "102k"; window 1,000,000 -> "1M".
 $tmp = New-TestTmp
 $out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp
 }
+$plain = Get-Plain $out
 $exp5h = [DateTimeOffset]::FromUnixTimeSeconds(1786074000).ToLocalTime().ToString('HH:mm')
 $exp7d = [DateTimeOffset]::FromUnixTimeSeconds(1786618800).ToLocalTime().ToString('ddd')
-Assert-True ($out.Contains("5h $(Get-Bar 22) 22%$Arrow$exp5h")) 'D1 five-hour bar segment'
-Assert-True ($out.Contains("7d $(Get-Bar 4) 4%$Arrow$exp7d")) 'D1 seven-day bar segment'
+$esc = [char]27
+Assert-True ($plain.Contains("Fable 5 $Dot high")) 'D1 model/effort prefix'
+Assert-True ($plain.Contains("ctx $(Get-Bar 10) 102k/1M 10%")) 'D1 ctx bar with token counts'
+Assert-True ($plain.Contains("5h $(Get-Bar 22) 22%$Arrow$exp5h")) 'D1 five-hour bar segment'
+Assert-True ($plain.Contains("7d $(Get-Bar 4) 4%$Arrow$exp7d")) 'D1 seven-day bar segment'
+Assert-True ($plain.Contains('$3.13')) 'D1 session cost'
+Assert-True ($out.Contains("$esc[32m")) 'D1 green fill below 70'
 Assert-True (-not $out.Contains('CAVE')) 'D1 no caveman badge'
 Assert-True ($script:LastExit -eq 0) 'D1 exit 0'
 
-# ---- D2: no rate_limits => model-name fallback, no segment ----
+# ---- D2: no rate_limits => prefix/ctx/cost only, no rate bars ----
 $tmp2 = New-TestTmp
 $out = Invoke-Statusline (Join-Path $Fixtures 'no-rate-limits.json') @{
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp2 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp2
 }
-Assert-True ($out -eq 'Fable 5') 'D2 model-name fallback'
+Assert-True ((Get-Plain $out) -eq "Fable 5 $Dot high $Dot ctx $(Get-Bar 10) 102k/1M 10% $Dot `$3.13") 'D2 prefix-only fallback'
 Assert-True (-not $out.Contains('5h ')) 'D2 no five-hour segment'
 Assert-True ($script:LastExit -eq 0) 'D2 exit 0'
 
@@ -76,15 +92,17 @@ $out = Invoke-Statusline (Join-Path $Fixtures 'malformed.json') @{
 Assert-True ($out -eq '[statusline]') 'D3 sentinel on malformed input'
 Assert-True ($script:LastExit -eq 0) 'D3 exit 0'
 
-# ---- D4: color thresholds wrap bar+pct (92 => red 31, 75 => yellow 33) ----
+# ---- D4: color thresholds (92 => red 31, 75 => yellow 33) + quartered layout ----
 $tmp4 = New-TestTmp
 $out = Invoke-Statusline (Join-Path $Fixtures 'high-usage.json') @{
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp4 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp4
 }
-$esc = [char]27
-Assert-True ($out.Contains("$esc[31m$(Get-Bar 92) 92%")) 'D4 five-hour red bar at 92'
-Assert-True ($out.Contains("$esc[33m$(Get-Bar 75) 75%")) 'D4 seven-day yellow bar at 75'
+$plain4 = Get-Plain $out
+Assert-True ($plain4.Contains("5h $(Get-Bar 92) 92%")) 'D4 five-hour full bar at 92'
+Assert-True ($plain4.Contains("7d $(Get-Bar 75) 75%")) 'D4 seven-day 8-cell bar at 75'
+Assert-True ($out.Contains("$esc[31m")) 'D4 red present at 92'
+Assert-True ($out.Contains("$esc[33m")) 'D4 yellow present at 75'
 Assert-True ($script:LastExit -eq 0) 'D4 exit 0'
 
 # ---- H1: full fixture appends one schema-complete sample ----
