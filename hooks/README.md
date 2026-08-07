@@ -5,6 +5,7 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 | Script | Event | Does |
 |---|---|---|
 | `pretooluse-guard.ps1` | PreToolUse (`Bash\|PowerShell`) | Blocks 3 CLAUDE.md incident classes: PS `Set-Content`/`Out-File`/`Add-Content` on text files, gate commands piped to `tail`/`head`, `git add -A`/`--all`. Block = exit 2 + stderr reason. Plus one **warn-only** rule: a claude-config commit runs `verify-relocation.mjs` and reports a red gate without blocking. |
+| `agent-model-guard.ps1` | PreToolUse (`Agent`) | Blocks Agent dispatches that omit `model:` on a type with no frontmatter model (would silently inherit the fable session default — issue #3/G4). Frontmatter-model types pass; plugin-namespaced (`x:y`) and def-less built-ins always require explicit `model:`. Block = exit 2 + stderr reason; fail-open on script error. |
 | `precompact-archive.ps1` | PreCompact | Copies transcript to `~/.claude/compact-archives/<sid>-<stamp>.jsonl` before every compaction. |
 | `subagentstop-log.ps1` | SubagentStop | Appends line to `~/.claude/subagent-stops.log`. |
 
