@@ -93,7 +93,7 @@ $out = Invoke-Statusline $fixD2 @{
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp2 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp2
 }
-Assert-True ((Get-Plain $out) -eq "d2-plain $Dot Fable 5 $Dot high $Dot ctx $(Get-Bar 10) 102k/1M 10% $Dot `$3.13") 'D2 prefix-only fallback'
+Assert-True ((Get-Plain $out) -eq "d2-plain $Dot Fable 5 $Dot high $Dot `$3.13`nctx $(Get-Bar 10) 102k/1M 10%") 'D2 prefix-only fallback'
 Assert-True (-not $out.Contains('5h ')) 'D2 no five-hour segment'
 Assert-True ($script:LastExit -eq 0) 'D2 exit 0'
 
@@ -118,6 +118,17 @@ Assert-True ($plain4.Contains("7d $(Get-Bar 75) 75%")) 'D4 seven-day 8-cell bar 
 Assert-True ($out.Contains("$esc[31m")) 'D4 red present at 92'
 Assert-True ($out.Contains("$esc[33m")) 'D4 yellow present at 75'
 Assert-True ($script:LastExit -eq 0) 'D4 exit 0'
+
+# ---- D6: two-line layout — identity row, then usage row ----
+$tmp6 = New-TestTmp
+$out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
+    CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp6 'hist')
+    CLAUDE_USAGE_THROTTLE_DIR = $tmp6
+}
+$rows = (Get-Plain $out) -split "`n"
+Assert-True ($rows.Count -eq 2) 'D6 exactly two rows'
+Assert-True ($rows[0].Contains('Fable 5') -and $rows[0].Contains('$3.13')) 'D6 row 1 identity + cost'
+Assert-True ($rows[1].StartsWith('ctx ') -and $rows[1].Contains('5h ') -and $rows[1].Contains('7d ')) 'D6 row 2 usage bars'
 
 # ---- L1: cwd inside a git repo => leads with repo@branch ----
 $tmpL1 = New-TestTmp
