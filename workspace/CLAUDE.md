@@ -180,6 +180,7 @@ Agent factory: spawn protocol, dispatch template, performance-MD duty, escalatio
 Routing authority is `claude-config/agents/profiles/<type>.md` — type defs are general guidance only.
 Every `Agent()` call sets `model:` explicitly from the profile's model sweet spot.
 Auto permission mode is the default (`permissions.defaultMode: "auto"`, set 2026-07-28); deny rules + PreToolUse hooks are the hard backstop.
+**`permissions.ask` is inert under auto mode — a build bug, not a design surface.** Every ask-form rule silent-runs (n=5: param/colon/space forms, mid-session + fresh; /feedback filed 2026-08-07); hook `permissionDecision:"ask"` is documented-ignored in auto too. Design human checkpoints as deny rules, hook blocks, or conversational gates until fixed; dormant ask rules stay in settings.json to self-activate. (2026-08-07 P4a issue #2.)
 
 - **Dispatch prose never restates brief contents — point at the brief file.** A drifting paraphrase makes implementer + reviewer burn a round reconciling the contradiction. Binds REVIEWER constraint blocks too; copy source is the brief/plan, not the spec, when they differ (2026-07-04; 2026-07-14).
 
