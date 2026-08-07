@@ -73,5 +73,48 @@ if ($Pieces.Count -eq 0) {
 }
 [Console]::Write(($Pieces -join ' | '))
 
-# --- 5. history sample: Task 2 ---
+# --- 5. history sample (throttled >= 60s/session; fail-open) ---
+# State file read via Get-Content is a single ASCII epoch line, not a UTF-8
+# text round-trip (the CLAUDE.md rule targets text-file mutation).
+try {
+    if ($Status -and $Status.session_id) {
+        $HistoryDir  = Get-DefaultOr $env:CLAUDE_USAGE_HISTORY_DIR (Join-Path $HOME '.claude\usage-history')
+        $ThrottleDir = Get-DefaultOr $env:CLAUDE_USAGE_THROTTLE_DIR $env:TEMP
+        $NowEpoch = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+        $StateFile = Join-Path $ThrottleDir ('claude-usage-throttle-' + $Status.session_id + '.txt')
+        $ShouldLog = $true
+        if (Test-Path $StateFile) {
+            $Last = 0L
+            $FirstLine = Get-Content -LiteralPath $StateFile -TotalCount 1 -ErrorAction SilentlyContinue
+            if ([long]::TryParse([string]$FirstLine, [ref]$Last)) {
+                if (($NowEpoch - $Last) -lt 60) { $ShouldLog = $false }
+            }
+        }
+        if ($ShouldLog) {
+            if (-not (Test-Path $HistoryDir)) { New-Item -ItemType Directory -Path $HistoryDir -Force | Out-Null }
+            $RL = $Status.rate_limits
+            $CW = $Status.context_window
+            $Sample = [ordered]@{
+                ts                    = [DateTimeOffset]::Now.ToString('o')
+                session_id            = $Status.session_id
+                cwd                   = $Status.cwd
+                model_id              = $(if ($Status.model) { $Status.model.id } else { $null })
+                effort                = $(if ($Status.effort) { $Status.effort.level } else { $null })
+                five_hour_pct         = $(if ($RL -and $RL.five_hour) { $RL.five_hour.used_percentage } else { $null })
+                five_hour_resets_at   = $(if ($RL -and $RL.five_hour) { $RL.five_hour.resets_at } else { $null })
+                seven_day_pct         = $(if ($RL -and $RL.seven_day) { $RL.seven_day.used_percentage } else { $null })
+                seven_day_resets_at   = $(if ($RL -and $RL.seven_day) { $RL.seven_day.resets_at } else { $null })
+                cost_usd              = $(if ($Status.cost) { $Status.cost.total_cost_usd } else { $null })
+                context_pct           = $(if ($CW) { $CW.used_percentage } else { $null })
+                context_window_size   = $(if ($CW) { $CW.context_window_size } else { $null })
+                cache_read_tokens     = $(if ($CW -and $CW.current_usage) { $CW.current_usage.cache_read_input_tokens } else { $null })
+                cache_creation_tokens = $(if ($CW -and $CW.current_usage) { $CW.current_usage.cache_creation_input_tokens } else { $null })
+                exceeds_200k          = $Status.exceeds_200k_tokens
+            }
+            $LogFile = Join-Path $HistoryDir ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.jsonl')
+            [System.IO.File]::AppendAllText($LogFile, (($Sample | ConvertTo-Json -Compress) + "`n"))
+            [System.IO.File]::WriteAllText($StateFile, [string]$NowEpoch)
+        }
+    }
+} catch { }
 exit 0

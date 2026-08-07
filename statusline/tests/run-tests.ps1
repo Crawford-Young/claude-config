@@ -133,6 +133,63 @@ $out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
 Assert-True ($out.Contains('[NEWCAVE]')) 'C2 newest hash dir wins'
 Assert-True (-not $out.Contains('[OLDCAVE]')) 'C2 old hash dir ignored'
 
+# ---- H1: full fixture appends one schema-complete sample ----
+$tmp7 = New-TestTmp
+$hist7 = Join-Path $tmp7 'hist'
+$out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
+    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp7 'no-cave')
+    CLAUDE_USAGE_HISTORY_DIR  = $hist7
+    CLAUDE_USAGE_THROTTLE_DIR = $tmp7
+}
+$logFile = Join-Path $hist7 ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.jsonl')
+Assert-True (Test-Path $logFile) 'H1 log file created'
+$lines = @([System.IO.File]::ReadAllLines($logFile))
+Assert-True ($lines.Count -eq 1) 'H1 exactly one line'
+$s = $lines[0] | ConvertFrom-Json
+Assert-True ($s.session_id -eq '4ebbd908-ff44-4647-a06b-2f807203d3b8') 'H1 session_id'
+Assert-True ($s.five_hour_pct -eq 22) 'H1 five_hour_pct'
+Assert-True ($s.seven_day_pct -eq 4) 'H1 seven_day_pct'
+Assert-True ($s.cache_read_tokens -eq 99099) 'H1 cache_read_tokens'
+Assert-True ($s.model_id -eq 'claude-fable-5') 'H1 model_id'
+Assert-True ($null -ne $s.ts) 'H1 ts present'
+$stateFile = Join-Path $tmp7 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt'
+Assert-True (Test-Path $stateFile) 'H1 throttle state written'
+
+# ---- H2: recent state file suppresses append; stale one allows it ----
+$tmp8 = New-TestTmp
+$hist8 = Join-Path $tmp8 'hist'
+$state8 = Join-Path $tmp8 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt'
+$nowEpoch = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+[System.IO.File]::WriteAllText($state8, [string]($nowEpoch - 30))
+Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
+    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp8 'no-cave')
+    CLAUDE_USAGE_HISTORY_DIR  = $hist8
+    CLAUDE_USAGE_THROTTLE_DIR = $tmp8
+} | Out-Null
+$logFile8 = Join-Path $hist8 ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.jsonl')
+Assert-True (-not (Test-Path $logFile8)) 'H2 30s-old state suppresses sample'
+[System.IO.File]::WriteAllText($state8, [string]($nowEpoch - 120))
+Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
+    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp8 'no-cave')
+    CLAUDE_USAGE_HISTORY_DIR  = $hist8
+    CLAUDE_USAGE_THROTTLE_DIR = $tmp8
+} | Out-Null
+Assert-True ((Test-Path $logFile8) -and (@([System.IO.File]::ReadAllLines($logFile8)).Count -eq 1)) 'H2 120s-old state allows sample'
+
+# ---- H3: no rate_limits still logs a sample with nulls ----
+$tmp9 = New-TestTmp
+$hist9 = Join-Path $tmp9 'hist'
+Invoke-Statusline (Join-Path $Fixtures 'no-rate-limits.json') @{
+    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp9 'no-cave')
+    CLAUDE_USAGE_HISTORY_DIR  = $hist9
+    CLAUDE_USAGE_THROTTLE_DIR = $tmp9
+} | Out-Null
+$logFile9 = Join-Path $hist9 ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.jsonl')
+Assert-True (Test-Path $logFile9) 'H3 sample logged without rate_limits'
+$s9 = @([System.IO.File]::ReadAllLines($logFile9))[0] | ConvertFrom-Json
+Assert-True ($null -eq $s9.five_hour_pct) 'H3 five_hour_pct null'
+Assert-True ($null -ne $s9.cost_usd) 'H3 cost_usd still captured'
+
 Write-Host ""
 Write-Host "$($script:Pass) passed, $($script:Fail) failed"
 if ($script:Fail -gt 0) { exit 1 } else { exit 0 }
