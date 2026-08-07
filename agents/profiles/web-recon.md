@@ -16,4 +16,4 @@
 
 ## Open questions
 - Haiku ceiling on multi-page briefs?
-- n=0 — no performance data yet; grade first dispatches
+- n=1 (2026-08-07 P4a T6.6, haiku): single-page fetch + citation PASS — exact quote, section heading, corroborated gap-report fact; refused local-git question explicitly with no fabrication (used plain refusal prose, not the NEEDS_CONTEXT tag — acceptable, watch whether tag discipline matters at n>1). Grade 5. 38k tokens / 4 tool uses / 17s.
