@@ -1,8 +1,8 @@
 # usage-statusline.ps1 — Claude Code statusLine entry point.
 # stdin: statusline JSON (documented, code:statusline.md). stdout: one line,
-# caveman badge + 5h/7d rate-limit segment. Also appends a throttled usage
-# sample to the history log (Task 2). Fail-open: display renders even when
-# parsing or logging fails; never exits non-zero.
+# 5h/7d rate-limit fill bars. Also appends a throttled usage sample to the
+# history log (Task 2). Fail-open: display renders even when parsing or
+# logging fails; never exits non-zero.
 # PS 5.1 target. ASCII-only source; display glyphs from code points.
 $ErrorActionPreference = 'Stop'
 # Claude Code decodes statusline stdout as UTF-8; PS 5.1 default on redirected
@@ -12,6 +12,8 @@ $ErrorActionPreference = 'Stop'
 $Esc   = [char]27
 $Arrow = [char]8594
 $Dot   = [char]183
+$Full  = [char]9608
+$Empty = [char]9617
 
 function Get-DefaultOr([string]$Value, [string]$Default) {
     if ([string]::IsNullOrEmpty($Value)) { $Default } else { $Value }
@@ -24,24 +26,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($Raw)) { $Status = $Raw | ConvertFrom-Json }
 } catch { $Status = $null }
 
-# --- 2. caveman badge. Child process is mandatory: the plugin script calls
-#        `exit`, which would terminate an in-process caller. ---
-$Badge = ''
-try {
-    $CaveRoot = Get-DefaultOr $env:CLAUDE_USAGE_CAVEMAN_ROOT (Join-Path $HOME '.claude\plugins\cache\caveman\caveman')
-    if (Test-Path $CaveRoot) {
-        $CaveScript = Get-ChildItem -Path $CaveRoot -Directory |
-            Sort-Object LastWriteTime -Descending |
-            ForEach-Object { Join-Path $_.FullName 'hooks\caveman-statusline.ps1' } |
-            Where-Object { Test-Path $_ } |
-            Select-Object -First 1
-        if ($CaveScript) {
-            $Badge = (@(& powershell -NoProfile -ExecutionPolicy Bypass -File $CaveScript) -join '')
-        }
-    }
-} catch { $Badge = '' }
-
-# --- 3. usage segment ---
+# --- 2. usage segment: 8-cell fill bar per window ---
 $Segment = ''
 if ($Status -and $Status.rate_limits) {
     $Parts = @()
@@ -52,26 +37,27 @@ if ($Status -and $Status.rate_limits) {
         $W = $Status.rate_limits.($Win.Key)
         if ($W -and $null -ne $W.used_percentage) {
             $Pct = [int]$W.used_percentage
+            # Ceiling so any nonzero usage shows at least one filled cell.
+            $Cells = [Math]::Min(8, [int][Math]::Ceiling($Pct / 12.5))
+            $Bar = ("$Full" * $Cells) + ("$Empty" * (8 - $Cells))
             $Color = $(if ($Pct -ge 90) { "$Esc[31m" } elseif ($Pct -ge 70) { "$Esc[33m" } else { '' })
             $ResetCode = $(if ($Color) { "$Esc[0m" } else { '' })
             $When = ''
             if ($null -ne $W.resets_at) {
                 $When = "$Arrow" + [DateTimeOffset]::FromUnixTimeSeconds([long]$W.resets_at).ToLocalTime().ToString($Win.Fmt)
             }
-            $Parts += "$($Win.Label) $Color$Pct%$ResetCode$When"
+            $Parts += "$($Win.Label) $Color$Bar $Pct%$ResetCode$When"
         }
     }
     if ($Parts.Count -gt 0) { $Segment = $Parts -join " $Dot " }
 }
 
-# --- 4. emit. Never blank: a blank statusline is indistinguishable from a
+# --- 3. emit. Never blank: a blank statusline is indistinguishable from a
 #        crashed one (cold review F4) — degrade to model name, then sentinel. ---
-$Pieces = @($Badge, $Segment) | Where-Object { $_ }
-if ($Pieces.Count -eq 0) {
-    $Fallback = $(if ($Status -and $Status.model -and $Status.model.display_name) { [string]$Status.model.display_name } else { '[statusline]' })
-    $Pieces = @($Fallback)
+if (-not $Segment) {
+    $Segment = $(if ($Status -and $Status.model -and $Status.model.display_name) { [string]$Status.model.display_name } else { '[statusline]' })
 }
-[Console]::Write(($Pieces -join ' | '))
+[Console]::Write($Segment)
 
 # --- 5. history sample (throttled >= 60s/session; fail-open) ---
 # State file read via Get-Content is a single ASCII epoch line, not a UTF-8
