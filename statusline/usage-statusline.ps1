@@ -50,9 +50,10 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($Raw)) { $Status = $Raw | ConvertFrom-Json }
 } catch { $Status = $null }
 
-# --- 2. display pieces: repo@branch · model · effort · ctx bar+tokens ·
-#        5h bar · 7d bar · cost ---
-$Pieces = @()
+# --- 2. display rows: identity (repo@branch · model · effort · cost),
+#        then usage (ctx bar+tokens · 5h bar · 7d bar) ---
+$TopPieces = @()
+$BarPieces = @()
 if ($Status) {
     # Location: repo@branch when cwd is in a git checkout (worktrees show
     # their own dir name), bare folder name otherwise, short SHA when
@@ -74,11 +75,11 @@ if ($Status) {
             } else {
                 $Loc = Split-Path -Leaf $Dir
             }
-            if ($Loc) { $Pieces += $Loc }
+            if ($Loc) { $TopPieces += $Loc }
         }
     } catch { }
-    if ($Status.model -and $Status.model.display_name) { $Pieces += [string]$Status.model.display_name }
-    if ($Status.effort -and $Status.effort.level) { $Pieces += [string]$Status.effort.level }
+    if ($Status.model -and $Status.model.display_name) { $TopPieces += [string]$Status.model.display_name }
+    if ($Status.effort -and $Status.effort.level) { $TopPieces += [string]$Status.effort.level }
     $CW = $Status.context_window
     if ($CW -and $null -ne $CW.used_percentage) {
         $CtxPct = [int]$CW.used_percentage
@@ -91,7 +92,7 @@ if ($Status) {
             }
             $Counts = ' ' + (Format-Tokens $Used) + '/' + (Format-Tokens ([long]$CW.context_window_size))
         }
-        $Pieces += "ctx $(Get-FillBar $CtxPct)$Counts $(Get-UsageColor $CtxPct)$CtxPct%$Esc[0m"
+        $BarPieces += "ctx $(Get-FillBar $CtxPct)$Counts $(Get-UsageColor $CtxPct)$CtxPct%$Esc[0m"
     }
     if ($Status.rate_limits) {
         foreach ($Win in @(
@@ -105,19 +106,23 @@ if ($Status) {
                 if ($null -ne $W.resets_at) {
                     $When = "$Arrow" + [DateTimeOffset]::FromUnixTimeSeconds([long]$W.resets_at).ToLocalTime().ToString($Win.Fmt)
                 }
-                $Pieces += "$($Win.Label) $(Get-FillBar $Pct) $(Get-UsageColor $Pct)$Pct%$Esc[0m$When"
+                $BarPieces += "$($Win.Label) $(Get-FillBar $Pct) $(Get-UsageColor $Pct)$Pct%$Esc[0m$When"
             }
         }
     }
     if ($Status.cost -and $null -ne $Status.cost.total_cost_usd) {
-        $Pieces += ('$' + ('{0:0.00}' -f [double]$Status.cost.total_cost_usd))
+        $TopPieces += ('$' + ('{0:0.00}' -f [double]$Status.cost.total_cost_usd))
     }
 }
 
-# --- 3. emit. Never blank: a blank statusline is indistinguishable from a
-#        crashed one (cold review F4) — degrade to sentinel. ---
-if ($Pieces.Count -eq 0) { $Pieces = @('[statusline]') }
-[Console]::Write(($Pieces -join " $Dot "))
+# --- 3. emit: identity row, then usage row; empty rows dropped. Never
+#        blank: a blank statusline is indistinguishable from a crashed one
+#        (cold review F4) — degrade to sentinel. ---
+$Rows = @()
+if ($TopPieces.Count -gt 0) { $Rows += ($TopPieces -join " $Dot ") }
+if ($BarPieces.Count -gt 0) { $Rows += ($BarPieces -join " $Dot ") }
+if ($Rows.Count -eq 0) { $Rows = @('[statusline]') }
+[Console]::Write(($Rows -join "`n"))
 
 # --- 5. history sample (throttled >= 60s/session; fail-open) ---
 # State file read via Get-Content is a single ASCII epoch line, not a UTF-8
