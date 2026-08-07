@@ -91,6 +91,7 @@ routing-verification issue #6.)
 | Brainstorm hits a genuine design fork — 2+ viable approaches with material trade-offs, or user says "debate this" | `persona-debate` |
 | After brainstorm, before coding | `superpowers:writing-plans` |
 | Writing or reviewing any plan or checklist — premise checks, contract-surface and invariant-consumer enumeration, verbatim-code checks, spec-time user questions | `plan-premises` (relocated from root `CLAUDE.md` §1, 2026-07-28) |
+| Editing the workspace harness — CLAUDE.md chain, claude-config, hooks, skills, agent profiles, settings.json | `harness-editing` (promoted from docs/harness-evolution, 2026-08-06; hand-loaded via CLAUDE.md §Workflow trigger, never description-routed) |
 | Executing any multi-task plan/checklist, wave start, dispatch or model decisions, spawn decisions at any depth | `agent-factory` (factory decides inline vs spawn at execution time; `inline-execute` remains the no-spawn path) |
 | Executing a plan handed to a **separate fresh session** (rare — checklist workflows above are the default) | `superpowers:executing-plans` |
 | 2–4 independent subtasks, no shared state | `superpowers:dispatching-parallel-agents` |
@@ -127,7 +128,7 @@ Inline (current session) → use the skill. Subagent dispatch → use the predef
 | Scaffolding a new repository | `new-repo` | `new-repo-agent` |
 | Releasing the component library | `release` | `wave-release-agent` |
 | Doc/MD-only work via dispatch | — | `docs-agent` |
-| Recon, implementation, review, workstream management | — | `recon` / `implementer` / `reviewer` / `manager` |
+| Recon (local or web/docs), implementation, review, workstream management | — | `recon` / `web-recon` / `implementer` / `reviewer` / `manager` |
 | Executing a small-task checklist inline | `inline-execute` | — |
 | Spawn decisions, dispatch, model routing (via profiles), performance MDs, type authoring | `agent-factory` | — |
 | Enumeration-shaped fan-out (consumer sweeps, adversarial verify) — propose Workflow tool | `agent-factory` §Workflow Lane | — |
