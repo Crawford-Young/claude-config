@@ -10,6 +10,14 @@ $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Script = Join-Path (Split-Path -Parent $Here) 'usage-statusline.ps1'
 $Fixtures = Join-Path $Here 'fixtures'
 $Arrow = [char]8594
+$Full  = [char]9608
+$Empty = [char]9617
+
+# Bar helper mirrors the script's spec: 8 cells, filled = min(8, ceil(pct/12.5)).
+function Get-Bar([int]$Pct) {
+    $n = [Math]::Min(8, [int][Math]::Ceiling($Pct / 12.5))
+    return ("$Full" * $n) + ("$Empty" * (8 - $n))
+}
 
 $script:Pass = 0
 $script:Fail = 0
@@ -24,14 +32,6 @@ function New-TestTmp {
     return $d
 }
 
-function New-FakeCaveman([string]$Root, [string]$DirName, [string]$Badge) {
-    $hooks = Join-Path (Join-Path $Root $DirName) 'hooks'
-    New-Item -ItemType Directory -Path $hooks -Force | Out-Null
-    $stub = '[Console]::Write("' + $Badge + '")'
-    [System.IO.File]::WriteAllText((Join-Path $hooks 'caveman-statusline.ps1'), $stub)
-    return (Join-Path $Root $DirName)
-}
-
 function Invoke-Statusline([string]$FixturePath, [hashtable]$EnvVars) {
     foreach ($k in $EnvVars.Keys) { Set-Item -Path ("Env:" + $k) -Value $EnvVars[$k] }
     try {
@@ -44,100 +44,53 @@ function Invoke-Statusline([string]$FixturePath, [hashtable]$EnvVars) {
     }
 }
 
-# ---- D1: full fixture renders both windows + badge ----
+# ---- D1: full fixture renders both windows as bars, no caveman badge ----
 $tmp = New-TestTmp
-$root = Join-Path $tmp 'cave'
-New-FakeCaveman $root 'aaaa1111' '[FAKECAVEMAN]' | Out-Null
 $out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = $root
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp
 }
 $exp5h = [DateTimeOffset]::FromUnixTimeSeconds(1786074000).ToLocalTime().ToString('HH:mm')
 $exp7d = [DateTimeOffset]::FromUnixTimeSeconds(1786618800).ToLocalTime().ToString('ddd')
-Assert-True ($out.Contains('[FAKECAVEMAN]')) 'D1 badge present'
-Assert-True ($out.Contains("5h 22%$Arrow$exp5h")) 'D1 five-hour segment'
-Assert-True ($out.Contains("7d 4%$Arrow$exp7d")) 'D1 seven-day segment'
+Assert-True ($out.Contains("5h $(Get-Bar 22) 22%$Arrow$exp5h")) 'D1 five-hour bar segment'
+Assert-True ($out.Contains("7d $(Get-Bar 4) 4%$Arrow$exp7d")) 'D1 seven-day bar segment'
+Assert-True (-not $out.Contains('CAVE')) 'D1 no caveman badge'
 Assert-True ($script:LastExit -eq 0) 'D1 exit 0'
 
-# ---- D2: no rate_limits => badge only, no segment ----
+# ---- D2: no rate_limits => model-name fallback, no segment ----
 $tmp2 = New-TestTmp
-$root2 = Join-Path $tmp2 'cave'
-New-FakeCaveman $root2 'aaaa1111' '[FAKECAVEMAN]' | Out-Null
 $out = Invoke-Statusline (Join-Path $Fixtures 'no-rate-limits.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = $root2
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp2 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp2
 }
-Assert-True ($out.Contains('[FAKECAVEMAN]')) 'D2 badge present'
+Assert-True ($out -eq 'Fable 5') 'D2 model-name fallback'
 Assert-True (-not $out.Contains('5h ')) 'D2 no five-hour segment'
 Assert-True ($script:LastExit -eq 0) 'D2 exit 0'
 
-# ---- D3: malformed stdin => badge only, exit 0 ----
+# ---- D3: malformed stdin => sentinel line, never blank, exit 0 ----
 $tmp3 = New-TestTmp
-$root3 = Join-Path $tmp3 'cave'
-New-FakeCaveman $root3 'aaaa1111' '[FAKECAVEMAN]' | Out-Null
 $out = Invoke-Statusline (Join-Path $Fixtures 'malformed.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = $root3
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp3 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp3
 }
-Assert-True ($out.Contains('[FAKECAVEMAN]')) 'D3 badge present on malformed input'
+Assert-True ($out -eq '[statusline]') 'D3 sentinel on malformed input'
 Assert-True ($script:LastExit -eq 0) 'D3 exit 0'
 
-# ---- D4: color thresholds (92 => red 31, 75 => yellow 33) ----
+# ---- D4: color thresholds wrap bar+pct (92 => red 31, 75 => yellow 33) ----
 $tmp4 = New-TestTmp
-$root4 = Join-Path $tmp4 'cave'
-New-FakeCaveman $root4 'aaaa1111' '[FAKECAVEMAN]' | Out-Null
 $out = Invoke-Statusline (Join-Path $Fixtures 'high-usage.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = $root4
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp4 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp4
 }
 $esc = [char]27
-Assert-True ($out.Contains("$esc[31m92%")) 'D4 five-hour red at 92'
-Assert-True ($out.Contains("$esc[33m75%")) 'D4 seven-day yellow at 75'
-
-# ---- C1: caveman root missing => segment only, exit 0 ----
-$tmp5 = New-TestTmp
-$out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp5 'does-not-exist')
-    CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp5 'hist')
-    CLAUDE_USAGE_THROTTLE_DIR = $tmp5
-}
-Assert-True (-not $out.Contains('FAKECAVEMAN')) 'C1 no badge'
-Assert-True ($out.Contains('5h 22%')) 'C1 segment still renders'
-Assert-True ($script:LastExit -eq 0) 'C1 exit 0'
-
-# ---- D5: malformed stdin + no caveman => sentinel line, never blank ----
-$tmpA = New-TestTmp
-$out = Invoke-Statusline (Join-Path $Fixtures 'malformed.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmpA 'does-not-exist')
-    CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmpA 'hist')
-    CLAUDE_USAGE_THROTTLE_DIR = $tmpA
-}
-Assert-True ($out -eq '[statusline]') 'D5 sentinel on fully-degraded input'
-Assert-True ($script:LastExit -eq 0) 'D5 exit 0'
-
-# ---- C2: two hash dirs => newest LastWriteTime wins ----
-$tmp6 = New-TestTmp
-$root6 = Join-Path $tmp6 'cave'
-$old = New-FakeCaveman $root6 'oldhash' '[OLDCAVE]'
-New-FakeCaveman $root6 'newhash' '[NEWCAVE]' | Out-Null
-(Get-Item $old).LastWriteTime = (Get-Date).AddDays(-30)
-$out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = $root6
-    CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp6 'hist')
-    CLAUDE_USAGE_THROTTLE_DIR = $tmp6
-}
-Assert-True ($out.Contains('[NEWCAVE]')) 'C2 newest hash dir wins'
-Assert-True (-not $out.Contains('[OLDCAVE]')) 'C2 old hash dir ignored'
+Assert-True ($out.Contains("$esc[31m$(Get-Bar 92) 92%")) 'D4 five-hour red bar at 92'
+Assert-True ($out.Contains("$esc[33m$(Get-Bar 75) 75%")) 'D4 seven-day yellow bar at 75'
+Assert-True ($script:LastExit -eq 0) 'D4 exit 0'
 
 # ---- H1: full fixture appends one schema-complete sample ----
 $tmp7 = New-TestTmp
 $hist7 = Join-Path $tmp7 'hist'
 $out = Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp7 'no-cave')
     CLAUDE_USAGE_HISTORY_DIR  = $hist7
     CLAUDE_USAGE_THROTTLE_DIR = $tmp7
 }
@@ -162,7 +115,6 @@ $state8 = Join-Path $tmp8 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f80720
 $nowEpoch = [DateTimeOffset]::Now.ToUnixTimeSeconds()
 [System.IO.File]::WriteAllText($state8, [string]($nowEpoch - 30))
 Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp8 'no-cave')
     CLAUDE_USAGE_HISTORY_DIR  = $hist8
     CLAUDE_USAGE_THROTTLE_DIR = $tmp8
 } | Out-Null
@@ -170,7 +122,6 @@ $logFile8 = Join-Path $hist8 ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.json
 Assert-True (-not (Test-Path $logFile8)) 'H2 30s-old state suppresses sample'
 [System.IO.File]::WriteAllText($state8, [string]($nowEpoch - 120))
 Invoke-Statusline (Join-Path $Fixtures 'full.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp8 'no-cave')
     CLAUDE_USAGE_HISTORY_DIR  = $hist8
     CLAUDE_USAGE_THROTTLE_DIR = $tmp8
 } | Out-Null
@@ -180,7 +131,6 @@ Assert-True ((Test-Path $logFile8) -and (@([System.IO.File]::ReadAllLines($logFi
 $tmp9 = New-TestTmp
 $hist9 = Join-Path $tmp9 'hist'
 Invoke-Statusline (Join-Path $Fixtures 'no-rate-limits.json') @{
-    CLAUDE_USAGE_CAVEMAN_ROOT = (Join-Path $tmp9 'no-cave')
     CLAUDE_USAGE_HISTORY_DIR  = $hist9
     CLAUDE_USAGE_THROTTLE_DIR = $tmp9
 } | Out-Null
