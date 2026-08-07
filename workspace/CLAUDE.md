@@ -78,6 +78,8 @@ Always write and commit the spec before producing an implementation plan. No exc
 
 **Uncertainty rule:** before any multi-step feature, surface top assumptions explicitly and confirm with the user before writing code — wrong assumptions presented as correct are the primary cause of wasted iteration.
 
+**Display-surface rule:** a spec section describing user-visible output (terminal, UI, statusline) carries a rendered mock at spec approval — prose approval of a visual surface is not approval; the user approves the version in their head, and the divergence surfaces as redo rounds at live QA. Same rule per display ITERATION, QA fixes included. Field list comes from the user's working context (multi-session, worktrees), not just the data source. (2026-08-06 P2 statusline: 5 QA rounds, 2 shipped blind, spec-gap location piece — `docs/harness-evolution/issues/done/2026-08-06-p2-usage-monitor-issues.md` #3.)
+
 ### 2. Visual / Token Work — Preview Gate
 
 All rules live in the `visual-asset-gates` skill — load before any visual, asset, image-pipeline, or preview-gate task.

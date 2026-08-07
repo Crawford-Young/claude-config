@@ -11,6 +11,8 @@ approaching a compact boundary, or when launching a background session.
 
 - `claude --bg` dispatches prefer `--output-format json --json-schema <schema-file>` when the result feeds orchestration (typed results, no prose parsing), and `--bare` for reproducible gate runs (skips hooks/skills/MCP/CLAUDE.md discovery — no local-config bleed). Background-task grace at exit is capped (~10 min default); raise via `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` if a `--bg` wave legitimately outlives it. (Docs-verified 2026-07-27.)
 
+- **Background-agent hygiene: after a background agent's result is received, stop/clear its task registration** (TaskList → TaskStop) — finished agents accumulate silently across compactions and clutter the task list until the user clears them by hand, and a stale registration is indistinguishable from a hung agent. (2026-08-06 harness-evolution: 11 registrations from P1's sweep fan-out survived two waves and a compaction; user stopped them manually at P2 close.)
+
 ## Session Start Protocol
 
 1. Scan `docs/<project>/checklists/active/` — each file is an in-flight phase
