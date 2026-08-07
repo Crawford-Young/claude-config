@@ -12,11 +12,35 @@ $ErrorActionPreference = 'Stop'
 $Esc   = [char]27
 $Arrow = [char]8594
 $Dot   = [char]183
-$Full  = [char]9608
-$Empty = [char]9617
+$Tick  = [char]9648
+$Blank = [char]9649
 
 function Get-DefaultOr([string]$Value, [string]$Default) {
     if ([string]::IsNullOrEmpty($Value)) { $Default } else { $Value }
+}
+
+# Threshold color for a usage percentage: green, yellow >=70, red >=90.
+function Get-UsageColor([int]$Pct) {
+    if ($Pct -ge 90) { "$Esc[31m" } elseif ($Pct -ge 70) { "$Esc[33m" } else { "$Esc[32m" }
+}
+
+# 10-cell fill bar, 1 cell = 10%, ceiling so any nonzero usage shows one
+# cell. Filled cells in the threshold color, empty cells dim.
+function Get-FillBar([int]$Pct) {
+    $Cells = [Math]::Min(10, [int][Math]::Ceiling($Pct / 10.0))
+    $Color = Get-UsageColor $Pct
+    return "$Color$("$Tick" * $Cells)$Esc[0m$Esc[90m$("$Blank" * (10 - $Cells))$Esc[0m"
+}
+
+# Compact token count: 101889 -> 102k, 1000000 -> 1M.
+function Format-Tokens([long]$N) {
+    if ($N -ge 1000000) {
+        $M = $N / 1000000.0
+        if ($M -eq [Math]::Floor($M)) { return ('{0}M' -f [long]$M) }
+        return ('{0:0.0}M' -f $M)
+    }
+    if ($N -ge 1000) { return ('{0}k' -f [long][Math]::Round($N / 1000.0)) }
+    return [string]$N
 }
 
 # --- 1. stdin -> JSON (malformed/empty => $null, display degrades) ---
@@ -26,38 +50,50 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($Raw)) { $Status = $Raw | ConvertFrom-Json }
 } catch { $Status = $null }
 
-# --- 2. usage segment: 8-cell fill bar per window ---
-$Segment = ''
-if ($Status -and $Status.rate_limits) {
-    $Parts = @()
-    foreach ($Win in @(
-        @{ Key = 'five_hour'; Label = '5h'; Fmt = 'HH:mm' },
-        @{ Key = 'seven_day'; Label = '7d'; Fmt = 'ddd' }
-    )) {
-        $W = $Status.rate_limits.($Win.Key)
-        if ($W -and $null -ne $W.used_percentage) {
-            $Pct = [int]$W.used_percentage
-            # Ceiling so any nonzero usage shows at least one filled cell.
-            $Cells = [Math]::Min(8, [int][Math]::Ceiling($Pct / 12.5))
-            $Bar = ("$Full" * $Cells) + ("$Empty" * (8 - $Cells))
-            $Color = $(if ($Pct -ge 90) { "$Esc[31m" } elseif ($Pct -ge 70) { "$Esc[33m" } else { '' })
-            $ResetCode = $(if ($Color) { "$Esc[0m" } else { '' })
-            $When = ''
-            if ($null -ne $W.resets_at) {
-                $When = "$Arrow" + [DateTimeOffset]::FromUnixTimeSeconds([long]$W.resets_at).ToLocalTime().ToString($Win.Fmt)
+# --- 2. display pieces: model · effort · ctx bar+tokens · 5h bar · 7d bar · cost ---
+$Pieces = @()
+if ($Status) {
+    if ($Status.model -and $Status.model.display_name) { $Pieces += [string]$Status.model.display_name }
+    if ($Status.effort -and $Status.effort.level) { $Pieces += [string]$Status.effort.level }
+    $CW = $Status.context_window
+    if ($CW -and $null -ne $CW.used_percentage) {
+        $CtxPct = [int]$CW.used_percentage
+        $Counts = ''
+        if ($CW.current_usage -and $null -ne $CW.context_window_size) {
+            $U = $CW.current_usage
+            $Used = [long]0
+            foreach ($F in @($U.input_tokens, $U.output_tokens, $U.cache_creation_input_tokens, $U.cache_read_input_tokens)) {
+                if ($null -ne $F) { $Used += [long]$F }
             }
-            $Parts += "$($Win.Label) $Color$Bar $Pct%$ResetCode$When"
+            $Counts = ' ' + (Format-Tokens $Used) + '/' + (Format-Tokens ([long]$CW.context_window_size))
+        }
+        $Pieces += "ctx $(Get-FillBar $CtxPct)$Counts $(Get-UsageColor $CtxPct)$CtxPct%$Esc[0m"
+    }
+    if ($Status.rate_limits) {
+        foreach ($Win in @(
+            @{ Key = 'five_hour'; Label = '5h'; Fmt = 'HH:mm' },
+            @{ Key = 'seven_day'; Label = '7d'; Fmt = 'ddd' }
+        )) {
+            $W = $Status.rate_limits.($Win.Key)
+            if ($W -and $null -ne $W.used_percentage) {
+                $Pct = [int]$W.used_percentage
+                $When = ''
+                if ($null -ne $W.resets_at) {
+                    $When = "$Arrow" + [DateTimeOffset]::FromUnixTimeSeconds([long]$W.resets_at).ToLocalTime().ToString($Win.Fmt)
+                }
+                $Pieces += "$($Win.Label) $(Get-FillBar $Pct) $(Get-UsageColor $Pct)$Pct%$Esc[0m$When"
+            }
         }
     }
-    if ($Parts.Count -gt 0) { $Segment = $Parts -join " $Dot " }
+    if ($Status.cost -and $null -ne $Status.cost.total_cost_usd) {
+        $Pieces += ('$' + ('{0:0.00}' -f [double]$Status.cost.total_cost_usd))
+    }
 }
 
 # --- 3. emit. Never blank: a blank statusline is indistinguishable from a
-#        crashed one (cold review F4) — degrade to model name, then sentinel. ---
-if (-not $Segment) {
-    $Segment = $(if ($Status -and $Status.model -and $Status.model.display_name) { [string]$Status.model.display_name } else { '[statusline]' })
-}
-[Console]::Write($Segment)
+#        crashed one (cold review F4) — degrade to sentinel. ---
+if ($Pieces.Count -eq 0) { $Pieces = @('[statusline]') }
+[Console]::Write(($Pieces -join " $Dot "))
 
 # --- 5. history sample (throttled >= 60s/session; fail-open) ---
 # State file read via Get-Content is a single ASCII epoch line, not a UTF-8
