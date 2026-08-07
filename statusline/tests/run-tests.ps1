@@ -26,6 +26,17 @@ function Get-Plain([string]$s) {
     return ($s -replace "$([char]27)\[[0-9;]*m", '')
 }
 
+# Copy of a fixture with cwd/workspace.current_dir repointed — the location
+# piece resolves git state from the real directory, so tests control it.
+function New-PatchedFixture([string]$FixturePath, [string]$Cwd, [string]$OutDir) {
+    $j = [System.IO.File]::ReadAllText($FixturePath) | ConvertFrom-Json
+    $j.cwd = $Cwd
+    $j.workspace.current_dir = $Cwd
+    $p = Join-Path $OutDir 'patched-fixture.json'
+    [System.IO.File]::WriteAllText($p, ($j | ConvertTo-Json -Depth 10 -Compress))
+    return $p
+}
+
 $script:Pass = 0
 $script:Fail = 0
 function Assert-True([bool]$Cond, [string]$Name) {
@@ -73,13 +84,16 @@ Assert-True ($out.Contains("$esc[32m")) 'D1 green fill below 70'
 Assert-True (-not $out.Contains('CAVE')) 'D1 no caveman badge'
 Assert-True ($script:LastExit -eq 0) 'D1 exit 0'
 
-# ---- D2: no rate_limits => prefix/ctx/cost only, no rate bars ----
+# ---- D2: no rate_limits => location/prefix/ctx/cost only, no rate bars ----
 $tmp2 = New-TestTmp
-$out = Invoke-Statusline (Join-Path $Fixtures 'no-rate-limits.json') @{
+$d2dir = Join-Path $tmp2 'd2-plain'
+New-Item -ItemType Directory -Path $d2dir -Force | Out-Null
+$fixD2 = New-PatchedFixture (Join-Path $Fixtures 'no-rate-limits.json') $d2dir $tmp2
+$out = Invoke-Statusline $fixD2 @{
     CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmp2 'hist')
     CLAUDE_USAGE_THROTTLE_DIR = $tmp2
 }
-Assert-True ((Get-Plain $out) -eq "Fable 5 $Dot high $Dot ctx $(Get-Bar 10) 102k/1M 10% $Dot `$3.13") 'D2 prefix-only fallback'
+Assert-True ((Get-Plain $out) -eq "d2-plain $Dot Fable 5 $Dot high $Dot ctx $(Get-Bar 10) 102k/1M 10% $Dot `$3.13") 'D2 prefix-only fallback'
 Assert-True (-not $out.Contains('5h ')) 'D2 no five-hour segment'
 Assert-True ($script:LastExit -eq 0) 'D2 exit 0'
 
@@ -104,6 +118,31 @@ Assert-True ($plain4.Contains("7d $(Get-Bar 75) 75%")) 'D4 seven-day 8-cell bar 
 Assert-True ($out.Contains("$esc[31m")) 'D4 red present at 92'
 Assert-True ($out.Contains("$esc[33m")) 'D4 yellow present at 75'
 Assert-True ($script:LastExit -eq 0) 'D4 exit 0'
+
+# ---- L1: cwd inside a git repo => leads with repo@branch ----
+$tmpL1 = New-TestTmp
+$repoL1 = Join-Path $tmpL1 'my-repo'
+New-Item -ItemType Directory -Path $repoL1 -Force | Out-Null
+& git -C $tmpL1 init -b 'feat/test-branch' 'my-repo' 2>&1 | Out-Null
+$fixL1 = New-PatchedFixture (Join-Path $Fixtures 'full.json') $repoL1 $tmpL1
+$out = Invoke-Statusline $fixL1 @{
+    CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmpL1 'hist')
+    CLAUDE_USAGE_THROTTLE_DIR = $tmpL1
+}
+Assert-True ((Get-Plain $out).StartsWith("my-repo@feat/test-branch $Dot ")) 'L1 leads with repo@branch'
+Assert-True ($script:LastExit -eq 0) 'L1 exit 0'
+
+# ---- L2: cwd not a git repo => leads with bare folder name ----
+$tmpL2 = New-TestTmp
+$plainDir = Join-Path $tmpL2 'plain-folder'
+New-Item -ItemType Directory -Path $plainDir -Force | Out-Null
+$fixL2 = New-PatchedFixture (Join-Path $Fixtures 'full.json') $plainDir $tmpL2
+$out = Invoke-Statusline $fixL2 @{
+    CLAUDE_USAGE_HISTORY_DIR  = (Join-Path $tmpL2 'hist')
+    CLAUDE_USAGE_THROTTLE_DIR = $tmpL2
+}
+Assert-True ((Get-Plain $out).StartsWith("plain-folder $Dot ")) 'L2 leads with folder name'
+Assert-True ($script:LastExit -eq 0) 'L2 exit 0'
 
 # ---- H1: full fixture appends one schema-complete sample ----
 $tmp7 = New-TestTmp

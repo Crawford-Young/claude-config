@@ -50,9 +50,33 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($Raw)) { $Status = $Raw | ConvertFrom-Json }
 } catch { $Status = $null }
 
-# --- 2. display pieces: model · effort · ctx bar+tokens · 5h bar · 7d bar · cost ---
+# --- 2. display pieces: repo@branch · model · effort · ctx bar+tokens ·
+#        5h bar · 7d bar · cost ---
 $Pieces = @()
 if ($Status) {
+    # Location: repo@branch when cwd is in a git checkout (worktrees show
+    # their own dir name), bare folder name otherwise, short SHA when
+    # detached. Git runs through cmd /c with 2>nul — under EAP Stop, a
+    # PowerShell-level stderr redirect of a native command throws.
+    try {
+        $Dir = $(if ($Status.workspace -and $Status.workspace.current_dir) { [string]$Status.workspace.current_dir } else { [string]$Status.cwd })
+        if ($Dir -and (Test-Path -LiteralPath $Dir)) {
+            $Loc = ''
+            $Top = & cmd /c "git -C `"$Dir`" rev-parse --show-toplevel 2>nul"
+            if ($LASTEXITCODE -eq 0 -and $Top) {
+                $Loc = Split-Path -Leaf ([string]$Top)
+                $Branch = & cmd /c "git -C `"$Dir`" branch --show-current 2>nul"
+                if ($LASTEXITCODE -eq 0 -and [string]::IsNullOrEmpty($Branch)) {
+                    $Branch = & cmd /c "git -C `"$Dir`" rev-parse --short HEAD 2>nul"
+                    if ($LASTEXITCODE -ne 0) { $Branch = '' }
+                }
+                if ($Branch) { $Loc = "$Loc@$Branch" }
+            } else {
+                $Loc = Split-Path -Leaf $Dir
+            }
+            if ($Loc) { $Pieces += $Loc }
+        }
+    } catch { }
     if ($Status.model -and $Status.model.display_name) { $Pieces += [string]$Status.model.display_name }
     if ($Status.effort -and $Status.effort.level) { $Pieces += [string]$Status.effort.level }
     $CW = $Status.context_window
