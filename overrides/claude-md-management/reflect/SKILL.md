@@ -50,11 +50,7 @@ Specific, concrete edits — each tied to an observation above. Include:
 
 ### Phase 3: Dialogue
 
-Present the self-reflect report to the user. Before asking for input, prompt:
-
-> "Type `/usage` to check this session's token consumption — then tell me what you noticed that I missed."
-
-Wait for the `/usage` output and user response together before moving to Phase 4.
+Present the self-reflect report to the user, then ask what they noticed that was missed. Token data comes from the statusline and the OTel usage report (`node claude-config/telemetry/usage-report.mjs <wave checklist>`) — do not prompt `/usage` (retired 2026-08-08 P3 reflect; statusline + telemetry supersede it; `/usage` remains only for sessions predating the telemetry env config).
 
 Actively invite:
 - Corrections to Claude's self-assessment
@@ -99,9 +95,11 @@ Sweep every performance MD in `~/code/docs/<project>/agent-logs/` for the wave:
 
 After all file updates are applied:
 
-**Context clear (project end only)** — If this reflect marks the end of the full project (all phases complete, not just one phase):
+**Context boundary (P3 rule, root CLAUDE.md §7)** — Wave/phase reflect complete with more work ahead: emit the continuation prompt (`continuation` skill), verify checklist ticks + deviations + gate-baseline SHA on disk, then:
+> "Wave closed. `/clear` and paste the continuation prompt to resume."
+Full project end (all phases complete):
 > "Project complete. Type `/clear` to start a fresh context for your next work."
-If only a phase ended (more work ahead): skip — orchestrator will `/compact` at the next wave boundary instead.
+`/compact` is mid-wave only — never the boundary default.
 
 ## What to Look For
 

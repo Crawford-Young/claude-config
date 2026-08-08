@@ -34,7 +34,7 @@ checklist, appending to a log, or closing a wave — not on every dispatch decis
 <!-- one line per spawn/escalation: parent → child-type/model · task · outcome · perf-MD path for managing children -->
 
 ## Wave Scorecard
-<!-- reflect fills: spawn-tree review (justification quality · depth · count) · routing accuracy vs profiles · perf-MD completeness · redo warm/cold · context % at wave end (/context) · /usage summary -->
+<!-- reflect fills: spawn-tree review (justification quality · depth · count) · routing accuracy vs profiles · perf-MD completeness · redo warm/cold · context % at wave end (/context) · usage-report summary -->
 
 ## Reflect Log
 ```
@@ -60,13 +60,13 @@ One line each. Never paste raw subagent output into the log.
 
 ## Wave Scorecard Protocol (at reflect)
 
-Reflect Phase 1 reads the checklist and finds the Orchestration Log + empty Scorecard. During reflect Phase 3, before the `/usage` prompt, also ask the user to run `/context` and paste both. Then fill:
+Reflect Phase 1 reads the checklist and finds the Orchestration Log + empty Scorecard. During reflect Phase 3, ask the user to run `/context` and paste it (the `/usage` prompt is retired — statusline + usage-report, 2026-08-08 P3 reflect). Then fill:
 
 - **Spawn-tree review** — every spawn's justification: did it earn its cold start? Depth and count vs what the work needed
 - **Routing accuracy** — dispatches that matched profile guidance vs misroutes; escalation count + signals fired
 - **Perf-MD completeness** — every managing agent wrote one, write-as-you-go honored, grades outcome-anchored
 - **Redo economics** — `redo-warm` vs `redo-cold` counts and outcomes
-- **Context efficiency** — `/context` % at wave end · `/usage` totals
+- **Context efficiency** — `/context` % at wave end · usage-report totals
 
 Scorecard evidence drives profile updates at reflect. The scorecard travels with the checklist to `done/` as the historical record.
 
@@ -98,4 +98,4 @@ At every wave-end reflect:
 1. All checklist tasks ticked `[x]`
 2. Move checklist `active/` → `done/` — `git mv` stages the INDEX blob, not the working-tree file; edits made after the mv (final ticks, done-stamps) need an explicit `git add` or the commit ships the stale blob (2026-08-08 P4c)
 3. **Run `claude-md-management:reflect` — mandatory.** Fill the Wave Scorecard; run the profile rollup (§Reflect Integration)
-4. Reflect Phase 6 prompts `/usage`, then `/clear` if the project is fully done
+4. Reflect Phase 6 runs the wave-boundary sequence: continuation prompt emitted (`continuation` skill) → checklist ticks + deviations + gate-baseline SHA verified on disk → `/clear` (P3 boundary rule, root CLAUDE.md §7). Project fully done → same sequence, no continuation needed unless follow-ups remain.

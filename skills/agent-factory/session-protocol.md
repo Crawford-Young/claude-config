@@ -21,6 +21,10 @@ approaching a compact boundary, or when launching a background session.
 4. Find the first unchecked task — resume there
 5. Do not re-read specs or full plan prose unless a specific task requires design decisions
 
+- **Resume dialog (Pro/Max, >1h idle + >100k tokens): pick "Resume full session as-is"** — the summary option auto-compacts unfocused, exactly on multi-day QA-tail resumes (G27). Marker discipline owns compaction.
+- **Name sessions per wave** (`/rename <project>-<wave>`); `claude --from-pr <n>` opens the session picker FILTERED to that PR's sessions (G58 — it filters, not resumes directly) — complements the checklist scan, never replaces it.
+- **Wave-boundary resume:** next session starts from the continuation prompt + checklist scan (P3 boundary rule, root CLAUDE.md §7) — not from a compact summary.
+
 ## Compact Discipline
 
 At every `<!-- COMPACT POINT -->` marker:

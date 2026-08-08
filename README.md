@@ -32,7 +32,7 @@ Per-project planning docs (`~/code/docs/<domain>/<project>/`) stay local — chu
 
 | Skill | Trigger | Purpose |
 |---|---|---|
-| `continuation` | After heavy sessions / phase ends | Generates a structured handoff file before `/clear` so the next session resumes without loss |
+| `continuation` | Every wave boundary + heavy-session `/clear` | Generates a paste-ready prompt (never a file) before `/clear` so the next session resumes without loss |
 | `inline-execute` | Executing a checklist with ≤2 files per task | Runs a checklist plan inline without subagent overhead |
 | `new-component` | "add a component", "create a [name] component" | Full TDD workflow for Radix UI + CVA + Tailwind components — test → implement → export → story → check |
 | `new-repo` | "new project", "create a repo", "scaffold" | 24-step production scaffold: git, env, justfile, ESLint, Husky, Vitest, Playwright, Storybook, CI, auth, monitoring |
