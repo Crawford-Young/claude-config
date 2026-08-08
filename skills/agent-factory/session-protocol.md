@@ -7,7 +7,7 @@ approaching a compact boundary, or when launching a background session.
 
 ## Session Overflow Lane
 
-`claude --bg "<prompt>"` spawns a full background Claude Code session with its own depth-5 tree — for whole-wave parallelism (e.g. two repos at once). **Orchestrator-only, user-cleared per launch** — it runs unattended and bills independently. Results come back via files/repo, not conversation.
+`claude --bg "<prompt>"` spawns a full background Claude Code session with its own depth-3 tree (default, v2.1.219+) — for whole-wave parallelism (e.g. two repos at once). **Orchestrator-only, user-cleared per launch** — it runs unattended and bills independently. Results come back via files/repo, not conversation.
 
 - `claude --bg` dispatches prefer `--output-format json --json-schema <schema-file>` when the result feeds orchestration (typed results, no prose parsing), and `--bare` for reproducible gate runs (skips hooks/skills/MCP/CLAUDE.md discovery — no local-config bleed). Background-task grace at exit is capped (~10 min default); raise via `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` if a `--bg` wave legitimately outlives it. (Docs-verified 2026-07-27.)
 

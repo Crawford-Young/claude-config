@@ -9,7 +9,7 @@ description: Use when executing any multi-task plan or checklist, deciding wheth
 
 Canonical orchestration standards. Supersedes the `orchestrate` skill (tier ladder T1–T4, plan profiles, and the Layer-2 routing table are retired — 2026-07-15).
 
-The model: **demand-driven recursive spawning.** Any agent holding a task may spawn subagents when the task exceeds what it can do well inline — and those subagents may spawn further (platform wall: depth 5 below the main session; levels 1–4 can spawn, level 5 cannot). Every managing agent judges its children and logs performance; reflect aggregates those logs into global per-type profiles that drive future routing.
+The model: **demand-driven recursive spawning.** Any agent holding a task may spawn subagents when the task exceeds what it can do well inline — and those subagents may spawn further (platform wall: depth 3 below the main session by default — v2.1.219+, env lever CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH; the deepest layer cannot spawn). Every managing agent judges its children and logs performance; reflect aggregates those logs into global per-type profiles that drive future routing.
 
 Two audiences:
 
@@ -33,7 +33,7 @@ Rules:
 
 - Each spawn gets a one-line justification — recorded in your performance MD entry for that child.
 - No plan-time tier or structure prediction. The checklist header carries a `**Factory:**` line; the actual spawn tree is recorded in the Orchestration Log as it happens.
-- Depth-5 platform wall. Soft economics keep real trees shallower — a tree pressing the wall is a planning smell.
+- Depth-3 platform wall (default, v2.1.219+; env CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH). Soft economics keep real trees shallower — a tree pressing the wall is a planning smell, and a manager-under-manager's children now sit at the terminal layer (level 3, cannot spawn), not a middle rung.
 - `isolation: "worktree"` survives as a per-dispatch option when spawned agents mutate files in parallel. Disjoint file sets are required; a merge conflict at wave end = routing miss → log it, scorecard it. Merge order: smallest diff first; rebase-only.
 - **Fable rules, at every depth:** fable is usage-billed and never runs below the orchestrator without per-run user clearance. Live LLM rounds on the user's API keys require per-run user clearance regardless of model — present lane, turn count, expected writes first.
 

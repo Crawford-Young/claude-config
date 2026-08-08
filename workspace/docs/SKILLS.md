@@ -101,9 +101,9 @@ routing-verification issue #6.)
 | Godot diagnostic or tuning work — telemetry, debug probes, feel-gate tuning loop | `games-diagnostics` (relocated from `games/CLAUDE.md`, 2026-07-28) |
 | After every implementation pass | `simplify` |
 | Before claiming work is done | `superpowers:verification-before-completion` + `vercel:verification` |
-| Confirm a fix or feature works by running the app | `verify` |
+| Confirm a fix or feature works by running the app | `verify` (explicit-invoke-only since v2.1.215 — never auto-fires; orchestrator invokes at DoD) |
 | Run/launch the app to observe a change | `run` |
-| Review the current diff before merge | `code-review` |
+| Review the current diff before merge | `code-review` (explicit-invoke-only since v2.1.215 — never auto-fires; orchestrator invokes at DoD) |
 | Requesting code review | `superpowers:requesting-code-review` |
 | Receiving code review feedback | `superpowers:receiving-code-review` |
 | Finishing a branch / ready to merge | `superpowers:finishing-a-development-branch` |

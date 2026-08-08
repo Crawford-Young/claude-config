@@ -74,6 +74,18 @@ const INTENTIONAL_EDITS = [
   // removed per the stale-exemption rule below. The retired entries and their audit reasons
   // live in git history (pre-refresh revision of this file). Rule-preservation for the
   // compression itself was verified rule-by-rule in PR #13 and the payload-landing PR.
+  {
+    match: 'each overriding the last on conflict',
+    task: 'harness-evolution P4b, T4 (G11)',
+    reason:
+      'Header wording rewritten in place, not relocated: "each overriding the last on conflict" overstated the documented semantics (features-overview.md: levels are additive, reconciliation is judgment, more-specific typically wins). The rule stayed in the same paragraph of the same file; only the override claim softened. Gap report G11, spec 2026-08-07-p4b-quick-wins-design.md.',
+  },
+  {
+    match: 'copy `.env.local` AND `.env` from the main checkout',
+    task: 'harness-evolution P4b, T4 (G52)',
+    reason:
+      'Manual-copy rule rewritten in place, not relocated: `.worktreeinclude` files (added this wave to repos with env files) automate the copy for Claude-created worktrees, so the rule became "verify .worktreeinclude covers env files", retaining the manual-copy clause for repos without the file and for plain `git worktree add` worktrees. This block runs as consecutive rule lines, so the whole block match breaks on this one edit — the other rules in the block (port holder, env-var staleness, env-injection surfaces) are byte-unchanged, verified by diff at edit time. Gap report G52, spec 2026-08-07-p4b-quick-wins-design.md.',
+  },
 ];
 
 /** Baseline paragraphs that live in an archival destination BY DESIGN — history relocated

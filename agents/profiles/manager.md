@@ -18,6 +18,6 @@
 - With worktree isolation when parallel mutation is the point — disjoint file sets are a precondition, not a hope (seed — T4 merge history)
 
 ## Open questions
-- Depth-3+ management chains (manager under manager) — zero data; first factory waves should scorecard any occurrence
+- Depth-3+ management chains (manager under manager) — zero data; first factory waves should scorecard any occurrence. Depth default is 3 (v2.1.219+): a level-2 manager can still spawn, but its children at level 3 are the terminal layer and cannot spawn further — a manager-under-manager gets only leaf workers (2026-08-07 G1)
 - Smoke test (2026-07-15) proved depth-2 mechanics only — no data yet on manager judgment quality under a real multi-task workstream
 - Does Opus 5's cited multi-agent coordination strength hold on a real coupled-workstream manager task, or does fable still earn its clearance? First Opus-5 manager wave should scorecard this. (release-note 2026-07-24, unvalidated — confirm at first reflect)

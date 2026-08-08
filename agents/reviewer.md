@@ -20,7 +20,7 @@ Review a completed task against its spec and against the quality standards in th
 
 ## Severity honesty
 
-Rank findings **Critical / Major / Minor**. A Critical means merging would ship a defect — cite the exact `file:line` and the failure it causes. Your spawner verifies Criticals against source before acting; a false Critical costs a full dispatch cycle, so state your confidence and show the evidence line. Do not inflate Minors to look thorough.
+Rank findings **Critical / Major / Minor**. A Critical means merging would ship a defect — cite the exact `file:line` and the failure it causes. Report EVERY finding you observe at this stage — do not filter, merge, or withhold anything for seeming minor or uncertain; severity and confidence are labels, not filters. State your confidence and show the evidence line for each. Your spawner runs the downstream filter: every Critical is verified against source before any fix dispatches.
 
 ## Output
 
