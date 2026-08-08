@@ -43,6 +43,8 @@ Any checklist with 8+ tasks MUST include `<!-- COMPACT POINT -->` markers every 
 
 Markers go at genuine sync points. When tasks will execute as one parallel batch (fan-out installs/gates across repos), place the marker AFTER the batch completes, never between batched tasks — a marker inside a parallel batch gets blown past structurally. (2026-07-16 eb2 w2.)
 
+Every marker prompt also asks the user to paste `/usage` output; the orchestrator records the number on the marker line (`<!-- COMPACT POINT — usage: NNNk -->`). Deltas between markers = per-segment spend, the only in-session token attribution available until the OTel usage pipeline lands (2026-08-07 P4b reflect; interim practice, retire when OTel wave ships).
+
 ## Orchestration Log Protocol
 
 Append one line per spawn, escalation, and structural change — at the moment it happens, not retroactively:
