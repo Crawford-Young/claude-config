@@ -63,6 +63,7 @@
 - **fable** for high-stakes design review (auth/payments/migration specs) — per-run user clearance required (seed fable lane)
 - Route Opus 5 first for high-stakes design review — half fable cost, no clearance overhead; fable narrows to exceptional-stakes specs or after an Opus-5 review misses (release-note 2026-07-24, unvalidated — confirm at first reflect)
 - Severity-filter recall depression is unchanged on Opus 5 (same as 4.7/4.8) — the existing report-everything, filter-downstream adjudication-brief pattern stays correct as-is (release-note 2026-07-24, unvalidated — confirm at first reflect)
+- Definition damping clause removed 2026-08-07 (G5): "do not inflate Minors" + false-Critical-cost framing were the exact recall-suppression pattern the Sonnet 5/Opus 5 prompting docs name; def now says report-everything with spawner as named downstream filter
 
 ## Spawn-worthiness
 - Earns its cost after every implementer task with latitude; combined single-pass review suffices for verbatim tasks (2026-06-10)

@@ -40,7 +40,7 @@ Guidelines for any agent editing this workspace's harness (CLAUDE.md chain, clau
 
 ## Hooks
 
-- Wiring lives in `~/.claude/settings.json` `hooks` block; scripts in `claude-config/hooks/` (invoked via forward-slash quoted absolute paths). Current set: PreToolUse guards (`Bash|PowerShell` command guard; `Agent` model guard — blocks model-omitted dispatches on frontmatter-less types), PreCompact archive, SubagentStop log — 3 of ~28 documented events (G70 lists mapped pilot candidates).
+- Wiring lives in `~/.claude/settings.json` `hooks` block; scripts in `claude-config/hooks/` (invoked via forward-slash quoted absolute paths). Current set: PreToolUse guards (`Bash|PowerShell` command guard; `Agent` model guard — blocks model-omitted dispatches on frontmatter-less types), PreCompact archive, SubagentStop log, Notification toast (`notification-toast.ps1` — WinRT desktop toast for WezTerm, G53) — 4 of ~28 documented events (G70 lists mapped pilot candidates).
 - **Fail-open convention:** guard scripts catch their own errors and append to `~/.claude/hook-errors.log` rather than blocking work. Check that log when a hook misbehaves; `claude --safe-mode` (all customizations off) and `/doctor` are the documented isolation path (G60).
 - Exit-code semantics: 0 = proceed (stdout JSON processed), 2 = block (stderr reason), other = non-blocking error. A hook `allow` does NOT skip deny/ask rules; a hook deny applies even in bypassPermissions.
 - The `if` field (permission-rule syntax) filters which calls spawn the hook process — only valid on PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/PermissionDenied, best-effort (fails open on unparseable commands) — use the permission system for hard guarantees (G41).

@@ -8,6 +8,7 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 | `agent-model-guard.ps1` | PreToolUse (`Agent`) | Blocks Agent dispatches that omit `model:` on a type with no frontmatter model (would silently inherit the fable session default — issue #3/G4). Frontmatter-model types pass; plugin-namespaced (`x:y`) and def-less built-ins always require explicit `model:`. Block = exit 2 + stderr reason; fail-open on script error. |
 | `precompact-archive.ps1` | PreCompact | Copies transcript to `~/.claude/compact-archives/<sid>-<stamp>.jsonl` before every compaction. |
 | `subagentstop-log.ps1` | SubagentStop | Appends line to `~/.claude/subagent-stops.log`. |
+| `notification-toast.ps1` | Notification | Windows toast via WinRT (WezTerm gets no native desktop notifications — G53). Fail-open; Notification is a non-blockable event (exit 2 only surfaces stderr). Shared `hook-errors.log` is unbounded-by-convention — manual cleanup. |
 
 ## Rules (learned the hard way — issue log 2026-07-27)
 
