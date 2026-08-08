@@ -96,6 +96,6 @@ At every wave-end reflect:
 ## Phase Complete Protocol
 
 1. All checklist tasks ticked `[x]`
-2. Move checklist `active/` → `done/`
+2. Move checklist `active/` → `done/` — `git mv` stages the INDEX blob, not the working-tree file; edits made after the mv (final ticks, done-stamps) need an explicit `git add` or the commit ships the stale blob (2026-08-08 P4c)
 3. **Run `claude-md-management:reflect` — mandatory.** Fill the Wave Scorecard; run the profile rollup (§Reflect Integration)
 4. Reflect Phase 6 prompts `/usage`, then `/clear` if the project is fully done

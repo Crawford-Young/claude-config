@@ -20,6 +20,7 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 - **Fail-open design.** Script errors append to `~/.claude/hook-errors.log` and exit 0 — CLAUDE.md prose rules stay the backstop. Hook seems silent? Check that log first, then suspect path mangling — fired-but-errored is indistinguishable from silent.
 - **Unit-test via direct stdin pipe:** `'{"tool_input":{"command":"..."}}' | powershell -File <script>` — check exit code + stderr. Live verification only in interactive sessions.
 - **`claude -p` child sessions:** settings hooks unverified there (possibly the path bug; not re-tested). Don't rely on hooks firing in headless children — use unit tests.
+- **Hook wiring is NOT inert for running sessions** — settings docs say `hooks` auto-reload live, and a Stop hook wired mid-session fired post-compaction in the same session (n=1, 2026-08-08 P4c). The old "hooks snapshot at session start" claim is falsified; don't require a fresh session to live-verify new wiring.
 - **Extend the guard, don't add prose-only rules** for mechanically blockable incident classes.
 - **Warn instead of blocking when the check reads state the committer does not own.** The
   relocation gate audits the whole `~/code` tree, so it goes red on another session's in-flight
