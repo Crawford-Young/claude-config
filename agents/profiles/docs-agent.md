@@ -15,7 +15,7 @@
 
 ## Model sweet spot
 - Default **haiku**; sonnet grade-4 on repo README+CLAUDE.md restructure — structure/tone faithful, verbatim-preserve honored (n=1, 2026-07-18)
-- Effort: frontmatter-pinned "low" (G31, 2026-08-08, provisional-UNVERIFIED) — enumeration/read-report shape; probe rows carried no `effort` attr (frontmatter-unsupported vs haiku-not-reporting undecidable — P4c issue log); frontmatter kept to self-activate; raise only on profile evidence at reflect
+- Effort: frontmatter-pinned "low" (G31, VERIFIED 2026-08-08 re-probe) — sonnet-model dispatch of recon def emitted OTel `effort:"low"` (concurrent session-default sonnet showed `"high"`); haiku rows omit the attr because haiku has no effort dimension, not because frontmatter is ignored; pin survives dispatch-time model override (n=1)
 
 ## Spawn-worthiness
 - Marginal — orchestrators with content already in context historically ran doc waves inline faster (2026-07-01, native-agents wave: 11 tasks inline, 0 redos). Spawn only when doc volume would blow the spawner's context.

@@ -18,7 +18,7 @@
 - Default **haiku**
 - **fable** for the diagnostic lane after an opus implementation failure (systematic-debugging framing; per-run user clearance) (seed fable lane)
 - Ladder unchanged structurally, but the opus rung is now Opus 5 — fable diagnostics fire only after an Opus-5 failure; expected fable volume drops accordingly (release-note 2026-07-24, unvalidated — confirm at first reflect)
-- Effort: frontmatter-pinned "low" (G31, 2026-08-08, provisional-UNVERIFIED) — enumeration/read-report shape; probe rows carried no `effort` attr (frontmatter-unsupported vs haiku-not-reporting undecidable — P4c issue log); frontmatter kept to self-activate; raise only on profile evidence at reflect
+- Effort: frontmatter-pinned "low" (G31, VERIFIED 2026-08-08 re-probe) — sonnet-model dispatch of recon def emitted OTel `effort:"low"` (concurrent session-default sonnet showed `"high"`); haiku rows omit the attr because haiku has no effort dimension, not because frontmatter is ignored; pin survives dispatch-time model override (n=1)
 
 ## Spawn-worthiness
 - Earns its cost whenever the spawner would otherwise read >10 files or burn context on fan-out fact-finding (seed — efficiency playbook)
