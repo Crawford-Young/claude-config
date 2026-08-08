@@ -23,6 +23,8 @@
 ## Spawn-worthiness
 - Earns its cost whenever the spawner would otherwise read >10 files or burn context on fan-out fact-finding (seed — efficiency playbook)
 
+- **Sonnet plan-recon fact-packs: grade 5 (2026-08-08 creator-coach W0)** — 18-item pack, every item file:line or verbatim, 3 UNRESOLVED flagged instead of guessed, surfaced 3 plan-shaping facts the brief didn't ask for (no main branch, staged files, dependabot branch). "Flag don't guess" + "absent → find where it lives" brief clauses keep paying.
+
 ## Open questions
 - Haiku ceiling: which recon dispatches actually needed sonnet?
 - Does actual fable diagnostic-dispatch volume drop post-Opus-5, as predicted? First-wave count should confirm. (release-note 2026-07-24, unvalidated — confirm at first reflect)

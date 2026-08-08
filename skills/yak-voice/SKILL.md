@@ -16,7 +16,7 @@ Base directory: `~/code/claude-config/skills/yak-voice/` (junction-visible at `~
 3. **Generate 2–3 options few-shot from the samples.** Match structure, register, mechanics (case, punctuation, length) of accepted samples. NEVER generate from voice adjectives ("dry", "authentic", "casual") — that is the rejected method.
 4. **Bans pass:** check every option line against every `bans.md` entry. Hit → regenerate that option before presenting.
 5. **Present options. User picks/edits.** Never present one finished answer. Trim-only on user edits: delete, reorder, fix mechanics — never add content words.
-6. **Append the final picked text verbatim to the bucket** (with date). Then remind: commit claude-config — verify tree on `main` first (`git -C ~/code/claude-config status --short --branch`); foreign branch → defer commit, file edit persists.
+6. **Append the final picked text verbatim to the bucket** (with date). Then remind: commit claude-config via the worktree commit protocol (root CLAUDE.md §Branch Strategy — live edit on main checkout, commit via ephemeral origin/main worktree PR).
 
 ## Voice notes (evidence-backed, from accepted copy — NOT adjectives to generate from)
 

@@ -70,6 +70,8 @@
 - Definition damping clause removed 2026-08-07 (G5): "do not inflate Minors" + false-Critical-cost framing were the exact recall-suppression pattern the Sonnet 5/Opus 5 prompting docs name; def now says report-everything with spawner as named downstream filter
 - Workflow-lane dispatches use the standing review-result schema (agent-factory §Workflow Lane, G49 2026-08-08); Agent-lane briefs restate it as the Output-format prose contract
 
+- **Sonnet adjudication-brief lane holds at scale (2026-08-08 creator-coach W0): 6 reviews, five grade 5, one grade 4** — enumerated-probe briefs (8–10 probes incl. threat-model, byte-identity vs blobs, independent gate re-runs) all answered with evidence. The grade 4: a Minor that CONTESTED the implementer's empirically-confirmed env claim by static inspection and inverted ground truth — cost the orchestrator a red round when acted on unverified. Caution codified: reviewer-vs-implementer empirical dispute → re-run the experiment (agent-factory §Judgment Rules, 2026-08-08). Batched-sibling review n=3 (T3+T4 cross-task invariant trace only a batch could see).
+
 ## Spawn-worthiness
 - Earns its cost after every implementer task with latitude; combined single-pass review suffices for verbatim tasks (2026-06-10)
 

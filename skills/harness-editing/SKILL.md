@@ -19,7 +19,7 @@ Guidelines for any agent editing this workspace's harness (CLAUDE.md chain, clau
 ## Edit rules
 
 - **The Edit tool refuses to write through a symlink/junction — pass the real target path** (resolves into `claude-config/workspace/...`). The refusal guards against committing in a repo that doesn't track the file.
-- **Junction edits bind LIVE behavior to the main checkout; commits do not.** Live-edit vs commit split: when the claude-config tree sits on another session's branch, edit the live file on disk (routing stays correct), log the deferral, and land the commit via an origin/main worktree PR — never commit onto another session's open branch.
+- **Junction edits bind LIVE behavior to the main checkout; commits do not.** Protocol (2026-08-08): the main checkout never switches off `main` and never commits — live edits land on its disk, every commit lands via an ephemeral worktree PR from `origin/main` (root CLAUDE.md §Branch Strategy carries the full sequence: path-scoped diff only, worktree path contains `claude-config`, restore+`merge --ff-only` sync — never `pull --rebase` on the dirty shared checkout).
 - **Mid-session CLAUDE.md edits are inert for the current session** — content is read once at session start; the edit applies only after the next `/clear`, `/compact`, or restart (G8). Don't edit a rule and assume it now governs your own remaining work.
 - **Never round-trip UTF-8 files through PowerShell Get-Content/Set-Content** (mojibake/BOM; hook-enforced). Use Edit/Write.
 - **PS 5.1 redirected stdout is OEM CP437** — non-ASCII glyphs mangle on the wire (U+2192 → 0x1A; U+00B7 round-trips CP437-symmetrically, so a same-encoding test capture is structurally blind to it). Any harness script emitting non-ASCII forces `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)` on BOTH producer and test-capture sides (2026-08-06 P2 cold review F1).
@@ -32,8 +32,8 @@ Guidelines for any agent editing this workspace's harness (CLAUDE.md chain, clau
 ## Commit rules
 
 - Docs repo (`~/code/docs`, remote `Crawford-Young/docs`, branch `master`): direct commits are established practice; **explicit paths only, never `git add -A`** (deny-ruled + hook-enforced; the repo is shared by concurrent sessions).
-- claude-config: no commit/push without user approval; branch-per-change from `origin/main` when PRing; rebase-only workflow; "Rebase and merge" only.
-- **Foreign-branch escape hatch:** worktree route works for COMMITS (PR from an origin/main worktree) while junctions keep serving live edits from the main tree — see memory `project_claude_config_deferred_commits` for the landed precedent (PR #12) and the commit-from-the-index trick.
+- claude-config: no commit/push without user approval; every change lands as a PR from an ephemeral `origin/main` worktree — there is no direct-commit lane on the main checkout; rebase-only workflow; "Rebase and merge" only.
+- **Worktree commit lane is the STANDARD, not an escape hatch (2026-08-08):** commits never happen on the main checkout — root CLAUDE.md §Branch Strategy carries the sequence; memory `project_claude_config_deferred_commits` holds the PR #12 precedent + commit-from-the-index trick.
 - `git -C <path>` for multi-repo git ops — Bash cwd persists across calls.
 - Checklist ticks + orchestration-log lines land in the same action batch as the commit they record.
 - **Background sessions never auto-commit or push (G2 resolution 2026-08-06):** the approval rule is absolute, no carve-out; background-session / claude-agents adoption is deferred until mechanically guarded (hook or deny rule).
