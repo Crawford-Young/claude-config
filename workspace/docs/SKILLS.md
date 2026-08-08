@@ -103,7 +103,7 @@ routing-verification issue #6.)
 | Before claiming work is done | `superpowers:verification-before-completion` + `vercel:verification` |
 | Confirm a fix or feature works by running the app | `verify` (explicit-invoke-only since v2.1.215 — never auto-fires; orchestrator invokes at DoD) |
 | Run/launch the app to observe a change | `run` |
-| Review the current diff before merge | `code-review` (explicit-invoke-only since v2.1.215 — never auto-fires; orchestrator invokes at DoD) |
+| Review the current diff before merge | `code-review` (explicit-invoke-only since v2.1.215 — never auto-fires; orchestrator invokes at DoD) Effort = recall dial (low/med confident-only; high–max coverage) and STICKY across sessions — route coverage-first passes to `/code-review high`; otherwise expect the last-used level (code:code-review.md, P5 G73). |
 | Requesting code review | `superpowers:requesting-code-review` |
 | Receiving code review feedback | `superpowers:receiving-code-review` |
 | Finishing a branch / ready to merge | `superpowers:finishing-a-development-branch` |

@@ -35,7 +35,7 @@ Rules:
 - No plan-time tier or structure prediction. The checklist header carries a `**Factory:**` line; the actual spawn tree is recorded in the Orchestration Log as it happens.
 - Depth-3 platform wall (default, v2.1.219+; env CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH). Soft economics keep real trees shallower — a tree pressing the wall is a planning smell, and a manager-under-manager's children now sit at the terminal layer (level 3, cannot spawn), not a middle rung.
 - `isolation: "worktree"` survives as a per-dispatch option when spawned agents mutate files in parallel. Disjoint file sets are required; a merge conflict at wave end = routing miss → log it, scorecard it. Merge order: smallest diff first; rebase-only.
-- **Fable rules, at every depth:** fable is usage-billed and never runs below the orchestrator without per-run user clearance. Live LLM rounds on the user's API keys require per-run user clearance regardless of model — present lane, turn count, expected writes first.
+- **Fable rules, at every depth:** fable is usage-billed and never runs below the orchestrator without per-run user clearance. Live LLM rounds on the user's API keys require per-run user clearance regardless of model — present lane, turn count, expected writes first. Emergency cost-stop: `CLAUDE_CODE_SUBAGENT_MODEL` env overrides ALL subagent model resolution, profiles included (code:sub-agents.md, P5 G44).
 
 ## Assignment Routing
 
@@ -181,6 +181,8 @@ Proposal format: one line — expected agent count, per-agent schema, rough cost
 ```
 
 **Lane honesty:** every recorded silent-idle occurrence is in the AGENT lane, which this schema cannot reach (the Agent tool has no schema param) — there the shape is restated in the Output-format line as a prose contract, and the profile's named escalation (SubagentStop hook detecting an empty final message) stays the open candidate. Composes with the G5 reviewer rewrite (P4b).
+
+- Caps (code:workflows.md, P5 G66): 1,000-agent lifetime total per workflow; stop/resume re-runs EVERY agent STARTED after the first unfinished one (replay follows start order) — stopping a long fan-out mid-flight re-bills its tail, so let a nearly-done stage finish before stopping.
 
 ## Agent Teams Lane (added 2026-08-08, G37)
 

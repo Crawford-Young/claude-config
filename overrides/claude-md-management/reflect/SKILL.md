@@ -83,6 +83,8 @@ Apply all agreed changes using the Edit tool. Order:
 
 Show each diff to the user as it is applied. Do not batch silently.
 
+- **Memory-index pruning (G26, 2026-08-08):** MEMORY.md loads only its first 200 lines / 25KB (code:how-claude-code-works.md). Each reflect: delete or merge index entries (and their memory files) whose status is fully CLOSED/SHIPPED with no open tails; update superseded "next =" pointers.
+
 ### Phase 5.5: Performance Rollup
 
 Sweep every performance MD in `~/code/docs/<project>/agent-logs/` for the wave:
