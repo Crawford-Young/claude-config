@@ -9,7 +9,7 @@ description: Use when executing any multi-task plan or checklist, deciding wheth
 
 Canonical orchestration standards. Supersedes the `orchestrate` skill (tier ladder T1–T4, plan profiles, and the Layer-2 routing table are retired — 2026-07-15).
 
-The model: **demand-driven recursive spawning.** Any agent holding a task may spawn subagents when the task exceeds what it can do well inline — and those subagents may spawn further (platform wall: depth 3 below the main session by default — v2.1.219+, env lever CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH; the deepest layer cannot spawn). Every managing agent judges its children and logs performance; reflect aggregates those logs into global per-type profiles that drive future routing.
+The model: **demand-driven recursive spawning.** For the orchestrator, dispatch is the default posture (see §Spawn Model); below the main session, agents spawn only when the task exceeds what they can do well inline — and those subagents may spawn further (platform wall: depth 3 below the main session by default — v2.1.219+, env lever CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH; the deepest layer cannot spawn). Every managing agent judges its children and logs performance; reflect aggregates those logs into global per-type profiles that drive future routing.
 
 Two audiences:
 
@@ -23,11 +23,11 @@ Two audiences:
 
 ## Spawn Model
 
-**Default is inline.** Spawning is the exception that must argue for itself. Justified triggers:
+**The orchestrator delegates readily; damping applies to children (G6 rewrite, 2026-08-08).** The old "default is inline" opening was tuned for model generations that under-spawned; the current generation delegates well, and the rule measurably counteracted correct behavior (AdSense W1, 2026-07-28/29: five parallel-safe cross-repo clusters, `**Factory:**` header present, zero dispatches — whole wave inline across a multi-day session with repeated compactions, the >150k-context spend the usage report flags).
 
-- (a) the task needs skills or tools you lack,
-- (b) your context would blow past useful size,
-- (c) parallelism wins wall-clock.
+- **Orchestrator (main session):** dispatch is the default posture for checklist execution. A parallel-safe cluster, a gate-heavy task, or any task a child can carry with a clean brief SHOULD be dispatched; choosing inline gets its OWN one-line justification in the Orchestration Log — silence is not a decision. The `inline-execute` skill's lane (docs/config tasks, ≤2 files) is a legitimate justification — write it down, per task.
+- **Cross-repo clusters are the cleanest possible fan-out** — zero file overlap by construction, no worktree isolation needed beyond the one each repo already gets, each cluster carries its own gate. Justification is per CLUSTER. The cost of wrongly inlining is context, not correctness: one orchestrator carrying five repos' file trees and gate outputs is exactly the >150k-context spend the usage report flags (65% of last-24h usage at >150k, 2026-07-29).
+- **Spawned agents (any depth below main):** inline is the default; spawning is the exception that must argue for itself. Justified triggers: (a) the task needs skills or tools you lack, (b) your context would blow past useful size, (c) parallelism wins wall-clock.
 
 Rules:
 
@@ -36,8 +36,6 @@ Rules:
 - Depth-3 platform wall (default, v2.1.219+; env CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH). Soft economics keep real trees shallower — a tree pressing the wall is a planning smell, and a manager-under-manager's children now sit at the terminal layer (level 3, cannot spawn), not a middle rung.
 - `isolation: "worktree"` survives as a per-dispatch option when spawned agents mutate files in parallel. Disjoint file sets are required; a merge conflict at wave end = routing miss → log it, scorecard it. Merge order: smallest diff first; rebase-only.
 - **Fable rules, at every depth:** fable is usage-billed and never runs below the orchestrator without per-run user clearance. Live LLM rounds on the user's API keys require per-run user clearance regardless of model — present lane, turn count, expected writes first.
-
-**Trigger (c) fires hardest on a plan whose clusters live in SEPARATE REPOS with no shared files — and inline default has silently overridden it.** Cross-repo clusters are the cleanest possible fan-out: zero file overlap by construction, no worktree isolation needed beyond the one each repo already gets, and each cluster carries its own gate. When a checklist declares N such clusters, the spawn justification is written per cluster and the decision to run them inline gets its OWN one-line justification in the Orchestration Log — silence is not a decision. The cost of getting this wrong is not a wrong answer, it is context: one orchestrator carrying five repos' file trees, gate outputs, and per-repo config differences is exactly the >150k-context spend the usage report flags (65% of last-24h usage at >150k, 2026-07-29). (2026-07-28/29 AdSense W1: 5 parallel-safe cross-repo clusters, `**Factory:**` header present, `agent-logs/` empty — zero dispatches, whole wave inline across a multi-day session with repeated compactions.)
 
 ## Assignment Routing
 
@@ -49,7 +47,7 @@ Before spawning:
 2. Route on profile evidence (strengths, weaknesses, model sweet spot, spawn-worthiness). The def's description is fallback only when no profile data exists.
 3. Claims marked **provisional** (n=1) are hints, not authority.
 4. Distill the relevant fit guidance into the child's brief — children never read profiles themselves.
-5. Set `model:` on the Agent call per the profile's sweet spot; omit only when the profile says the frontmatter default is right.
+5. Set `model:` on the Agent call per the profile's sweet spot; omit only when the profile says the frontmatter default is right. Effort rides the TYPE, not the call: the Agent tool has no effort param (verified 2026-08-08) — a profile's effort note is implemented as def-frontmatter `effort:`; per-dispatch effort exists only in the Workflow lane (`opts.effort`). Effort changes invalidate prompt cache — another reason it lives in frontmatter, not ad-hoc variance.
 
 Profiles never auto-load. Task-specific context flows through the **brief**; learned routing through **profiles read by the assigner**; definitions carry identity only.
 
@@ -82,6 +80,8 @@ Every Scope line ends with the escape hatch: "if the constraint blocks the corre
 **A reviewer that RE-RUNS the implementer's gates catches report-vs-reality drift for ~3 extra tool uses (2026-07-29, friends-w1 T9).** Make it standard on delete/recreate diffs and any diff over ~1000 lines, where a moved file's tests can pass in the report and dangle in the tree. The T9 reviewer re-ran all three gates rather than trusting the report, byte-compared 4 blocks, and grepped both test trees for dangling refs, in 22 tool uses / 3.4 min total. Cheap enough that trusting a report on this diff class is the expensive choice. (n=1, provisional.)
 
 **No commit steps in implementer briefs (2026-07-23, slot-W2):** the implementer definition assigns git to the orchestrator — a brief instructing a commit creates a def/brief conflict the agent correctly refuses, burning a round-trip beat. Orchestrator verifies, then commits. (QA-R1: opus implementer refused the brief's commit step per role boundary; second occurrence of the class.)
+
+**Model-scoped verification instructions (G19, 2026-08-08):** Opus-5 child briefs get NO "verify your work" / "double-check before returning" boilerplate — the Opus 5 prompting doc (https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-opus-5) reports it causes over-verification. The reviewer-as-separate-verifier lane is unchanged (Fable-5 doc-endorsed for long runs, n≥4 local evidence): verification lives in a separate reviewer dispatch, never in the implementer's own brief. Two things this does NOT touch: command gates (foreground, unpiped, `; echo EXIT:$?`) stay in every brief regardless of model; and `superpowers:verification-before-completion` still binds every agent's own completion CLAIMS — G19 governs brief authoring, not the done-gate.
 
 ## Performance MDs
 
@@ -120,6 +120,7 @@ When no roster or staged type fits:
 
 Route right upfront via profiles. Then, on failure:
 
+0. **Effort rung (G31, 2026-08-08) — Workflow lane only:** before a model jump, one retry at `xhigh` effort on the same model is the cheaper rung (`opts.effort`). Skip it when the failure signal is capability-shaped (design-level review fault, integration/architecture flavor) rather than care-shaped. Agent-lane dispatches have no per-call effort — for them the ladder starts at rung 1 unchanged.
 1. **Sonnet fails, signals present** (3+ files · integration/architecture flavor · review fault at design level) → escalate to opus immediately. No sonnet retry.
 2. **Sonnet fails, no signals** → one retry, then opus.
 3. **Opus fails** → ONE fable `recon` diagnostic dispatch (read-only, orchestrator clearance rules apply): classify plan defect vs wrong assumption vs environment → surface to user WITH the diagnosis. Never a third implementation attempt.
@@ -154,6 +155,41 @@ The Workflow tool runs deterministic JS orchestration (`agent()`, `pipeline()`, 
 - migration/transform fan-outs over a file list
 
 Proposal format: one line — expected agent count, per-agent schema, rough cost — then wait for the user's go. On approval, prefer `pipeline()` over barriers, `schema` on every result-bearing agent.
+
+**Standing review-result schema (G49, 2026-08-08):** reviewer contract breaks are FIRM at n=5 (inline-vs-file; silent idle ×4 — profile 2026-08-08, phrasing mitigation INVALIDATED). Workflow-lane reviewer dispatches pass this as `schema:` — validation at the tool-call layer retries on mismatch. `issues` carries ISSUE / NEEDS_CONTEXT lines VERBATIM (they pass upward unsummarized at every hop — §Performance MDs); a NEEDS_CONTEXT verdict puts what is needed there. `line` is optional — file-level findings have none; never fabricate one. `gates_rerun` lists what was actually re-run (empty when the diff class didn't warrant it):
+
+```json
+{
+  "type": "object",
+  "required": ["verdict", "findings", "issues", "gates_rerun"],
+  "properties": {
+    "verdict": { "enum": ["PASS", "FAIL", "NEEDS_CONTEXT"] },
+    "findings": { "type": "array", "items": {
+      "type": "object",
+      "required": ["file", "severity", "confidence", "summary"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer" },
+        "severity": { "enum": ["Critical", "Major", "Minor"] },
+        "confidence": { "enum": ["verified", "plausible"] },
+        "summary": { "type": "string" }
+      } } },
+    "issues": { "type": "array", "items": { "type": "string" } },
+    "gates_rerun": { "type": "array", "items": { "type": "string" } }
+  }
+}
+```
+
+**Lane honesty:** every recorded silent-idle occurrence is in the AGENT lane, which this schema cannot reach (the Agent tool has no schema param) — there the shape is restated in the Output-format line as a prose contract, and the profile's named escalation (SubagentStop hook detecting an empty final message) stays the open candidate. Composes with the G5 reviewer rewrite (P4b).
+
+## Agent Teams Lane (added 2026-08-08, G37)
+
+The agent-teams flag is ON in settings with zero dispatches so far. Ground rules before the first real use:
+
+- **Teams vs subagents:** teammates communicate bidirectionally (SendMessage, shared task list) and hold long-lived context; subagents are fire-and-forget with one return value. Reach for a team only when members must exchange intermediate results mid-task — otherwise subagents are cheaper and simpler.
+- **Cost:** ≈7× tokens vs a plain session in plan mode (https://code.claude.com/docs/en/costs.md). Propose a team the way the Workflow lane is proposed: one line — size, purpose, rough cost — then wait for the user's go. Never auto-spawn a team.
+- **Defaults:** small teams; sonnet teammates unless a profile argues otherwise; no nested teams (unsupported per https://code.claude.com/docs/en/agent-teams.md, verified in `docs/harness-evolution/research/` 2026-08-06); explicit shutdown when done — an idle teammate keeps holding context.
+- Fable rules bind every seat: a fable teammate needs per-run user clearance, same as any fable dispatch.
 
 ## Efficiency Playbook
 
