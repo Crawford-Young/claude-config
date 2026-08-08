@@ -9,6 +9,7 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 | `precompact-archive.ps1` | PreCompact | Copies transcript to `~/.claude/compact-archives/<sid>-<stamp>.jsonl` before every compaction. |
 | `subagentstop-log.ps1` | SubagentStop | Appends line to `~/.claude/subagent-stops.log`. |
 | `notification-toast.ps1` | Notification | Windows toast via WinRT (WezTerm gets no native desktop notifications — G53). Fail-open; Notification is a non-blockable event (exit 2 only surfaces stderr). Shared `hook-errors.log` is unbounded-by-convention — manual cleanup. |
+| `otel-receiver-spawn.ps1` | SessionStart | Lazy-spawns the local OTel receiver (`claude-config/telemetry/otel-receiver.mjs`, port 4318) when the port isn't listening — detached via `Start-Process`, survives session end. 100ms TCP probe; false-negative spawn harmless (loser exits on EADDRINUSE). Reads no stdin (payload unused). Fail-open. (OTel usage-attribution wave 2026-08-07.) |
 
 ## Rules (learned the hard way — issue log 2026-07-27)
 

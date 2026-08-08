@@ -43,7 +43,7 @@ Any checklist with 8+ tasks MUST include `<!-- COMPACT POINT -->` markers every 
 
 Markers go at genuine sync points. When tasks will execute as one parallel batch (fan-out installs/gates across repos), place the marker AFTER the batch completes, never between batched tasks — a marker inside a parallel batch gets blown past structurally. (2026-07-16 eb2 w2.)
 
-Every marker prompt also asks the user to paste `/usage` output; the orchestrator records the number on the marker line (`<!-- COMPACT POINT — usage: NNNk -->`). Deltas between markers = per-segment spend, the only in-session token attribution available until the OTel usage pipeline lands (2026-08-07 P4b reflect; interim practice, retire when OTel wave ships).
+Every marker prompt also asks the user to paste `/usage` output; the orchestrator records the number on the marker line (`<!-- COMPACT POINT — usage: NNNk -->`). Deltas between markers = a live in-session cross-check; authoritative per-task attribution comes from the OTel pipeline (`claude-config/telemetry/usage-report.mjs`, OTel wave 2026-08-07) — run the report at reflect. The `/usage` paste stays optional at markers as a sanity check.
 
 ## Orchestration Log Protocol
 
@@ -84,7 +84,7 @@ At every wave-end reflect:
 
 **Only the orchestrator writes to checklist files. Spawned agents are read-only.**
 
-- Tick `- [x]` immediately after a task completes; ticks + log lines land in the same action batch as the commit they record
+- Tick `- [x]` immediately after a task completes; ticks + log lines land in the same action batch as the commit they record. Every tick carries a completion stamp as the LAST content on the line: `<!-- done 2026-08-07T22:30:00-04:00 -->` (ISO 8601 with offset, written in the same edit that ticks; annotations go BEFORE the stamp). The OTel usage report joins these stamps against metric timestamps — an unstamped tick is invisible to per-task attribution. The parser counts stamps only on ticked `- [x]` lines, at end-of-line, outside code fences (so example stamps in prose or fixtures never pollute attribution).
 - **Before ticking a step, grep the wave issue log for `Owner:` lines naming it** — issue entries accrete deliverables onto later steps mid-wave, and a tick written from the plan text alone misses them. The step's annotation cites the issue-owned deliverable explicitly. (2026-07-31 what-is-dark 4.0: issue #11 assigned Step 11.1 a correction to a 3b log entry; 11.1 ticked without it, caught only by the whole-branch close review — MAJ-2, wave issue #25.)
 - Add `> ⚠️ NOTE FOR TASK N:` inline below a completed task only when the outcome changes how a future task should be approached
 - Append to `## Reflect Log` when lessons surface — format: `- YYYY-MM-DD: <lesson>`
