@@ -90,7 +90,19 @@ const INTENTIONAL_EDITS = [
     match: 'copy `.env.local` AND `.env` from the main checkout',
     task: 'harness-evolution P4b, T4 (G52)',
     reason:
-      'Manual-copy rule rewritten in place, not relocated: `.worktreeinclude` files (added this wave to repos with env files) automate the copy for Claude-created worktrees, so the rule became "verify .worktreeinclude covers env files", retaining the manual-copy clause for repos without the file and for plain `git worktree add` worktrees. This block runs as consecutive rule lines, so the whole block match breaks on this one edit — the other rules in the block (port holder, env-var staleness, env-injection surfaces) are byte-unchanged, verified by diff at edit time. Gap report G52, spec 2026-08-07-p4b-quick-wins-design.md. P5 T11 (2026-08-08) additionally deleted the squash-integration sub-bullet from this paragraph (G18 retirement — zero live pre-2026-07-21 unmerged branches; evidence table in docs/harness-evolution/issues/2026-08-08-p5-issues.md; the procedure stays live in skills/git-recovery-ops SKILL.md Signature 1).',
+      'Manual-copy rule rewritten in place, not relocated: `.worktreeinclude` files (added this wave to repos with env files) automate the copy for Claude-created worktrees, so the rule became "verify .worktreeinclude covers env files", retaining the manual-copy clause for repos without the file and for plain `git worktree add` worktrees. This block runs as consecutive rule lines, so the whole block match breaks on this one edit — the other rules in the block (port holder, env-var staleness, env-injection surfaces) are byte-unchanged, verified by diff at edit time. Gap report G52, spec 2026-08-07-p4b-quick-wins-design.md. P5 T11 (2026-08-08) additionally deleted the squash-integration sub-bullet from this paragraph (G18 retirement — zero live pre-2026-07-21 unmerged branches; evidence table in docs/harness-evolution/issues/2026-08-08-p5-issues.md; the procedure stays live in skills/git-recovery-ops SKILL.md Signature 1). creator-coach W0 reflect (2026-08-08) further edited two rules in this block: env-injection-surfaces citation firmed to n=2 with the CI/e2e-wrapper surface added to the enumeration (evidence in the W0 issue log), and the two-concurrent-sessions bullet carved claude-config out (superseded by the new commit protocol); the deferral bullet formerly in this block was retired by the same protocol (see its own entry). Port-holder and env-var-staleness rules remain byte-unchanged, verified by diff at edit time.',
+  },
+  {
+    match: 'Canonical location:** this file, the domain files',
+    task: 'creator-coach W0 reflect (2026-08-08), user-directed worktree protocol',
+    reason:
+      'Blockquote tail "Commit changes in `claude-config`." extended in place to "…via the worktree lane (§Branch Strategy commit protocol — never on the main checkout)" so the pointer stops reading as license to commit on the main checkout (cold-review F7). Every other clause of the paragraph byte-unchanged, verified by diff at edit time.',
+  },
+  {
+    match: 'the worktree escape hatch works for COMMITS, never for LIVE edits',
+    task: 'creator-coach W0 reflect (2026-08-08), user-directed worktree protocol',
+    reason:
+      'Escape-hatch paragraph rewritten in place into the standing claude-config commit protocol (main checkout never switches off main / never commits; ephemeral origin/main worktree PRs; path-scoped diff; restore + merge --ff-only sync). Every constituent fact retained and extended: junctions-load-main-only, branch --show-current check, edit-live-then-worktree-PR lane, never-commit-on-foreign-branch (now structurally impossible), 2026-07-28 two-payload citation. The separate foreign-branch-deferral bullet (2026-07-02) retired into the same paragraph — deferral class abolished by the protocol. Cold-reviewed pre-apply (31 findings incl. 2 Critical git-sequence defects, all folded). Recorded in the W0 reflect log, docs/web/creator-coach/checklists/done/creator-coach-w0-mongo-migration.md.',
   },
 ];
 
