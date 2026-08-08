@@ -2,7 +2,7 @@
 
 ## Strengths
 - Existence checks, pattern lookups, test/build output verification, reviewer-claim verification — cheap and fast (seed — routing-table default)
-- Single-fact read-and-report on haiku as a depth-2 child: verbatim answer, no padding, 1 tool use / ~26k tokens; manager-graded 5/5 (provisional, n=1 — 2026-07-15 agent-factory bootstrap smoke test)
+- Single-fact read-and-report on haiku: verbatim answer, no padding, 1 tool use — n=2, both grade 5 (2026-07-15 agent-factory bootstrap smoke test ~26k tokens; 2026-08-08 P4c OTel effort probe: one Glob, 5.3 s, 20.6k tokens, exact-scope filename answer). Firm for the trivial-probe lane.
 - Root-cause classification after repeated failure: plan defect vs wrong assumption vs environment (seed — diagnostic lane)
 
 ## Strengths (cont.)
@@ -18,6 +18,7 @@
 - Default **haiku**
 - **fable** for the diagnostic lane after an opus implementation failure (systematic-debugging framing; per-run user clearance) (seed fable lane)
 - Ladder unchanged structurally, but the opus rung is now Opus 5 — fable diagnostics fire only after an Opus-5 failure; expected fable volume drops accordingly (release-note 2026-07-24, unvalidated — confirm at first reflect)
+- Effort: frontmatter-pinned "low" (G31, 2026-08-08, provisional-UNVERIFIED) — enumeration/read-report shape; probe rows carried no `effort` attr (frontmatter-unsupported vs haiku-not-reporting undecidable — P4c issue log); frontmatter kept to self-activate; raise only on profile evidence at reflect
 
 ## Spawn-worthiness
 - Earns its cost whenever the spawner would otherwise read >10 files or burn context on fan-out fact-finding (seed — efficiency playbook)

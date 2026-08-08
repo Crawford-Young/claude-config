@@ -10,6 +10,8 @@ Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, har
 | `subagentstop-log.ps1` | SubagentStop | Appends line to `~/.claude/subagent-stops.log`. |
 | `notification-toast.ps1` | Notification | Windows toast via WinRT (WezTerm gets no native desktop notifications — G53). Fail-open; Notification is a non-blockable event (exit 2 only surfaces stderr). Shared `hook-errors.log` is unbounded-by-convention — manual cleanup. |
 | `otel-receiver-spawn.ps1` | SessionStart | Lazy-spawns the local OTel receiver (`claude-config/telemetry/otel-receiver.mjs`, port 4318) when the port isn't listening — detached via `Start-Process`, survives session end. 100ms TCP probe; false-negative spawn harmless (loser exits on EADDRINUSE). Reads no stdin (payload unused). Fail-open. (OTel usage-attribution wave 2026-08-07.) |
+| `sessionstart-compact-reminder.ps1` | SessionStart (compact) | Re-injects checklist-scan + marker-discipline + domain-CLAUDE.md reminders into context after every compaction (G48). Non-blockable; fail-open. |
+| `stop-reflect-gate.ps1` | Stop | Hard-blocks turn end when an active checklist touched in the last 6h is all-ticked except lines containing "reflect" (G48). Exit 2 + stderr reason; NO stop_hook_active self-disarm — 8-block platform cap is the escape (user decision, P4c spec: deliberate override of this README's warn-not-block rule; the mtime window is the cross-session mitigation). Fence-aware; fail-open. Fixture override: STOP_GATE_DOCS_ROOT. |
 
 ## Rules (learned the hard way — issue log 2026-07-27)
 
