@@ -16,6 +16,7 @@
 ## Spawn-worthiness
 - Earns its cold start ONLY for genuinely independent workstreams with a clean file-set boundary; anything less → spawner runs the tasks itself (seed)
 - With worktree isolation when parallel mutation is the point — disjoint file sets are a precondition, not a hope (seed — T4 merge history)
+- **Never background a manager dispatch (G81, 2026-08-08):** background subagents (default since v2.1.198) run a REDUCED built-in toolset whose allowlist OMITS the Agent tool — a backgrounded manager cannot spawn, which is this type's entire function. Dispatch with `run_in_background: false` (per call) or pin `background: false` in the agent definition frontmatter. (code:sub-agents.md; allowlist verified in docs/harness-evolution/research/agents-teams.md.)
 
 ## Open questions
 - Depth-3+ management chains (manager under manager) — zero data; first factory waves should scorecard any occurrence. Depth default is 3 (v2.1.219+): a level-2 manager can still spawn, but its children at level 3 are the terminal layer and cannot spawn further — a manager-under-manager gets only leaf workers (2026-08-07 G1)

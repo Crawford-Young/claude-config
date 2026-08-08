@@ -51,6 +51,8 @@ Canonical rule, verbatim from `~/code/CLAUDE.md` §3 (relocated 2026-07-30):
 
 > **Windows worktree removal:** `git worktree remove` reliably fails on a worktree with `node_modules` (file locks, then >260-char long paths in react-server-dom). Working sequence: `git worktree remove --force` → `Remove-Item -Recurse -Force` from a shell whose cwd is OUTSIDE the worktree → robocopy `/MIR` empty-dir mirror for long-path remnants → `git worktree prune`. (2026-07-16: hit 2× in one day, w16 + eb2 worktrees.)
 
+Junction/symlink nuance (code:worktrees.md, P5 G86): `git worktree remove` deletes only the LINK for junctions/symlinks inside the tree — targets survive. That claim covers git's removal ONLY: before running the fallback steps (`Remove-Item -Recurse -Force`, `robocopy /MIR`), confirm any junctions inside the tree are already gone or excluded — `/MIR` against a junction target is destructive.
+
 Expanded as steps:
 
 1. `git worktree remove --force`
@@ -59,6 +61,8 @@ Expanded as steps:
 4. `git worktree prune`
 
 (2026-07-16: hit 2× in one day, w16 + eb2 worktrees.)
+
+Enumeration nuance: a repo-wide worktree/branch sweep must enumerate via `git worktree list` per repo, never a directory glob — nested worktree dirs (e.g. `web/.worktrees/<name>`) sit outside `~/code/*/*/.git`-style globs and surface only as a blocked `git branch -D` ("used by worktree at ..."). (2026-08-08 P5 T11 G18 sweep; n=1, provisional.)
 
 ## Checkpoint coverage gap (G15, 2026-08-08)
 

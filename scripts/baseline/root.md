@@ -12,7 +12,7 @@ Governs **every project in this workspace**. Carries the stack-independent rules
 
 Workspace infrastructure at root: `claude-config/` (this file's source + agents + skills), `docs/` (private planning-docs repo), `.claude/`, `.agents/`.
 
-> **Predefined subagents** — `claude-config/agents/` (junctioned to `~/.claude/agents/`): dispatch via `subagent_type` — `recon`, `implementer`, `reviewer`, `manager`, `docs-agent` are domain-neutral and inherit the working directory's CLAUDE.md chain; `component-agent`, `new-repo-agent`, `wave-release-agent` are web-only. Tool access + model defaults enforced by frontmatter; routing authority = `claude-config/agents/profiles/`.
+> **Predefined subagents** — `claude-config/agents/` (junctioned to `~/.claude/agents/`): dispatch via `subagent_type` — `recon`, `web-recon`, `implementer`, `reviewer`, `manager`, `docs-agent` are domain-neutral and inherit the working directory's CLAUDE.md chain; `component-agent`, `new-repo-agent`, `wave-release-agent` are web-only. Tool access + model defaults enforced by frontmatter; routing authority = `claude-config/agents/profiles/`.
 > **Orchestration** → invoke the `agent-factory` skill when orchestrating (spawn protocol, profiles, performance MDs).
 > [`docs/SKILLS.md`](./docs/SKILLS.md) — canonical situation→skill routing, trigger discipline, cost notes.
 
@@ -64,6 +64,7 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
 
 > **Situational rule skills** — load when the situation applies, not by default:
 > - `plan-premises` — premise checking, contract-surface + invariant-consumer enumeration, verbatim-code checks. **Load before writing or reviewing any plan or checklist.**
+> - `harness-editing` — workspace harness layout, junction/branch edit rules, hook conventions, probe verification. **Load before editing the CLAUDE.md chain, claude-config, hooks, skills, agent profiles, or settings.json.**
 > - `visual-asset-gates` — brand/asset/theme work, image pipelines, preview gates. **Load before any visual, asset, or preview-gate task.**
 > - `live-qa-traps` — the unit-green/live-broken bug family, Vitest mocking traps. **Load before writing tests or QA for interactive UI.**
 > - `games-diagnostics` — Godot telemetry, probes, feel-gate tuning. **Load for games diagnostic or tuning work.**
@@ -103,6 +104,7 @@ All rules live in the `visual-asset-gates` skill — load before any visual, ass
 ### 4. Commit & Push Policy
 
 - **No commit or push without explicit user approval.**
+- **Background sessions never auto-commit or push** — the approval rule is absolute, no carve-out (G2 resolution 2026-08-06; v2.1.218/221 auto-commit behavior); background-session adoption deferred until mechanically guarded.
 - **User QA gate before PR (UI-facing waves):** at wave end, spin up local dev fresh (`:3000` for OAuth apps; wipe `.next` first if deps changed mid-wave — turbopack serves stale Tailwind CSS otherwise, 2026-07-08) and prompt hands-on QA BEFORE requesting push/PR. A blanket "go for it" on push waives QA for that wave only.
 - Stage changes, present a clear summary, wait for approval.
 - **Before presenting any commit batch, re-read the task's unticked steps** — a step neither ticked nor in the staged diff is a stop signal; resolve or mark deferred first (2026-07-17 eb4; third occurrence of the forced-follow-up-docs-PR class).

@@ -16,3 +16,4 @@
 - Reflect owns updates: sweeps `docs/<project>/agent-logs/` at wave end, updates profiles, discounts grades not grounded in verifiable outcomes (gates passed, redo counts).
 - Seed rows (2026-07-15) migrated from the retired Layer-2 routing table + fable lanes — original evidence dates preserved.
 - Staged types get a profile stub at promotion, never before.
+- **Per-subagent `permissionMode` frontmatter is IGNORED whenever the parent runs `auto`/`bypassPermissions`/`acceptEdits`** — the parent's mode wins, by construction (code:agent-sdk/permissions.md). Tool-list restriction (`tools:` frontmatter) is the ONLY blast-radius lever a profile controls. Never "simplify" a profile by swapping tool restrictions for a permissionMode override — it silently no-ops under this workspace's auto default. (2026-08-08 P5 G82.)
