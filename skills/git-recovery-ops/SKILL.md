@@ -59,3 +59,7 @@ Expanded as steps:
 4. `git worktree prune`
 
 (2026-07-16: hit 2× in one day, w16 + eb2 worktrees.)
+
+## Checkpoint coverage gap (G15, 2026-08-08)
+
+`/rewind` checkpoints cover the main session's own file edits only — NOT subagent edits, NOT Bash-side file operations (`mv`, `sed -i`, script writes). A subagent wave gone wrong is git-only recovery: branch state + this skill's procedures. `/rewind` can recover conversation state from before a `/clear`.

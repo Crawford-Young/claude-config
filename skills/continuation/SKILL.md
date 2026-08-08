@@ -7,7 +7,7 @@ description: Use whenever anything remains to be done after a `/clear` — clear
 
 ## Overview
 
-Produces a **copy-paste prompt** the user pastes into a fresh session after `/clear`. No file is written.
+Produces a **copy-paste prompt** the user pastes into a fresh session after `/clear`. No file is written. Since P3 (2026-08-08) this fires at EVERY wave boundary as part of the reflect-close sequence (root CLAUDE.md §7).
 
 The prompt is the whole deliverable. It goes in chat, fenced, ready to copy.
 

@@ -68,6 +68,12 @@ const INTENTIONAL_DUPLICATES = ['Run `superpowers:verification-before-completion
  *  between, so one "paragraph" can hold several unrelated rules. Editing any one of them
  *  invalidates the whole block's match. */
 const INTENTIONAL_EDITS = [
+  {
+    match: 'prompted by `reflect` at project end only',
+    task: 'harness-evolution P3, T3 (G30 + support set)',
+    reason:
+      'Baseline §7 is one paragraph (seven bullets, no blank lines). Two bullets rewritten in place, not relocated: (1) /clear-at-project-end-only inverted to /clear-at-every-wave-boundary (G30 shape B, user-approved spec 2026-08-08-p3-context-overhaul-design.md, trial-gated); the guards "safety net; marker discipline unchanged" and "/rewind partial summarize is optional, never replaces markers" byte-retained in the new bullet, /rewind recovery scope tightened to same-process (checkpointing.md); absorbed one-liners G15/G33/G7/G8. (2) Grep-before-Read bullet extended with /context, /mcp, /btw, CLI-over-MCP (G35/G40); original sentences byte-retained at bullet start. Bullets 1-5 of the paragraph byte-unchanged, verified by diff at edit time (T3 S6). Prior text + revert procedure recorded in the P3 trial log (docs/harness-evolution/issues/2026-08-08-p3-issues.md).',
+  },
   // Emptied 2026-07-30 at the claim+cite compression epoch reset: the workspace baselines
   // (root.md, web.md, games.md) were refreshed to the compressed post-relocation files, so
   // every prior entry — all keyed on pre-compression baseline text — stopped firing and was
