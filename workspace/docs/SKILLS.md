@@ -173,7 +173,7 @@ Inline (current session) → use the skill. Subagent dispatch → use the predef
 | Situation | Skill |
 |---|---|
 | Hooks, permissions, env vars, settings.json | `update-config` (heavy — see Cost Notes) |
-| Anthropic API / model IDs / pricing / tool use | `claude-api` |
+| Anthropic API / model IDs / pricing / tool use / model-migration sweeps (`/claude-api migrate`: ID swaps, removed params, refusal-fallback wiring) | `claude-api` |
 | Keyboard shortcut customization | `keybindings-help` |
 | Reduce permission prompts | `fewer-permission-prompts` |
 | Recurring in-session task | `loop` |
