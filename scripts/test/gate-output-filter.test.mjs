@@ -8,7 +8,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HOOK = resolve(HERE, '..', '..', 'hooks', 'gate-output-filter.ps1');
 
 // The hook runs under Windows PowerShell 5.1 in production (settings.json wiring),
-// so the test spawns the same engine — not pwsh 7.
+// so the test spawns the same engine — not pwsh 7. That engine exists only on
+// Windows; CI's ubuntu runner has no PS 5.1 to spawn, so the suite skips itself there.
+const winTest = process.platform === 'win32' ? test : test.skip;
+
 function runHook(payload) {
   const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HOOK], {
     input: JSON.stringify(payload),
@@ -19,7 +22,7 @@ function runHook(payload) {
 
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
 
-test('gate command with EXIT echo is rewritten to log-file + grep filter', () => {
+winTest('gate command with EXIT echo is rewritten to log-file + grep filter', () => {
   const { status, stdout } = runHook(bash('pnpm run typecheck; echo EXIT:$?'));
   assert.equal(status, 0);
   assert.notEqual(stdout, '', 'expected updatedInput JSON on stdout');
@@ -35,25 +38,25 @@ test('gate command with EXIT echo is rewritten to log-file + grep filter', () =>
   assert.ok(!logPath.includes('\\'), `log path carries backslashes: ${logPath}`);
 });
 
-test('non-gate command passes through untouched (empty stdout)', () => {
+winTest('non-gate command passes through untouched (empty stdout)', () => {
   const { status, stdout } = runHook(bash('git status'));
   assert.equal(status, 0);
   assert.equal(stdout, '');
 });
 
-test('gate command with redirection is left alone', () => {
+winTest('gate command with redirection is left alone', () => {
   const { status, stdout } = runHook(bash('pnpm run test > out.txt; echo EXIT:$?'));
   assert.equal(status, 0);
   assert.equal(stdout, '');
 });
 
-test('gate command without EXIT echo is left alone', () => {
+winTest('gate command without EXIT echo is left alone', () => {
   const { status, stdout } = runHook(bash('pnpm run lint'));
   assert.equal(status, 0);
   assert.equal(stdout, '');
 });
 
-test('null command fails open (empty stdout, exit 0)', () => {
+winTest('null command fails open (empty stdout, exit 0)', () => {
   const { status, stdout } = runHook({ tool_name: 'Bash', tool_input: {} });
   assert.equal(status, 0);
   assert.equal(stdout, '');
