@@ -20,7 +20,7 @@ jobs:
       # tests ran, so the `tests N` line is asserted explicitly.
       - name: Test suite
         run: |
-          node --test "scripts/test/*.test.mjs" > test-output.txt 2>&1 || {
+          node --test "scripts/test/*.test.mjs" "telemetry/test/*.test.mjs" > test-output.txt 2>&1 || {
             cat test-output.txt
             exit 1
           }
