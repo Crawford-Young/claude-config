@@ -69,6 +69,16 @@ const INTENTIONAL_DUPLICATES = ['Run `superpowers:verification-before-completion
  *  invalidates the whole block's match. */
 const INTENTIONAL_EDITS = [
   {
+    match: 'Orchestrator logs proactively at four triggers',
+    task: 'creator-coach W1 reflect 2026-08-09 (issue #5)',
+    reason:
+      'Issue-log paragraph rewritten in place, not relocated: trigger list extended from four to ' +
+      'five — (5) a task flags a known hazard as out-of-scope in a code comment, log at flag ' +
+      'time. Evidence: W1 issue #5 (T7 flagged the ensureTimeseries TOCTOU in a comment; the ' +
+      'race fired 3 tasks later at T10). Triggers 1-4 and the rest of the paragraph byte-unchanged, ' +
+      'verified by diff at edit time.',
+  },
+  {
     match: '`pnpm audit` in CI — no high/critical',
     task: 'creator-coach dep-housekeeping 2026-08-09 (PR #20); exemption recorded harness-evolution G72 T6',
     reason:
