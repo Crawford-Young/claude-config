@@ -18,6 +18,7 @@ Personal Claude Code skills and workspace standards across three development dom
 | `workspace/docs/brand/` | Cross-domain brand + design system | `~/code/docs/brand` (junction) |
 | `workspace/.claude/rules/` | Path-scoped rules (`paths:` frontmatter — load on matching file reads, workspace-wide via ancestor traversal) | `~/code/.claude/rules` (junction) |
 | `statusline/` | Usage statusline (`usage-statusline.ps1` + tests) — rate-limit/context bars + usage history log | `~/.claude/settings.json` `statusLine.command` (direct path) |
+| `evals/` | Eval registry (G72) — routing/adherence probes + mined claims | consumed by `telemetry/eval.mjs` |
 | `docs/` | Repo-only docs (daily updates, prompts) | — |
 | `scripts/` | Workspace utility scripts | — |
 

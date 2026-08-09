@@ -87,8 +87,15 @@ Show each diff to the user as it is applied. Do not batch silently.
 
 ### Phase 5.5: Performance Rollup
 
-Sweep every performance MD in `~/code/docs/<project>/agent-logs/` for the wave:
+Sweep every performance MD in the wave's agent-logs dir — `~/code/docs/<project>/agent-logs/` or `~/code/docs/<domain>/<project>/agent-logs/` (domain projects nest one level deeper):
 
+0. Eval pass (G72): run `node ~/code/claude-config/telemetry/eval.mjs mine` (free, local). Then propose
+   the probe subset — active evals whose tags intersect this wave's touched skills/profiles/rules,
+   plus any n=1-provisional profile claim due for promotion. Present eval count + session estimate;
+   on user clearance run `node ~/code/claude-config/telemetry/eval.mjs run --tag ... --yes`, then
+   `node ~/code/claude-config/telemetry/eval.mjs report`. Fold results into the profile updates below with
+   provenance stamps: `(probed, run <id>)` / `(mined, n=<count>)`. Full sweep (`--all`) is
+   user-invoked only, never a reflect default. No clearance -> skip probes, mined-only this reflect.
 1. For each agent type graded in the logs, fold the evidence into `claude-config/agents/profiles/<type>.md` — strengths, weaknesses, model sweet spot, spawn-worthiness, each entry stamped with date + wave. One wave's data is provisional (n=1); mark it so. A claim goes firm only at n≥2 across waves.
 2. Promote or delete staged types (`~/.claude/agents/staged-*`) per their performance-MD entries — promotion = rename into `claude-config/agents/`, commit, seed a profile stub.
 3. Move processed logs to `~/code/docs/<project>/agent-logs/done/`.

@@ -100,7 +100,10 @@ Entry format:
 - outcome: PASS / FAIL / redo-warm / redo-cold / NEEDS_CONTEXT
 - grade: <1-5> — <one-line: fit for this task type?>
 - lesson: <optional — misroute signal, surprise strength/weakness>
+- row: type=<type> model=<model> grade=<1-5> class=<task-class> gates=<pass|fail|na> redos=<n> wave=<slug> date=<yyyy-mm-dd>
 ```
+
+The `- row:` line is the machine row for `eval.mjs mine` (G72) — write it at reflect backfill if not during the wave; prose lines stay free-form.
 
 - Nested managers pass their performance MD path upward in their summary; the orchestrator's log links them all — a tree of MDs, one per managing agent.
 - **ISSUE / NEEDS_CONTEXT lines pass upward VERBATIM** — never summarized, at every hop.
