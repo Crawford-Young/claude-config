@@ -51,6 +51,10 @@ DOMAINS="web games apps"
 
 link_item "$CODE/CLAUDE.md" "$WS/CLAUDE.md"
 
+# Path-scoped rules (.claude/rules) — link so ancestor rules load workspace-wide (G34)
+mkdir -p "$CODE/.claude"
+link_item "$CODE/.claude/rules" "$WS/.claude/rules"
+
 # Domain standards — one CLAUDE.md symlink per domain folder
 for domain in $DOMAINS; do
     mkdir -p "$CODE/$domain"

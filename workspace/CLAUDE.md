@@ -161,10 +161,7 @@ Run `superpowers:verification-before-completion` before declaring anything done.
 - **Subagent-owned background shells auto-terminate at 60 min** (`CLAUDE_SUBAGENT_BG_SHELL_MAX_MS`) — a subagent's QA dev server dies silently mid-tail; raise the env var before dispatching a subagent whose deliverable outlives an hour. (code:interactive-mode.md, 2026-08-08 P5 G14.)
 - **Integrating with or debugging against an external service starts with the provider's documentation, not trial-and-error.** At plan/dispatch time for any third-party integration (OAuth provider, external API, SDK), a `web-recon` dispatch fetches the relevant provider doc pages first. Two consecutive failed correction rounds against an external service whose docs have not been read = read the docs BEFORE round three (then, if round three still fails, the §Context Hygiene `/clear`+continuation rule takes over). The service is a documented system, not a black box (2026-08-08 creator-coach W0 T7, user-corrected: sign-in 404, 3 CSP rounds, openid-scope 500 — every fix plainly documented by Auth.js/Twitch; web-recon spend that wave $0.06. n=1, provisional).
 
-**Dependencies:**
-- Always latest stable major — stale majors are a blocker, not deferred debt.
-- Major dep upgrades mid-feature-PR are a bug: standalone housekeeping PR first.
-- devDependency upgrades sharing a commit with feature/coverage work can break release workflows — keep separate.
+**Dependencies:** policy in `.claude/rules/dependencies.md` — loads on `package.json`/lockfile reads (latest-stable-major, standalone housekeeping PRs, devDep separation).
 
 **Security:**
 - OWASP Top 10 mitigations. `.gitignore` is the first commit in every new repo. Never commit `.env`, credentials, keys, tokens.
