@@ -127,6 +127,8 @@ Route right upfront via profiles. Then, on failure:
 
 Log every escalation: `task · sonnet FAIL×n → opus · outcome · signal that fired`. Escalations are profile-update candidates at reflect.
 
+**Haiku rung (G32, 2026-08-08):** below sonnet for existence-checks, greps, file-list, single-fact read-and-report shapes — route via profile sweet spot, not the failure ladder (recon defaults haiku already, n=2 grade 5). Failure escalation from haiku: one sonnet retry, then the ladder above unchanged. Evidence duty: one wave of profile rows per newly-haiku'd dispatch shape.
+
 ## Redo Protocol
 
 - **Fixable failure, same model** → `SendMessage` to the SAME agent with the review findings — warm context, no cold re-brief. Log tag: `redo-warm`.
@@ -203,6 +205,7 @@ Mandatory for every managing agent:
 - `Explore` agent for fan-out searches across many files
 - Lazy spec loading: briefs get file path + interface contract + test expectations — full spec only when the task requires design decisions
 - Background tasks (`run_in_background`) for long-running commands — **orchestrator only.** Synchronous subagents cannot await background completions (their "wait" ends the turn → idle until resumed); brief any gate-running subagent to run gates FOREGROUND, unpiped, `; echo EXIT:$?` appended (w3L: two wasted resume rounds)
+- **Addendum (G38, 2026-08-08, doc-verified):** subagents themselves are background-default since v2.1.198 (results arrive as completion notifications; pre-v2.1.211 premature-result bug fixed) — the "cannot await" constraint above is LOCAL w3L evidence about a subagent's own background SHELLS and stands; foreground-gates briefing unchanged. Warm-`SendMessage` lane extends beyond redos to SEQUENTIAL RELATED tasks (cache reads: same repo area, same files) — see §Redo Protocol warm-sibling.
 - More than 10 files read → offload remaining research to a focused subagent
 
 ## Judgment Rules
@@ -217,6 +220,7 @@ Mandatory for every managing agent:
 - **Briefing escape hatch.** Every dispatch's scope constraint ends with: "if the constraint blocks the correct fix, report NEEDS_CONTEXT — do not work around it." (2026-06-12)
 - **Per-component test entries only.** Shared spec files (axe, e2e): "add ONLY entries for your component." (2026-06-12)
 - **Zero-output dispatch death = infra failure, not FAIL.** A dispatch returning 0 tokens with a session-limit message is not a model failure: re-dispatch identical once the limit resets — do not count it toward escalation. Log as `dispatch died (session limit) → re-dispatch clean`. (2026-07-02)
+- **Typed-error classification beats inference (G69, 2026-08-08, doc-verified):** in `--bg`/headless lanes, `system/api_retry` events in the stream-json output classify infra-vs-real failure precisely — read them before ruling a zero-output death "session limit". Fields: `attempt` (from 1), `max_retries`, `retry_delay_ms`, `error_status` (HTTP int or null), `error` category (`rate_limit`, `billing_error`, `overloaded`, `server_error`, `authentication_failed`, `invalid_request`, `model_not_found`, `max_output_tokens`, `oauth_org_not_allowed`, `unknown`). Conversation-lane dispatches (Agent tool) have no event stream — the zero-output rule above stands unchanged there.
 - **Stalled-agent recovery.** A watchdog-killed dispatch whose work is already on disk is also infra, not FAIL: verify the claimed artifacts hands-on, then resume the SAME agent with a report-only message — never redo the work or re-dispatch cold. (2026-07-08)
 - **Value-judgment changes ride before review.** When a landed change encodes a product-feel judgment the user may reject on sight (tuning constant, parity break, presentation choice), get the user verdict BEFORE dispatching its review — reviewing a value the user rejects wastes the round. Log the review debt explicitly in the Orchestration Log with its close condition ("bundle into next stack review after user verdict") and close it at the stated point; the deferred review still runs at full rigor (momentum-lab close review caught a real Major). (2026-07-24 momentum-lab, n=1 provisional.)
 
