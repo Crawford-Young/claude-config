@@ -16,6 +16,7 @@ Personal Claude Code skills and workspace standards across three development dom
 | `workspace/docs/*.md` | Universal reference docs — ORCHESTRATOR, **SKILLS** (skill routing) | `~/code/docs/<name>` (symlinks) |
 | `workspace/docs/web/*.md` | Web reference docs — STACK, PATTERNS, TEMPLATES, ENV, COMPONENT-LIBRARY, TYPESCRIPT-STYLE | `~/code/docs/web/<name>` (symlinks) |
 | `workspace/docs/brand/` | Cross-domain brand + design system | `~/code/docs/brand` (junction) |
+| `workspace/.claude/rules/` | Path-scoped rules (`paths:` frontmatter — load on matching file reads, workspace-wide via ancestor traversal) | `~/code/.claude/rules` (junction) |
 | `statusline/` | Usage statusline (`usage-statusline.ps1` + tests) — rate-limit/context bars + usage history log | `~/.claude/settings.json` `statusLine.command` (direct path) |
 | `docs/` | Repo-only docs (daily updates, prompts) | — |
 | `scripts/` | Workspace utility scripts | — |

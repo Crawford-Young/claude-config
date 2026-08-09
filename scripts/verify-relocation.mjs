@@ -195,6 +195,15 @@ function skillDestinations(args) {
   return out;
 }
 
+/** Rules load through the ~/code/.claude/rules junction; authoring the file is only
+ *  half the wiring (same class as skills above) — junction missing → archival, so
+ *  UNREACHABLE fires instead of a silent green. Probe-verified 2026-08-09 (G34):
+ *  ancestor path-scoped rules load from nested repo cwds through this junction. */
+function rulesDestinations() {
+  const load = existsSync(join(REPO, '.claude', 'rules')) ? 'on-demand' : 'archival';
+  return walkMd(join(REPO, 'claude-config/workspace/.claude/rules')).map((file) => ({ path: file, load }));
+}
+
 /** Collapse all whitespace so a reflowed line still matches its source. */
 const normalize = (s) => s.replace(/\s+/g, ' ').trim();
 
@@ -241,6 +250,8 @@ if (args.dests.length) {
     existsSync(d.path),
   );
   destFiles.push(...skillDestinations(args));
+  // Scoped self-tests (--skills-root) measure fixtures only — mirror the guard in skillDestinations.
+  if (!args.skillsRoot) destFiles.push(...rulesDestinations());
   // The baselines are copies of the sources; matching against them would make every
   // paragraph trivially "found" and the gate meaningless.
   destFiles = destFiles.filter((d) => !d.path.startsWith(BASELINE_DIR));

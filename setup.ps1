@@ -52,6 +52,10 @@ $domains = 'web', 'games', 'apps'
 
 Link-Item "$code\CLAUDE.md" "$wsRepo\CLAUDE.md" SymbolicLink
 
+# Path-scoped rules (.claude/rules) — junction so ancestor rules load workspace-wide (G34)
+New-Item -ItemType Directory -Force "$code\.claude" | Out-Null
+Link-Item "$code\.claude\rules" "$wsRepo\.claude\rules" Junction
+
 # Domain standards — one CLAUDE.md symlink per domain folder
 foreach ($domain in $domains) {
     New-Item -ItemType Directory -Force "$code\$domain" | Out-Null
