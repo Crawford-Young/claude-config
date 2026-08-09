@@ -19,6 +19,7 @@
 - **fable** for the diagnostic lane after an opus implementation failure (systematic-debugging framing; per-run user clearance) (seed fable lane)
 - Ladder unchanged structurally, but the opus rung is now Opus 5 — fable diagnostics fire only after an Opus-5 failure; expected fable volume drops accordingly (release-note 2026-07-24, unvalidated — confirm at first reflect)
 - Effort: frontmatter-pinned "low" (G31, VERIFIED 2026-08-08 re-probe) — sonnet-model dispatch of recon def emitted OTel `effort:"low"` (concurrent session-default sonnet showed `"high"`); haiku rows omit the attr because haiku has no effort dimension, not because frontmatter is ignored; pin survives dispatch-time model override (n=1)
+- Ladder acknowledgment landed in SKILL.md §Escalation Ladder (G32, 2026-08-08): haiku rung formalized; evidence duty = one wave of rows per newly-haiku'd dispatch shape
 
 ## Spawn-worthiness
 - Earns its cost whenever the spawner would otherwise read >10 files or burn context on fan-out fact-finding (seed — efficiency playbook)
@@ -28,3 +29,4 @@
 ## Open questions
 - Haiku ceiling: which recon dispatches actually needed sonnet?
 - Does actual fable diagnostic-dispatch volume drop post-Opus-5, as predicted? First-wave count should confirm. (release-note 2026-07-24, unvalidated — confirm at first reflect)
+- `memory:` frontmatter (G71): REJECTED 2026-08-08 — layout facts already carried by SKILL/profile MDs; adds a write surface with zero observed re-discovery cost. Revisit only on logged evidence of repeat dispatches re-deriving the same facts.
