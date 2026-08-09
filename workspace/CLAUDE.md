@@ -26,6 +26,8 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
 
 `~/code/docs` is a **private git repo, remote `Crawford-Young/docs`** — push at wave close alongside the commit, never "eventually" (2026-07-28: a stale "no remote" line here hid 227 commits of drift; stale doc facts actively misdirect). Commit planning docs at wave boundaries: spec approval, checklist completion, reflect close. Junctioned workspace files (`brand/`, root reference MDs) are gitignored there — their history lives in claude-config. **Commit with explicit paths, never `git add -A`** — the repo is shared by concurrent sessions; `-A` sweeps their in-flight files into your commit (2026-07-01; deny-ruled + hook-enforced since 2026-07-27).
 
+**Docs-repo commits use `git add <paths>` then `git commit --only <paths>` — explicit-path staging does NOT shield the commit from foreign pre-staged index entries** (2026-08-08 P5 T12 S5: first close commit swept 4 files a concurrent session had staged; soft-reset + `--only` re-commit recovered it). `--only` rejects untracked paths, hence the `git add` first.
+
 **claude-config is config + reference docs only.** Never write project working artifacts (specs, checklists, issues, screenshots, assets) into junctioned dirs. Brand/design-system project work → `docs/brand-design/`; junctioned `docs/brand/` holds only the living reference MDs + README.
 
 **Structure per project:**
