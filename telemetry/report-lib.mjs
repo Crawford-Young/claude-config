@@ -32,8 +32,12 @@ export function parseChecklist(markdown) {
     if (!current || !TICK_LINE.test(line)) continue;
     const stamp = line.match(STAMP);
     if (!stamp) continue;
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(stamp[1]);
     const when = new Date(stamp[1]);
-    if (!Number.isNaN(when.getTime()) && (!current.done || when > current.done)) current.done = when;
+    if (!Number.isNaN(when.getTime()) && (!current.done || when > current.done)) {
+      current.done = when;
+      current.dateOnly = dateOnly;
+    }
   }
   return tasks.filter((task) => task.done !== undefined);
 }
@@ -44,9 +48,13 @@ export function taskWindows(tasks, fallbackStart) {
   let from = fallbackStart;
   for (const task of tasks) {
     if (task.done <= from) {
-      // cold-review C3: an inverted window can never match a row; skip loudly instead
-      warnings.push(`${task.name}: non-monotonic stamp ${task.done.toISOString()} <= window start ${from.toISOString()} — task skipped`);
-      continue;
+      const coversFrom = task.dateOnly && from.getTime() < task.done.getTime() + 86_400_000;
+      if (!coversFrom) {
+        // cold-review C3: an inverted window can never match a row; skip loudly instead
+        warnings.push(`${task.name}: non-monotonic stamp ${task.done.toISOString()} <= window start ${from.toISOString()} — task skipped`);
+        continue;
+      }
+      task.done = new Date(from.getTime() + 1); // date-only = "sometime this day": resolve monotonic, near-zero window
     }
     windows.push({ name: task.name, phase: task.phase, from, to: task.done });
     from = task.done;

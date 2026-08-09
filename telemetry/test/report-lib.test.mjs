@@ -92,6 +92,39 @@ test('summarize gap classes: zero rows = no-data; events without cost = partial'
   assert.match(partial.gaps[0], /Task Y: session events present but zero cost rows/);
 });
 
+test('date-only stamp after same-day timestamp resolves monotonic instead of skipping', () => {
+  const md = [
+    '### Task 1: a', '- [x] **Step 1** <!-- done 2026-08-08T09:00:00Z -->',
+    '### Task 2: b', '- [x] **Step 1** <!-- done 2026-08-08 -->',
+  ].join('\n');
+  const tasks = parseChecklist(md);
+  assert.equal(tasks.length, 2);
+  const { windows, warnings } = taskWindows(tasks, new Date('2026-08-08T05:00:00Z'));
+  assert.equal(windows.length, 2);
+  assert.equal(warnings.length, 0);
+  assert.ok(windows[1].to > windows[1].from);
+});
+
+test('timestamp after same-day date-only stamp is not skipped (mirror case)', () => {
+  const md = [
+    '### Task 1: a', '- [x] **Step 1** <!-- done 2026-08-08 -->',
+    '### Task 2: b', '- [x] **Step 1** <!-- done 2026-08-08T09:00:00Z -->',
+  ].join('\n');
+  const { windows, warnings } = taskWindows(parseChecklist(md), new Date('2026-08-08T05:00:00Z'));
+  assert.equal(windows.length, 2);
+  assert.equal(warnings.length, 0);
+});
+
+test('stale date-only stamp from an earlier day still skips with warning', () => {
+  const md = [
+    '### Task 1: a', '- [x] **Step 1** <!-- done 2026-08-08T09:00:00Z -->',
+    '### Task 2: b', '- [x] **Step 1** <!-- done 2026-08-07 -->',
+  ].join('\n');
+  const { windows, warnings } = taskWindows(parseChecklist(md), new Date('2026-08-08T05:00:00Z'));
+  assert.equal(windows.length, 1);
+  assert.equal(warnings.length, 1);
+});
+
 test('renderMarkdown emits per-task, per-phase, per-agent, per-source, per-skill tables and gaps', () => {
   const { windows } = taskWindows(parseChecklist(CHECKLIST), new Date('2026-08-07T13:00:00.000Z'));
   const md = renderMarkdown(summarize(ROWS, windows));
