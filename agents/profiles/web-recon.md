@@ -3,13 +3,15 @@
 ## Strengths
 - Docs-page fetch and report with URL citations (seed — P1 issue #1: docs-sweep dispatches previously forced onto Explore/general-purpose, both near-full toolsets)
 - Claim-vs-source verification for doc-cited facts (seed)
+- Migration-guide recon before dep majors: gap self-flagging instead of extrapolation, truncation-vs-absence discrimination via literal-string search, source-level verification beyond the brief (fetched @eslint/compat shim source unprompted) — 2026-08-09 creator-coach housekeeping, 5 briefs all grade 5; two plan-shaping catches (vitest 4 `coverage.all` removal, shadcn `@theme inline` pattern) each prevented a silent gate-hollowing or broken-dark-mode ship
+- Data-quality discipline: flags garbled fetches and re-verifies via raw GitHub package.json/CHANGELOG rather than trusting rendered npm pages (2026-08-09; use raw-GitHub as the citation surface for exact version/date facts)
 
 ## Weaknesses
 - No Bash by design (severs fetched-content injection from execution) — cannot run commands or check local build state; pair with recon when a dispatch needs local AND web facts
 - No WebSearch initially — the brief must supply or derive URLs; add WebSearch only on demonstrated need
 
 ## Model sweet spot
-- Default **haiku**; sonnet for multi-page synthesis briefs (5+ pages or cross-page contradiction hunting) — VALIDATED n=1 (2026-08-08 P7 T3: 6-page brief, grade 5; see Open-questions n=3 row)
+- Default **haiku**; sonnet for multi-page synthesis briefs (5+ pages or cross-page contradiction hunting) — FIRM (2026-08-08 P7 T3: 6-page brief, grade 5; 2026-08-08/09 creator-coach W1-planning + dep-housekeeping: 9 sonnet dispatches, 8× grade 5 + 1× grade 4, zero fabrication on docs-silent points, warm redo-warm gap-closure rounds worked every time — see agent-logs/2026-08-08-w1-orchestrator.md)
 - Effort: frontmatter-pinned "low" (G31, VERIFIED 2026-08-08 re-probe) — sonnet-model dispatch of recon def emitted OTel `effort:"low"` (concurrent session-default sonnet showed `"high"`); haiku rows omit the attr because haiku has no effort dimension, not because frontmatter is ignored; pin survives dispatch-time model override (n=1)
 
 ## Spawn-worthiness
