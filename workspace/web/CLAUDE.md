@@ -170,3 +170,16 @@ Prettier owns formatting — when Prettier conflicts with the Google style guide
 - **npm retired classic audit endpoints 2026-07-14 (HTTP 410)** — pnpm 10 `pnpm audit` fails in every CI. Interim: `pnpm dlx pnpm@11 audit --audit-level=high`. Proper fix per repo: standalone pnpm-11 housekeeping PR (pnpm 11 drops the `package.json` `pnpm` field — `pnpm.overrides` must migrate with it).
 
 > Implementation patterns → [`../docs/web/PATTERNS.md`](../docs/web/PATTERNS.md) | ESLint/CI/Justfile/structure → [`../docs/web/TEMPLATES.md`](../docs/web/TEMPLATES.md)
+
+## Design system
+
+Compact token reference for artifact/design output (`code:artifacts.md` reads this section). Authority: `docs/brand/design-system.md` — on conflict, that file wins.
+
+- Accent (emerald, both modes): `--accent #10b981` · hover `#34d399` · active `#6ee7b7` · subtle `#d1fae5` light / `#022c22` dark.
+- Neutrals (zinc): light `--background #ffffff` / `--surface #fafafa` / `--surface-raised #f4f4f5` / `--border #e4e4e7` / `--foreground #09090b`; dark `#09090b` / `#18181b` / `#27272a` / `#27272a` / `#fafafa`.
+- Status: `--destructive #dc2626` (red-600 — WCAG AA on its foreground) · `--success #22c55e` · `--warning #f59e0b` · `--info #0ea5e9`.
+- Type: Geist Sans (all UI), Geist Mono (code/stats/dates). Display `text-7xl–9xl font-bold -0.04em`; Headline `text-3xl–4xl font-semibold -0.02em`; Body `text-base leading-relaxed`; Micro `text-xs font-medium uppercase 0.04em`.
+- Radius: `--radius-sm 0.25rem` · `--radius 0.5rem` · `--radius-lg 0.75rem` · `--radius-xl 1rem` · full `9999px`.
+- Spacing steps: component internals `1 1.5 2 3 4`; layout gaps `4 6 8 12 16 24` — nothing off-scale.
+- Elevation = surface step + shadow together, never shadow alone. Icons: Lucide only, 16px dominant, 24px max.
+- Dark mode primary (`defaultTheme="dark"`), build dark first; semantic tokens only — never hardcode colors; no true `#000`/`#fff` surfaces.
