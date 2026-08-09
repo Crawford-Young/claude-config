@@ -69,6 +69,16 @@ const INTENTIONAL_DUPLICATES = ['Run `superpowers:verification-before-completion
  *  invalidates the whole block's match. */
 const INTENTIONAL_EDITS = [
   {
+    match: '`pnpm audit` in CI — no high/critical',
+    task: 'creator-coach dep-housekeeping 2026-08-09 (PR #20); exemption recorded harness-evolution G72 T6',
+    reason:
+      'web.md Security paragraph rewritten in place, not lost: the Transitive-vuln-override bullet ' +
+      'gained exact-pin-inside-consumer-range (fast-uri 3.1.5 case), pnpm-11 overrides location ' +
+      '(pnpm-workspace.yaml), and GHSA why-comment requirements. Headers/audit/410 bullets retained ' +
+      'verbatim. Verified by side-by-side diff of scripts/baseline/web.md:162-166 vs ' +
+      'workspace/web/CLAUDE.md Security block at G72 plan time.',
+  },
+  {
     match: 'prompted by `reflect` at project end only',
     task: 'harness-evolution P3, T3 (G30 + support set)',
     reason:
