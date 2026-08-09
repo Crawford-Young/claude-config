@@ -56,7 +56,7 @@ Specs and checklists live in `~/code/docs/<domain>/<project-name>/`. Workspace-l
 4. Write code — execute fully without per-change approval once plan is approved
 5. Pause only when: checklist complete, blocked, or plan revision required
 
-**Issue log** — living log of wrong assumptions, missing behaviors, bugs found mid-wave. Orchestrator logs proactively at four triggers: (1) user corrects built behavior, (2) same feature needs >1 correction, (3) missing behavior found mid-build, (4) design rethink from test failure. User can request logging anytime. Reviewed at reflect, then → `done/`. Full spec → `docs/superpowers/specs/2026-05-31-issue-log-workflow-design.md`.
+**Issue log** — living log of wrong assumptions, missing behaviors, bugs found mid-wave. Orchestrator logs proactively at five triggers: (1) user corrects built behavior, (2) same feature needs >1 correction, (3) missing behavior found mid-build, (4) design rethink from test failure, (5) a task flags a known hazard as out-of-scope in a code comment — log at flag time, not when it fires (2026-08-09 creator-coach W1 #5: T7 flagged a TOCTOU race "out of scope" in a comment; per-suite defense never replicated, race fired 3 tasks later). User can request logging anytime. Reviewed at reflect, then → `done/`. Full spec → `docs/superpowers/specs/2026-05-31-issue-log-workflow-design.md`.
 
 **Checklist** — the session resume file and live progress tracker. Scan `docs/<domain>/<project>/checklists/active/` at session start; it is the source of truth across sessions and compaction. On phase complete → `done/`. Full orchestration rules → `agent-factory` skill.
 
