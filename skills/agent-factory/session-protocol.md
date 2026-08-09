@@ -15,6 +15,8 @@ approaching a compact boundary, or when launching a background session.
 
 - **Background-agent hygiene: after a background agent's result is received, stop/clear its task registration** (TaskList → TaskStop) — finished agents accumulate silently across compactions and clutter the task list until the user clears them by hand, and a stale registration is indistinguishable from a hung agent. (2026-08-06 harness-evolution: 11 registrations from P1's sweep fan-out survived two waves and a compaction; user stopped them manually at P2 close.)
 
+- `--bg` result adjudication reads `system/api_retry` typed events from the stream-json output BEFORE classifying a dead dispatch — `error` category distinguishes rate_limit/billing/server_error from real failure (G69, 2026-08-08; field table in agent-factory SKILL.md §Judgment Rules).
+
 ## Session Start Protocol
 
 1. Scan `docs/<project>/checklists/active/` — each file is an in-flight phase
