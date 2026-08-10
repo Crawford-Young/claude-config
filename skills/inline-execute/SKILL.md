@@ -46,10 +46,10 @@ For each unchecked task (top to bottom):
 At every `<!-- COMPACT POINT -->` in the checklist:
 
 1. Ensure all completed tasks are ticked in the checklist file
-2. Stop and prompt the user to run `/compact` — the agent cannot invoke it; do not continue past the marker until compaction or explicit user go-ahead
-3. After compaction: read checklist only to re-orient — find first unchecked task, resume
+2. Stop — marker stop is absolute. Then choose per root CLAUDE.md §Context Hygiene (2026-08-10 P8 audit): state fully on disk (checklist ticked, issue log current, live edits enumerated) → hand a continuation prompt + `/clear`; unrecorded conversational state remains → hand a focused `/compact` string. Pre-finalization markers default to `/clear`+continuation. Do not continue past the marker until the user acts or gives explicit go-ahead.
+3. After compaction or `/clear`+resume: read checklist only to re-orient — find first unchecked task, resume
 
-The checklist is the sole state that survives compaction. Do not re-read specs or plan prose.
+The checklist is the sole state that survives the boundary. Do not re-read specs or plan prose.
 
 ### Step 4: Complete
 
