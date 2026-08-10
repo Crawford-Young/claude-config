@@ -27,7 +27,7 @@ try {
             if ($ticked -eq 0 -or $unticked.Count -eq 0) { continue }
             $nonReflect = @($unticked | Where-Object { $_ -notmatch '(?i)reflect' })
             if ($nonReflect.Count -eq 0) {
-                [Console]::Error.WriteLine("stop-reflect-gate: $($file.Name) is fully ticked except its reflect line(s) - run claude-md-management:reflect and tick it before ending the turn. If reflect is mid-dialogue (awaiting user input), tick the line with an in-progress annotation - the Reflect Log is the completion record (pattern ruled 2026-08-09 W1).")
+                [Console]::Error.WriteLine("stop-reflect-gate: $($file.Name) is fully ticked except its reflect line(s) - run claude-md-management:reflect and tick it before ending the turn. Load the harness-editing skill BEFORE reflect's MD-edit phase touches any agent-facing MD (junction targets, live-vs-commit lanes - P8 2026-08-10). If reflect is mid-dialogue (awaiting user input), tick the line with an in-progress annotation - the Reflect Log is the completion record (pattern ruled 2026-08-09 W1).")
                 exit 2
             }
         }
