@@ -7,9 +7,9 @@ description: "Creates a new UI component following strict TDD for a Radix UI + C
 
 You are creating a new UI component for a Radix UI + CVA + Tailwind CSS component library.
 Read these files before starting — they contain the exact patterns to follow:
-- `~/code/docs/COMPONENT-LIBRARY.md` — structure, CVA pattern, accessibility checklist
-- `~/code/docs/PATTERNS.md` — cn() helper, CVA variant reference
-- `~/code/claude-config/agents/component-agent.md` — test gotchas (V8 coverage gaps, dropdown testing, story rules) and TypeScript style rules
+- `~/code/docs/web/COMPONENT-LIBRARY.md` — structure, CVA pattern, accessibility checklist
+- `~/code/docs/web/PATTERNS.md` — cn() helper, CVA variant reference
+- [`gotchas.md`](./gotchas.md) — test gotchas (V8 coverage gaps, dropdown testing) and story rules
 
 <HARD-GATE>
 Never move to the next step until the current step has passed. If a step fails, fix it before continuing — do not skip ahead.
