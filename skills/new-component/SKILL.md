@@ -58,7 +58,7 @@ pnpm vitest run src/components/ui/<name>/<name>.test.tsx
 
 Create `src/components/ui/<name>/<name>.tsx`.
 
-Follow the exact pattern in `~/code/docs/COMPONENT-LIBRARY.md`:
+Follow the exact pattern in `~/code/docs/web/COMPONENT-LIBRARY.md`:
 - `React.forwardRef` wrapping
 - `ComponentName.displayName = 'ComponentName'`
 - `cva()` for all variants and sizes
