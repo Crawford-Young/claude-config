@@ -30,20 +30,7 @@ jobs:
             exit 1
           }
 
-      # Catches the class verify-relocation.mjs is structurally blind to: a SKILL.md whose
-      # frontmatter fails to parse is listed with no description at all and becomes unroutable,
-      # while the relocation gate stays green because it only ever reads body paragraphs.
+      # A SKILL.md whose frontmatter fails to parse is listed with no description and
+      # becomes unroutable — this gate catches it before it ships.
       - name: Skill frontmatter publishes
         run: node scripts/verify-frontmatter.mjs
-
-# Deliberately NOT run here: scripts/verify-relocation.mjs.
-#
-# That gate resolves its destinations as `resolve(scripts/, '..', '..')` — it assumes
-# claude-config is checked out INSIDE ~/code and walks out to its siblings (web/, docs/,
-# games/), and it classifies a skill as loadable by looking for its junction under
-# ~/.claude/skills/. A CI runner has no siblings and no junctions, so the gate exits 2
-# ("could not run") on every invocation. Verified 2026-07-28 in a clean worktree.
-#
-# It audits a multi-repo workspace tree, so it can only run where that tree exists. Enforcement
-# lives in a local hook instead. If you are here to "fix" CI by adding it back, it will be red
-# forever, not green.

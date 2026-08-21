@@ -56,9 +56,7 @@ Each is a habit to actively unlearn, not just a swapped tool name:
 - [ ] Accessibility labels present and pass a screen-reader pass
 - [ ] Sentry — integrated and reporting
 - [ ] README.md + repo CLAUDE.md updated
-- [ ] Phase boundary: `claude-md-management:reflect` run before requesting push/PR
 
-Run `superpowers:verification-before-completion` before declaring anything done.
 
 ---
 

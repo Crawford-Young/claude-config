@@ -81,8 +81,7 @@ node telemetry/usage-report.mjs --from <iso> --to <iso>
 ```
 
 Joins checklist tick stamps (`<!-- done <ISO8601> -->` as last content on ticked
-`- [x]` lines, outside code fences — protocol in
-`skills/agent-factory/checklist-protocol.md`) against NDJSON rows. Task windows
+`- [x]` lines, outside code fences — `scripts/checklist.mjs tick` writes them) against NDJSON rows. Task windows
 chain previous-done → done; the first window defaults to 4h before the first stamp
 (pass `--from` to widen — a stderr note fires). Outputs markdown tables: per-task,
 per-phase (COMPACT POINT markers delimit phases), per-agent, per-source, per-skill
@@ -90,42 +89,16 @@ per-phase (COMPACT POINT markers delimit phases), per-agent, per-source, per-ski
 
 ## Eval runner (G72)
 
-`eval.mjs` — stored eval set for harness routing/adherence evidence. Registry:
-`../evals/evals.json` (JSON, zero-dep). Reports: `~/code/docs/harness-evolution/evals/runs/`
-(MD + JSON sidecar per run; `report` reads the sidecars, never re-parses MD).
-
-```
-node telemetry/eval.mjs run [--id X] [--tag Y] [--class Z] [--all] [--max-sessions N] [--yes]
-node telemetry/eval.mjs mine [--logs <root>]
-node telemetry/eval.mjs report [--logs <root>]
-```
-
-- `run` — spawns headless probe sessions (`claude -p --output-format json`), grades
-  the transcript trace/final text per eval, writes a run report. **Bills real
-  sessions: requires `--yes` AND per-run user clearance (root CLAUDE.md Live-LLM
-  rule); without `--yes` it prints a dry preview.** Aborts if `ANTHROPIC_API_KEY`
-  is set (would bill the key lane), if the registry is invalid, or if the selection
-  exceeds `--max-sessions` (default 12). Mined-grader evals are never runnable.
-  `--all` is user-invoked only — never a reflect default. Exit 1 on any non-PASS.
-- `mine` — free, local. Walks `~/code/docs` (both depths: `docs/*/agent-logs` and
-  `docs/*/*/agent-logs`, `done/` included) for `- row:` grade lines in performance
-  MDs (format: `skills/agent-factory/SKILL.md` entry block) and aggregates by
-  type|model|class.
-- `report` — free, local. Merges latest probe verdict per eval id with mined
-  aggregates. Provenance stamps: `(probed, run <id>)` / `(mined, n=<count>)` —
-  mined counts never promote a profile claim to firm alone (probed n≥2, or
-  probed+mined, can — `agents/profiles/README.md`).
-
-Never-tune-to-probe: registry prompts are frozen; any prompt edit = new id
-(`-v2`), history resets. Reflect wiring: `claude-md-management:reflect` Phase 5.5
-step 0 runs `mine` every reflect and proposes a probe subset on user clearance.
+Retired 2026-08: `eval.mjs` / `eval-lib.mjs` / `../evals/` (the G72 eval
+registry) — model-routing knowledge now lives distilled in `../agents/ROUTING.md`.
 
 ## Tests
 
 Windows Node 24 `node --test <dir>/` MODULE_NOT_FOUNDs — always the explicit file list:
 
 ```
-node --test telemetry/test/otel-parse.test.mjs telemetry/test/otel-receiver.test.mjs telemetry/test/report-lib.test.mjs telemetry/test/eval-lib.test.mjs
+node --test telemetry/test/otel-parse.test.mjs telemetry/test/otel-receiver.test.mjs telemetry/test/report-lib.test.mjs 
 ```
 
 Or glob form from repo root: `node --test telemetry/test/*.test.mjs`.
+

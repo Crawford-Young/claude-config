@@ -1,40 +1,52 @@
 # Hooks
 
-Harness enforcement scripts, wired in `~/.claude/settings.json` (2026-07-27, harness-upgrades-w1).
+Cross-platform Node hooks (2026-08 restructure — the old PowerShell set is in
+git history). A rule that must hold every time lives here or in a deny rule,
+never as CLAUDE.md prose. All hooks are **fail-open**: errors append to
+`~/.claude/hook-errors.log` and exit 0 — check that log first when a hook
+seems silent.
 
-| Script | Event | Does |
+| Script | Event (matcher) | Does |
 |---|---|---|
-| `pretooluse-guard.ps1` | PreToolUse (`Bash\|PowerShell`) | Blocks 3 CLAUDE.md incident classes: PS `Set-Content`/`Out-File`/`Add-Content` on text files, gate commands piped to `tail`/`head`, `git add -A`/`--all`. Block = exit 2 + stderr reason. Plus one **warn-only** rule: a claude-config commit runs `verify-relocation.mjs` and reports a red gate without blocking. |
-| `agent-model-guard.ps1` | PreToolUse (`Agent`) | Blocks Agent dispatches that omit `model:` on a type with no frontmatter model (would silently inherit the session default model — issue #3/G4). Frontmatter-model types pass; plugin-namespaced (`x:y`) and def-less built-ins always require explicit `model:`. Block = exit 2 + stderr reason; fail-open on script error. |
-| `precompact-archive.ps1` | PreCompact | Copies transcript to `~/.claude/compact-archives/<sid>-<stamp>.jsonl` before every compaction. |
-| `subagentstop-log.ps1` | SubagentStop | Appends line to `~/.claude/subagent-stops.log`. |
-| `notification-toast.ps1` | Notification | Windows toast via WinRT (WezTerm gets no native desktop notifications — G53). Fail-open; Notification is a non-blockable event (exit 2 only surfaces stderr). `subagent-stops.log` self-trims at 512KB (keeps last 200 lines, G42 2026-08-08); `hook-errors.log` stays unbounded-by-convention — manual cleanup (grows ~bytes/week). |
-| `otel-receiver-spawn.ps1` | SessionStart | Lazy-spawns the local OTel receiver (`claude-config/telemetry/otel-receiver.mjs`, port 4318) when the port isn't listening — detached via `Start-Process`, survives session end. 100ms TCP probe; false-negative spawn harmless (loser exits on EADDRINUSE). Reads no stdin (payload unused). Fail-open. (OTel usage-attribution wave 2026-08-07.) |
-| `sessionstart-compact-reminder.ps1` | SessionStart (compact) | Re-injects checklist-scan + marker-discipline + domain-CLAUDE.md reminders into context after every compaction (G48). Non-blockable; fail-open. |
-| `stop-reflect-gate.ps1` | Stop | Hard-blocks turn end when an active checklist touched in the last 6h is all-ticked except lines containing "reflect" (G48). Exit 2 + stderr reason; NO stop_hook_active self-disarm — 8-block platform cap is the escape (user decision, P4c spec: deliberate override of this README's warn-not-block rule; the mtime window is the cross-session mitigation). Fence-aware; fail-open. Fixture override: STOP_GATE_DOCS_ROOT. Block message also instructs loading `harness-editing` before reflect's MD-edit phase (P8 2026-08-10). |
-| `permissiondenied-log.ps1` | PermissionDenied (**NOT WIRED**) | G70 pilot (P6 2026-08-08): appends one JSON line per denial (`ts`/`tool`/`input`, null-guarded `UNKNOWN(field absent)` — `tool_name`/`tool_input` in this event's payload are unconfirmed) to `~/.claude/logs/permission-denied.jsonl`; self-rotates >1000 lines → keep last 500 via two-step `[IO.File]` ReadAllLines/WriteAllLines UTF8-no-BOM. Script runtime-verified by stdin fixture; **live probe FAILED to produce an event**: a pretooluse-guard exit-2 block does NOT fire PermissionDenied (n=1), deny-RULE forms are all shadowed by the guard (hooks run BEFORE permission rules — observed), classifier denial not safely provokable. Per pilot pre-commitment ("wired only on a passing probe") the settings entry was removed; re-wire when a provokable permission-system denial exists, then re-run the contents-asserting probe. Sibling event `PermissionRequest` considered, not adopted — pilot goal is denial visibility, not a second decision path (A3). Rollback = already unwired; script stays for re-enable. |
-| `gate-output-filter.ps1` | PreToolUse (`Bash`) | G36 pilot (P6 2026-08-08): rewrites verbose gate commands (`pnpm test/lint/typecheck`, `vitest run`, `npx tsc`, `just check` + `; echo EXIT:` appended, no existing redirect/pipe) via `hookSpecificOutput.updatedInput` — full output to `$TEMP/claude-gate-logs/<epoch>.log` (POSIX-slash path), context gets grep of failure + all-four-coverage-metric lines, `EXIT:` line, `FULL_LOG:` pointer. Pattern source: `code:costs.md` worked example (research/usage-limits.md F10). **Guard interaction:** same-matcher PreToolUse hooks each receive the ORIGINAL input — the rewritten command's internal `\| head` never meets pretooluse-guard's pipe rule (reviewer-verified, P6 A1). `if`-field pre-filter considered, not adopted: permission-rule syntax can't match at arg-level precision (A2). Rollback = remove the settings entry. Tests: `scripts/test/gate-output-filter.test.mjs` (spawns PS 5.1, JSON stdin fixtures). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout. |
+| `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks fable dispatches without a live clearance marker. Ledger: `~/.claude/fable-dispatch.log`. |
+| `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
+| `stop-reflect-gate.mjs` | Stop | **Relaxed (2026-08-21):** when a recently-touched active checklist is all-ticked except reflect, blocks ONCE with "prompt the user to run reflect", then lets the retry pass (`stop_hook_active`). Reflect is prompted, never forced. |
+| `session-start.mjs` | SessionStart | Emits active checklists (+ first unchecked task) into context; after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
+| `precompact-archive.mjs` | PreCompact | Copies the transcript to `~/.claude/compact-archives/` before every compaction. |
+| `subagentstop-log.mjs` | SubagentStop | One line per stop to `~/.claude/subagent-stops.log` (self-trims: 512KB → last 200 lines). |
+| `otel-receiver-spawn.mjs` | SessionStart | Lazy-spawns `telemetry/otel-receiver.mjs` on :4318 when nothing is listening. |
+| `notification-toast.ps1` | Notification | Windows WinRT toast (WezTerm has no native notifications). Stays PowerShell — Windows-only integration. |
 
-> **git-add-A coverage is deliberately two-layer:** settings `deny` rules catch the literal prefix forms (`git add -A`, `git add --all`, PowerShell twins); the pretooluse-guard regex catches flag-order variants (`-fA`, `-Af`, embedded flags). Editing either layer alone silently narrows coverage — change both or neither. (code:permissions.md, 2026-08-08 P5 G84.)
+## settings.json wiring
 
-## Rules (learned the hard way — issue log 2026-07-27)
+Invoke via `node` with a forward-slash absolute path (backslashes get eaten by
+JSON+shell). Adjust the repo path per machine:
 
-- **Command paths: forward-slash, wrapped in escaped quotes.** Lone backslashes get stripped before execution (JSON `\\` → `\` → shell eats it); PreCompact once fired with `C:Usersyoung...` and errored. Working form:
-  `powershell -NoProfile -ExecutionPolicy Bypass -File "C:/Users/young/code/claude-config/hooks/<script>.ps1"`
-- **Fail-open design.** Script errors append to `~/.claude/hook-errors.log` and exit 0 — CLAUDE.md prose rules stay the backstop. Hook seems silent? Check that log first, then suspect path mangling — fired-but-errored is indistinguishable from silent.
-- **Unit-test via direct stdin pipe:** `'{"tool_input":{"command":"..."}}' | powershell -File <script>` — check exit code + stderr. Live verification only in interactive sessions.
-- **`claude -p` child sessions:** settings hooks unverified there (possibly the path bug; not re-tested). Don't rely on hooks firing in headless children — use unit tests.
-- **Hook wiring is NOT inert for running sessions** — settings docs say `hooks` auto-reload live, and a Stop hook wired mid-session fired post-compaction in the same session (n=1, 2026-08-08 P4c); a PreToolUse hook wired mid-session fired on the very next Bash call, no compaction between (n=2, 2026-08-08 P6 T9 probe). The old "hooks snapshot at session start" claim is falsified; don't require a fresh session to live-verify new wiring.
-- **Extend the guard, don't add prose-only rules** for mechanically blockable incident classes.
-- **Warn instead of blocking when the check reads state the committer does not own.** The
-  relocation gate audits the whole `~/code` tree, so it goes red on another session's in-flight
-  edits — and with several sessions running in parallel that is the normal case, not the edge
-  case. A blocking rule there would wedge commits on failures their authors did not cause.
-  Blocking is right for "this command is wrong" (the three rules above); warning is right for
-  "the workspace is currently in a bad state". Flip the relocation rule to `exit 2` once the
-  gate is reliably green. (2026-07-28 description-audit.)
-- **Self-collision when testing the guard:** a test command containing a literal trigger
-  (`Set-Content`, `just check | tail`, `git add -A`) is blocked by the *live* guard before it
-  can pipe anything. Split the literal across shell concatenation so the outer command does not
-  match while the JSON payload still does. Being blocked this way is itself a live confirmation
-  the rule fires.
+```json
+"hooks": {
+  "PreToolUse": [
+    { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/bash-guard.mjs\"" }] },
+    { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs\"" }] }
+  ],
+  "UserPromptSubmit": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs\"" }] } ],
+  "Stop": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs\"" }] } ],
+  "SessionStart": [ { "hooks": [
+    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/session-start.mjs\"" },
+    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/otel-receiver-spawn.mjs\"" }
+  ] } ],
+  "PreCompact": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/precompact-archive.mjs\"" }] } ],
+  "SubagentStop": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/subagentstop-log.mjs\"" }] } ],
+  "Notification": [ { "hooks": [{ "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/young/code/claude-config/hooks/notification-toast.ps1\"" }] } ]
+}
+```
+
+Keep the settings `deny` rules for `git add -A` forms — the two layers
+(deny rule + guard regex) deliberately overlap; change both or neither.
+
+## Conventions
+
+- Exit-code semantics: 0 = proceed, 2 = block (stderr is the reason), other = non-blocking error. A hook allow does NOT skip deny rules.
+- Unit-test by piping JSON to stdin: `echo '{"tool_input":{"command":"git add -A"}}' | node hooks/bash-guard.mjs` — tests live in `scripts/test/`, run `node --test scripts/test/*.test.mjs`.
+- Hook wiring reloads live — no session restart needed to verify new wiring.
+- Env overrides for tests/remotes: `CLAUDE_WORKSPACE_ROOT`, `CLAUDE_CONFIG_REPO`, `STOP_GATE_DOCS_ROOT`.
