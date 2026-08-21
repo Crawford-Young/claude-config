@@ -1,83 +1,31 @@
 ---
 name: harness-editing
-description: Use before editing the workspace harness - the CLAUDE.md chain, claude-config, hooks, skills, agent profiles, or settings.json. Carries layout and load paths, junction and branch edit rules, commit rules, hook conventions, skill authoring caps, and probe verification rules for harness changes.
+description: Use before editing the workspace harness — the CLAUDE.md chain, claude-config, hooks, skills, agent defs, or settings.json. Carries the layout map, the live-vs-commit rule, and verification discipline for harness changes.
 ---
 
 # Harness Editing
 
-Guidelines for any agent editing this workspace's harness (CLAUDE.md chain, claude-config, hooks, skills, agent profiles, settings.json). Sources: root CLAUDE.md, `plan-premises` skill, `docs/SKILLS.md`, and P1 sweep findings — gap-report IDs (`G<n>`) cite `docs/harness-evolution/specs/2026-08-06-gap-report.md`.
-
-## Layout — what lives where, what loads from where
-
-- **claude-config repo** is the canonical home of: root + domain CLAUDE.md (under `workspace/`, junctioned into `~/code`), `agents/` (junctioned to `~/.claude/agents/`), `skills/`, `hooks/`, workspace reference MDs. Edit through either path — same file; commit in claude-config.
-- **Junctions load from the MAIN checkout only.** `skills/` and `workspace/` junctions resolve to the main claude-config tree; a worktree edit changes files nothing reads. Check `git -C <claude-config> branch --show-current` before ANY claude-config edit.
-- **Load chain:** Claude Code loads every CLAUDE.md from cwd upward at launch (root first, each level additive — the doc wording is "judgment to reconcile", not hard override; G11), plus each subdirectory's file on demand when files there are read. Domain CLAUDE.md files and `.claude/rules/` path-scoped files are **dropped by compaction** and reload only on next matching file read (G7) — compaction-critical rules belong in root. Live rules dir: `~/code/.claude/rules` junction → `claude-config/workspace/.claude/rules/` (setup.ps1/setup.sh wire it; verify-relocation classes rules by junction presence). `paths:` rules load on matching **Read** only — not Write/create, not session start, and Grep/Bash reads do NOT fire them (observed 2026-08-09 G34 T5a: dep question answered via Grep loaded nothing); probe-verified 2026-08-09 (G34): ancestor path-scoped rules DO fire from nested repo cwds, junction-at-dir resolves, `**/`-prefixed globs match nested-repo files.
-- **Loading caps to respect:** MEMORY.md loads first 200 lines / 25KB only (G26). Skill bodies re-injected post-compact are truncated at 5k tokens/skill, 25k total, start-of-file kept (G33) — put load-bearing rules in a skill's first ~5k tokens. Skill descriptions are silently shortened when many skills are present (~90 here) — lead with discriminating keywords (G22).
-- **settings.json** (`~/.claude/settings.json`): model pin, permissions (defaultMode auto + deny rules, plus the DORMANT fable-dispatch and push/PR ask rules — ask is inert under auto mode; fable dispatch is gated by the `Agent` hook guard since P9, not by those rules), hooks wiring, plugins, skillOverrides. Auto-mode `autoMode` config is read from USER settings only, never project-level (by design, v2.1.207+). env block also carries the OTel telemetry vars (telemetry/README.md is the reproducible record). autoCompactWindow backstop (250k, P3 2026-08-08; default is model-tuned ≈1M on Fable) — fires INCONSISTENTLY: the P8 probe found 5 sessions at 270k–340k with zero auto-compact on CLI 2.1.225 while 2 fired correctly in the 211k–250k band (`docs/harness-evolution/research/2026-08-10-compact-clear-audit.md` §9). Marker discipline is the mechanism; never plan around the 250k number. `"Autocompact is thrashing"` recovery: chunked reads → focused compact → subagent offload → /clear (code:troubleshooting.md via gap report G29).
-- **Auth precedence trap:** a stray `ANTHROPIC_API_KEY` in the environment silently outranks the subscription OAuth login once approved for this environment — usage bills to the key, not the plan; check `/status` and unset when the subscription lane is intended. `--bare` mode does not read `CLAUDE_CODE_OAUTH_TOKEN` at all (API-key lanes only). Precedence order + full lane list: https://code.claude.com/docs/en/authentication.md (2026-08-08 P7 drift sweep).
-- **New skill = new junction; new agent def = no wiring.** `~/.claude/skills/` holds one junction PER skill; `setup.ps1` creates them and is NOT auto-re-run — a new `claude-config/skills/<name>/` is unreachable in every session until setup.ps1 re-runs (idempotent, skips existing) or the junction is created by hand; `verify-relocation.mjs` classes an unjunctioned skill as archival. `agents/` is a whole-directory junction — new defs need no wiring, but the Agent tool's type registry snapshots at session start: a def written mid-session is NOT dispatchable in that session ("Agent type not found", n=1 2026-08-08 G31 re-probe) — dispatch from a fresh session, or pin behavior onto an existing def (model override at dispatch works). (Cold review Critical 1/Major 4, 2026-08-06 — this wave's own skill was the trigger case.)
-
-## Edit rules
-
-- **The Edit tool refuses to write through a symlink/junction — pass the real target path** (resolves into `claude-config/workspace/...`). The refusal guards against committing in a repo that doesn't track the file.
-- **Junction edits bind LIVE behavior to the main checkout; commits do not.** Protocol (2026-08-08): the main checkout never switches off `main` and never commits — live edits land on its disk, every commit lands via an ephemeral worktree PR from `origin/main` (root CLAUDE.md §Branch Strategy carries the full sequence: path-scoped diff only, worktree path contains `claude-config`, restore+`merge --ff-only` sync — never `pull --rebase` on the dirty shared checkout).
-- **Mid-session CLAUDE.md edits are inert for the current session** — content is read once at session start; the edit applies only after the next `/clear`, `/compact`, or restart (G8). Don't edit a rule and assume it now governs your own remaining work.
-- **Never round-trip UTF-8 files through PowerShell Get-Content/Set-Content** (mojibake/BOM; hook-enforced). Use Edit/Write.
-- **PS 5.1 redirected stdout is OEM CP437** — non-ASCII glyphs mangle on the wire (U+2192 → 0x1A; U+00B7 round-trips CP437-symmetrically, so a same-encoding test capture is structurally blind to it). Any harness script emitting non-ASCII forces `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)` on BOTH producer and test-capture sides (2026-08-06 P2 cold review F1).
-- **Under `$ErrorActionPreference = 'Stop'`, a PowerShell-level stderr redirect of a native command (`git ... 2>$null`) throws NativeCommandError** — route through `cmd /c "git ... 2>nul"` and read `$LASTEXITCODE` (2026-08-06 P2 issue #3 round 3).
-- **PS parse-check one-liners pre-declare their `[ref]` vars.** `[Parser]::ParseFile($p, [ref]$t, [ref]$e)` with undeclared `$t`/`$e` errors before parsing ever runs, and a later `$e.Count` reads 0 — false green on a file that was never parsed. Declare `$t = $null; $e = $null` first and assert the parse RAN (`$null -ne $t`) before trusting `$e.Count -eq 0`. (2026-08-08 P6.)
-- **Prose is a request; a hook or permission rule is a guarantee** (G3, G48 — doc-verbatim: "If a rule must hold every time, make it a hook rather than a prompt instruction"). Before adding a "never X" line to CLAUDE.md, ask whether it belongs in `permissions.deny/ask`, `autoMode.hard_deny`, or a PreToolUse hook instead.
-- **Recurrence despite a rule = prune-or-hook trigger, not restate-louder trigger** (G17/G18 family — bloated files cause rule-dropping). Additions to CLAUDE.md pass the test "would removing this cause mistakes?"; reflect additions use claim+cite form; retirement of stale/n=1-never-refired rules is part of maintenance, not vandalism (G18).
-- **Two enforcement layers may deliberately overlap** (settings deny + hook regex for `git add -A`, G84) — check for a sibling layer before narrowing either; document the split where it exists.
-- **Rule-birth re-sweep:** a new audit rule re-sweeps what already shipped under the old rule, or the deferral is written down with a target list (root CLAUDE.md rule — applies to harness edits too).
-
-## Commit rules
-
-- Docs repo (`~/code/docs`, remote `Crawford-Young/docs`, branch `master`): direct commits are established practice; **explicit paths only, never `git add -A`** (deny-ruled + hook-enforced; the repo is shared by concurrent sessions).
-- claude-config: no commit/push without user approval; every change lands as a PR from an ephemeral `origin/main` worktree — there is no direct-commit lane on the main checkout; rebase-only workflow; "Rebase and merge" only.
-- **Worktree commit lane is the STANDARD, not an escape hatch (2026-08-08):** commits never happen on the main checkout — root CLAUDE.md §Branch Strategy carries the sequence; memory `project_claude_config_deferred_commits` holds the PR #12 precedent + commit-from-the-index trick.
-- `git -C <path>` for multi-repo git ops — Bash cwd persists across calls.
-- Checklist ticks + orchestration-log lines land in the same action batch as the commit they record.
-- **Background sessions never auto-commit or push (G2 resolution 2026-08-06):** the approval rule is absolute, no carve-out; background-session / claude-agents adoption is deferred until mechanically guarded (hook or deny rule).
-- **Post-merge sync when the PR ADDED files: a new file diffs as a numstat DELETION at the old HEAD** (locally it is an untracked artifact, not a tracked change), and `merge --ff-only` REFUSES over untracked files identical to incoming ones. Sequence: byte-verify local copy vs blob (`git cat-file -p origin/main:<path>`), delete the local untracked copy, then `merge --ff-only` re-materializes it. (2026-08-08 P6 sync.) `git restore --source=HEAD` can re-materialize a file with CRLF over the index's LF — ff-only then blocks on a phantom local change; normalize via `git show HEAD:<file> > <file>` (bash redirect preserves LF) and retry (2026-08-09 G34 sync; n=1, provisional).
-
-## Hooks
-
-- Wiring lives in `~/.claude/settings.json` `hooks` block; scripts in `claude-config/hooks/` (invoked via forward-slash quoted absolute paths). Current set: PreToolUse guards (`Bash|PowerShell` command guard; `Agent` model guard — blocks model-omitted dispatches on frontmatter-less types, and blocks explicit fable dispatches without a live user clearance - P9), UserPromptSubmit fable-clearance grant (`fable-clearance-grant.ps1` — writes the single-use 30-min marker the `Agent` guard consumes, granted only by the token `FABLE OK` in the user's own prompt; speed bump plus audit trail at `~/.claude/fable-dispatch.log`, never a hard gate — the marker is a file and the model holds Write/Bash), PreCompact archive, SubagentStop log, Notification toast (`notification-toast.ps1` — WinRT desktop toast for WezTerm, G53), SessionStart OTel-receiver spawn (`otel-receiver-spawn.ps1` — lazy-spawns the local usage-telemetry receiver on :4318, OTel wave 2026-08-07), Stop reflect gate (`stop-reflect-gate.ps1` — blocks turn end on reflect-unticked complete checklists, G48) — 7 of ~28 documented events (G70 lists mapped pilot candidates).
-- **Fail-open convention:** guard scripts catch their own errors and append to `~/.claude/hook-errors.log` rather than blocking work. Check that log when a hook misbehaves; `claude --safe-mode` (all customizations off) and `/doctor` are the documented isolation path (G60).
-- Exit-code semantics: 0 = proceed (stdout JSON processed), 2 = block (stderr reason), other = non-blocking error. A hook `allow` does NOT skip deny/ask rules; a hook deny applies even in bypassPermissions.
-- The `if` field (permission-rule syntax) filters which calls spawn the hook process — only valid on PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/PermissionDenied, best-effort (fails open on unparseable commands) — use the permission system for hard guarantees (G41).
-- Hook-written logs have no rotation (G42) — bound or document cleanup when adding a logging hook. On the watch list: `~/.claude/hook-errors.log` and `~/.claude/fable-dispatch.log` (P9 ledger — one line per fable dispatch, ALLOW or BLOCK).
-- Hook output >50K goes to disk with a path + preview, not into context.
-
-## Skills
-
-- **Description-based routing has measured limits.** `live-qa-traps` and `games-diagnostics` missed 10/10 fresh-session probes through two description-rewrite rungs; the fix is promoting the TRIGGER into always-loaded files (CLAUDE.md §Workflow), not rewriting the description — tried, failed, ladder TERMINAL. Evidence: `docs/SKILLS.md` §Writing a Skill `description`.
-- **Do not "fix" this by re-attempting description rewrites** — with two doc-grounded exceptions untested at ladder close, both cheap and both legal under the never-tune-to-probe rule: shorten + front-load keywords against listing truncation (G22), and third-person voice (G21). `paths:` frontmatter is NOT a fix — file-access-triggered, post-scoping timing (G24; considered and rejected on timing class, not empirically tested).
-- Platform constraints for authoring (G21): name ≤64 chars lowercase/digits/hyphens, no 'claude'/'anthropic'; description ≤1024 chars, no XML tags, non-empty (and a `: ` in the description silently unpublishes — local rule); body <500 lines; references one level deep; 100+-line reference files get a TOC (G23).
-- Routing authority is `docs/SKILLS.md`; keep its trigger table in sync when adding/renaming skills. `/verify` and `/code-review` are explicit-invoke-only since v2.1.215 (G12).
-- Heavy skills: `disable-model-invocation`/`skillOverrides` zero their idle cost (G-adjacent, whats-new F11); post-compact truncation applies (G33).
-
-## Verification — probe rules for harness changes
-
-- **Routing/behavior claims are verified by probe, not by inspection.** A probe = a FRESH session, an uncontaminated prompt (never containing the description's own words — "never tune a description to the prompt you are testing it with", SKILLS.md), and a near negative control (a prompt that should NOT fire the skill/rule).
-- **Audit by tool trace, not announce line** — skills fire without announcing (3 of 4 probes); read the Skill/tool call list (SKILLS.md). OTel `skill_activated` + `invocation_trigger` is the automated version if ever piloted (G61).
-- Plan-premise discipline applies to harness edits: verify the premise a rule rests on before building on it (the depth-5 claim, the synchronous-subagent claim — both went stale silently; G1, G38). A claim carried from an older CLI version names the version or gets re-checked (`claude --version` first).
-- Doc-sourced facts carry the doc URL; version-dependent facts carry the version; n=1 findings are marked provisional. Retract-if-unsupported: when the cited evidence no longer holds, the rule is corrected or removed, not left (G18).
-- Cold review before dispatch for process-doc waves (n=5, 0 self-caught — root CLAUDE.md); reviewer Criticals verified against source before acting.
-
-## Where each artifact type lives
+## Layout — what lives where
 
 | Artifact | Location |
 |---|---|
-| Specs, checklists, issue logs, agent logs, screenshots | `~/code/docs/<domain>/<project>/` (meta-projects incl. harness-evolution at `docs/` root) |
-| Living reference MDs (brand refs, workspace docs) | claude-config junctions (`docs/brand/`, root MDs) — never project working artifacts |
-| Skills | `claude-config/skills/` (junctioned) |
-| Agent types + profiles | `claude-config/agents/` + `agents/profiles/` (profiles = routing authority) |
-| Hooks | `claude-config/hooks/` + wiring in `~/.claude/settings.json` |
-| Statusline | `claude-config/statusline/usage-statusline.ps1` (wired via `statusLine.command`); usage-history contract in `claude-config/statusline/README.md` |
-| OTel telemetry (receiver, report, schema contract) | `claude-config/telemetry/` (data: `~/.claude/otel/`, NEVER in-repo) |
-| Auto memory | `~/.claude/projects/C--Users-young-code/memory/` (MEMORY.md index, 200-line/25KB load cap — G26) |
-| Session transcripts | `~/.claude/projects/<encoded-cwd>/*.jsonl` (plaintext, 30-day cleanup, format internal — don't parse) |
-| Harness-evolution deliverables | `docs/harness-evolution/` (gap report, fact sheet, research/; the promoted source of this skill is stubbed there) |
-| Path-scoped rules | `claude-config/workspace/.claude/rules/` (junctioned to `~/code/.claude/rules`) |
+| Root + domain CLAUDE.md, reference docs | `claude-config/workspace/` — junctioned into `~/code` |
+| Skills | `claude-config/skills/` — one junction per skill into `~/.claude/skills/` (a new skill needs `setup.ps1`/`setup.sh` re-run or a hand-made junction) |
+| Agent defs + ROUTING.md | `claude-config/agents/` — whole-directory junction to `~/.claude/agents/` |
+| Hooks | `claude-config/hooks/*.mjs` — wiring in `~/.claude/settings.json` |
+| Workflow scripts | `claude-config/scripts/*.mjs` (tests in `scripts/test/`, run `node --test`) |
+| Specs, checklists, issues, archives | `~/code/docs/` (private repo) — never in junctioned claude-config dirs |
+
+## Edit rules
+
+- **Junctions load the MAIN checkout only.** Live edits land on its disk (Edit tool needs the real `claude-config/...` path — it refuses symlinks); commits go through `git-ops` (`land.mjs` — ephemeral worktree from `origin/main`, path-scoped diff). Never commit on the main checkout (hook-enforced).
+- **Mid-session CLAUDE.md edits are inert** until the next `/clear`, `/compact`, or restart. Hook wiring changes, by contrast, apply live.
+- **A rule that must hold every time is a hook or deny rule, not prose** — extend `hooks/bash-guard.mjs` (with a test) instead of adding a "never X" line.
+- **New rules are one imperative line**; the incident story goes to `docs/harness-evolution/archive/rule-history.md`. Recurrence despite a rule = prune or mechanize, never restate louder.
+- Skill frontmatter: an unquoted `: ` in `description` silently unpublishes the skill (`verify-frontmatter.mjs` gates it in CI); lead descriptions with discriminating keywords.
+
+## Verification
+
+- Routing/behavior claims are verified by **probe** (a fresh session, an uncontaminated prompt, a near negative control), not by inspection — and audited by tool trace, not the announce line. A session cannot probe its own routing.
+- Known-broken description routing: `docs/web/TESTING-TRAPS.md` and games diagnostics are hand-loaded via domain CLAUDE.md pointer lines — don't re-attempt description rewrites for them.
+- Hooks are fail-open: errors go to `~/.claude/hook-errors.log` — check it first when a hook seems silent. Unit-test hooks by piping JSON to stdin.
