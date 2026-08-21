@@ -2,7 +2,7 @@
 
 **Inherits:** `~/code/CLAUDE.md` (universal rules). Adds the Godot stack; overrides only where explicitly stated. Applies to every project under `~/code/games/`.
 
-> **Situational skills:** `plan-premises` (games plan-time checks — load before writing a games plan) · `games-diagnostics` (telemetry, probes, feel-gate tuning loop).
+> **Hand-load [`../docs/games/DIAGNOSTICS.md`](../docs/games/DIAGNOSTICS.md)** before any work touching movement, physics, or game feel — probe discipline and the tuning loop are wave-shape decisions.
 
 ---
 
@@ -91,6 +91,4 @@ Automated coverage, GUT, and a clean headless run do not catch what a human play
 - [ ] Clean run with no `push_error`/`push_warning` output
 - [ ] Manual playtest — the mandatory gate above
 - [ ] README.md + repo CLAUDE.md updated
-- [ ] Phase boundary: `claude-md-management:reflect` run before requesting push/PR
 
-Run `superpowers:verification-before-completion` before declaring anything done.

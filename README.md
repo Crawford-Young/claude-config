@@ -1,103 +1,47 @@
 # claude-config
 
-Personal Claude Code skills and workspace standards across three development domains — web, games, and apps.
+Personal Claude Code harness — fully owned skills, cross-platform Node scripts and hooks, workspace standards across three domains (web, games, apps). Restructured 2026-08 around simplification and trust in the models: skills are the actionable workflow units, scripts do the mechanical work, hooks enforce the rules that must always hold, and incident history lives in the docs repo's archive instead of always-loaded context.
 
 ## Layout
 
 | Path | What | Linked to |
 |---|---|---|
-| `skills/` | Custom skills | `~/.claude/skills/<name>` (junction/symlink) |
-| `agents/` | Predefined subagent definitions + routing profiles | `~/.claude/agents/` (junction) |
-| `overrides/` | Edited official plugin skills | plugin cache dir (junction) |
-| `workspace/CLAUDE.md` | **Universal** standards — workflow, planning discipline, git, commit policy, context hygiene, security | `~/code/CLAUDE.md` (symlink) |
-| `workspace/web/CLAUDE.md` | Web domain — Next.js, TypeScript, Radix+CVA, Vitest, Playwright, Vercel | `~/code/web/CLAUDE.md` (symlink) |
-| `workspace/games/CLAUDE.md` | Games domain — Godot 4, GDScript, GUT | `~/code/games/CLAUDE.md` (symlink) |
-| `workspace/apps/CLAUDE.md` | Apps domain — Expo (React Native), Tauri v2 | `~/code/apps/CLAUDE.md` (symlink) |
-| `workspace/docs/*.md` | Universal reference docs — ORCHESTRATOR, **SKILLS** (skill routing) | `~/code/docs/<name>` (symlinks) |
-| `workspace/docs/web/*.md` | Web reference docs — STACK, PATTERNS, TEMPLATES, ENV, COMPONENT-LIBRARY, TYPESCRIPT-STYLE | `~/code/docs/web/<name>` (symlinks) |
-| `workspace/docs/brand/` | Cross-domain brand + design system | `~/code/docs/brand` (junction) |
-| `workspace/.claude/rules/` | Path-scoped rules (`paths:` frontmatter — load on matching file reads, workspace-wide via ancestor traversal) | `~/code/.claude/rules` (junction) |
-| `statusline/` | Usage statusline (`usage-statusline.ps1` + tests) — rate-limit/context bars + usage history log | `~/.claude/settings.json` `statusLine.command` (direct path) |
-| `evals/` | Eval registry (G72) — routing/adherence probes + mined claims | consumed by `telemetry/eval.mjs` |
-| `docs/` | Repo-only docs (daily updates, prompts) | — |
-| `scripts/` | Workspace utility scripts | — |
+| `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops`, `reflect`, `continuation`, `cleanup`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
+| `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state` — all `.mjs`, tested via `node --test scripts/test/`) | invoked by skills |
+| `hooks/` | Node hooks (guards, gates, logs — see `hooks/README.md` for the settings.json wiring) | `~/.claude/settings.json` `hooks` block |
+| `agents/` | Subagent defs (`implementer`, `reviewer`, `recon`, `web-recon`, `docs-agent`, `Explore`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
+| `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
+| `workspace/<domain>/CLAUDE.md` | Web / games / apps standards | `~/code/<domain>/CLAUDE.md` |
+| `workspace/docs/` | Reference docs (web stack docs, `TESTING-TRAPS`, games `DIAGNOSTICS`, brand) | `~/code/docs/...` (file-by-file symlinks) |
+| `workspace/.claude/rules/` | Path-scoped rules | `~/code/.claude/rules` |
+| `statusline/` | Usage statusline | `statusLine.command` |
+| `telemetry/` | OTel usage receiver + report | data in `~/.claude/otel/` |
+| `docs/` | Repo-only docs (migration notes, prompts) | — |
 
-Claude Code loads every `CLAUDE.md` from the working directory upward, root first, so a session in `~/code/web/<repo>` gets universal → web → repo rules, each overriding the last.
+Claude Code loads every `CLAUDE.md` from the working directory upward, so a session in `~/code/web/<repo>` gets universal → web → repo rules. Skill routing is the skills' own frontmatter descriptions — there is no routing table.
 
-Domain reference docs are linked **file-by-file into a real directory**, never as a whole-directory junction — `~/code/docs/<domain>/` also holds the docs repo's own project folders, and a directory link would relocate them into this repo.
-
-Per-project planning docs (`~/code/docs/<domain>/<project>/`) stay local — churn, not standards.
-
-**Skill usage routing** lives in [`workspace/docs/SKILLS.md`](./workspace/docs/SKILLS.md) — the canonical situation→skill table. `ORCHESTRATOR.md` and `CLAUDE.md` point to it.
-
-## Skills
-
-| Skill | Trigger | Purpose |
-|---|---|---|
-| `continuation` | Every wave boundary + heavy-session `/clear` | Generates a paste-ready prompt (never a file) before `/clear` so the next session resumes without loss |
-| `inline-execute` | Executing a checklist with ≤2 files per task | Runs a checklist plan inline without subagent overhead |
-| `new-component` | "add a component", "create a [name] component" | Full TDD workflow for Radix UI + CVA + Tailwind components — test → implement → export → story → check |
-| `new-repo` | "new project", "create a repo", "scaffold" | 24-step production scaffold: git, env, justfile, ESLint, Husky, Vitest, Playwright, Storybook, CI, auth, monitoring |
-| `agent-factory` | Any multi-task plan execution, wave start, dispatch/model decisions, spawn decisions at any depth | Spawn protocol, dispatch template, performance MDs, profile routing, type authoring, escalation (`orchestrate` is a superseded stub pointing here) |
-| `persona-debate` | Brainstorm hits a genuine design fork, or user says "debate this" | Personas with competing legitimate engineering claims argue options → trade-off table → user picks. Spec-phase only |
-| `release` | "release", "publish", "cut a release" | Full release process for npm packages — checks, build, verify, changeset, commit |
+Retired in the 2026-08 restructure (full text in git history and `docs` repo → `harness-evolution/archive/`): all vendored plugins (superpowers, claude-md-management, vercel, sentry, stripe, frontend-design, caveman), the `overrides/` junction hack, the SKILLS.md routing table, per-type agent profiles + performance-MD/eval machinery, the relocation gate, and the PowerShell hook set.
 
 ## Setup
 
-**Windows** (junctions — no admin required):
-
 ```powershell
-git clone https://github.com/crawfordyoung/claude-config
-cd claude-config
-.\setup.ps1
+# Windows (junctions, no admin)
+git clone https://github.com/Crawford-Young/claude-config
+cd claude-config; .\setup.ps1
 ```
-
-**macOS / Linux** (symlinks):
 
 ```bash
-git clone https://github.com/crawfordyoung/claude-config
-cd claude-config
-bash setup.sh
+# macOS / Linux (symlinks)
+git clone https://github.com/Crawford-Young/claude-config
+cd claude-config && bash setup.sh
 ```
 
-Skills are linked into `~/.claude/skills/`, and workspace standards (`workspace/CLAUDE.md`, `workspace/docs/`) are linked into `~/code/` — available immediately in Claude Code, no restart needed.
+Both are idempotent and dynamic — a new skill directory or workspace doc links on the next run. Hook wiring is manual: copy the block from `hooks/README.md` into `~/.claude/settings.json`. Migrating from the pre-2026-08 harness: `docs/MIGRATION-2026-08.md`.
 
-> **Windows:** file symlinks (CLAUDE.md, docs root MDs) require Developer Mode (Settings → System → For developers) or an elevated shell. Directory junctions need neither.
+> **Windows:** file symlinks need Developer Mode or an elevated shell; directory junctions need neither.
 
-## Scripts
+## Conventions
 
-`scripts/` holds workspace utility scripts:
-
-| Script | Purpose |
-|---|---|
-| `export-harness.ps1` / `import-harness.ps1` | Export/import Claude Code harness config between machines |
-| `open-admin-shells.ps1` | Open elevated PowerShell windows for admin tasks |
-
-## Plugin skill overrides
-
-Some official plugin skills are edited and tracked under `overrides/<plugin>/<skill>/SKILL.md`. The plugin cache directory is replaced with a junction to the repo, so the skill still loads under its original namespace (e.g. `claude-md-management:reflect`).
-
-| Override | Original | Why |
-|---|---|---|
-| `overrides/claude-md-management/reflect/` | `claude-md-management:reflect` | Customized phase structure, workspace paths, dialogue prompts |
-
-**After a plugin update:** check `~/.claude/plugins/cache/<plugin>/.../skills/<name>` — if the junction was replaced with a real directory, re-run the junction command:
-```powershell
-# Windows
-Remove-Item -Recurse -Force <plugin-skill-dir>
-New-Item -ItemType Junction -Path <plugin-skill-dir> -Target (Resolve-Path overrides/<plugin>/<skill>)
-```
-
-## Adding a skill
-
-1. Create `skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`) and the skill body
-2. Run `setup.ps1` / `setup.sh` to link it (or create the junction/symlink manually)
-3. Commit and push
-
-## Updating a skill
-
-Edit `skills/<name>/SKILL.md` in the repo. The junction/symlink means Claude Code picks up the change immediately.
-
-## Stack context
-
-These skills assume the standard stack: Next.js App Router, TypeScript strict, Tailwind, Radix UI + CVA, pnpm, Vitest, Playwright, Auth.js v5, Neon + Drizzle, Vercel.
+- The main checkout is the live junction surface: it never leaves `main` and never commits. Live edits land here; commits go through `node scripts/land.mjs` (ephemeral worktree, path-scoped diff). Both rules are hook-enforced.
+- Gates: `node --test scripts/test/*.test.mjs` and `node scripts/verify-frontmatter.mjs` (CI).
+- New rules are one imperative line; incident stories go to `docs/harness-evolution/archive/rule-history.md`. A rule that must hold every time becomes a hook, then its prose is deleted.
