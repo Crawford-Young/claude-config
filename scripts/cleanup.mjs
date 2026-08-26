@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import { die, findActiveChecklists, git, log, parseArgs, workspaceRoot } from './lib.mjs';
+import { die, findActiveChecklists, git, listenerPidFromNetstat, log, parseArgs, workspaceRoot } from './lib.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
@@ -74,9 +74,8 @@ function killPort(port) {
   if (!Number.isInteger(port)) die('--kill-port needs a port number');
   if (process.platform === 'win32') {
     const r = spawnSync('netstat', ['-ano'], { encoding: 'utf8' });
-    const line = (r.stdout || '').split('\n').find((l) => l.includes(`:${port}`) && /LISTENING/.test(l));
-    if (!line) return log(`port ${port}: no listener`);
-    const pid = line.trim().split(/\s+/).pop();
+    const pid = listenerPidFromNetstat(r.stdout, port);
+    if (!pid) return log(`port ${port}: no listener`);
     spawnSync('taskkill', ['/F', '/PID', pid], { stdio: 'inherit' });
   } else {
     const r = spawnSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' });

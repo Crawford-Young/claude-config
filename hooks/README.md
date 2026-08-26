@@ -9,6 +9,18 @@ seems silent.
 | Script | Event (matcher) | Does |
 |---|---|---|
 | `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout. |
+
+**Guard scoping** — three rules about *what a rule is allowed to read*, each one a
+fixed false verdict; change them only with a test:
+
+- Quoted `-m`/`--message` payloads are stripped first. A commit message is prose:
+  `git commit -m "handle .env loading"` stages nothing and must not block.
+- Flag rules are scanned **per clause**, so `git add -p a.ts && grep -A 3 x a.ts`
+  is not a `git add -A`.
+- The repo a git command targets is the payload cwd **walked through any leading
+  `cd`**. The workspace root is not itself a repo, so `cd <repo> && git commit` is
+  the shape the branch rules actually have to see — reading `payload.cwd` alone
+  makes the commit-on-main rule a no-op in normal use.
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks fable dispatches without a live clearance marker. Ledger: `~/.claude/fable-dispatch.log`. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `stop-reflect-gate.mjs` | Stop | **Relaxed (2026-08-21):** when a recently-touched active checklist is all-ticked except reflect, blocks ONCE with "prompt the user to run reflect", then lets the retry pass (`stop_hook_active`). Reflect is prompted, never forced. |

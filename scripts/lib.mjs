@@ -103,6 +103,19 @@ export function findActiveChecklists(docsRoot) {
   return found;
 }
 
+/**
+ * PID of the process LISTENING on `port`, from `netstat -ano` output.
+ * Anchored to the local-address column on purpose: a substring test for
+ * `:3000` also matches `:30001`, and the caller kills what this returns.
+ */
+export function listenerPidFromNetstat(stdout, port) {
+  const local = new RegExp(`^\\s*\\S+\\s+\\S+:${port}\\s`);
+  const line = (stdout || '').split(/\r?\n/).find((l) => local.test(l) && /LISTENING/i.test(l));
+  if (!line) return null;
+  const pid = line.trim().split(/\s+/).pop();
+  return /^\d+$/.test(pid) ? pid : null;
+}
+
 export function log(msg) {
   try {
     process.stdout.write(`${msg}\n`);
