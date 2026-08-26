@@ -1,6 +1,6 @@
 ---
 name: new-repo
-description: "Scaffolds a complete new repository following the full production checklist from CLAUDE.md. Use this skill whenever the user says 'new project', 'create a repo', 'start a new app', 'scaffold a project', 'initialize a repository', or any time a fresh codebase needs to be set up. Covers the full 24-step setup: git, gitignore, env, justfile, security headers, ESLint, Husky, commitlint, Vitest, Playwright, Storybook, MSW, dark mode, CI, Dependabot, database, auth, Upstash, Sentry, Pino, analytics. Never skip steps — each one exists for a production-critical reason."
+description: "Use when bootstrapping a repo from scratch — 'new project', 'create a repo', 'scaffold a project', 'start a new app'. Carries the 24-step production setup (git, tooling, testing, Storybook, dark mode, CI, data layer, services), hard-gated in order."
 ---
 
 # New Repository Scaffolding

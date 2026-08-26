@@ -1,6 +1,6 @@
 ---
 name: new-component
-description: "Creates a new UI component following strict TDD for a Radix UI + CVA + Tailwind CSS component library. Use this skill whenever the user says 'add a component', 'create a [name] component', 'build a button/dialog/input/badge/avatar/etc', 'new ui component', or any time a reusable React component needs to be added to the library. This skill enforces the full workflow: gather requirements → failing test → implement → export → story → full check. Never skip steps."
+description: "Use when adding a reusable component to the Radix + CVA + Tailwind component library — 'add a component', 'build a badge/dialog/input', 'new ui component'. Enforces the TDD chain in order — requirements, failing test, implement, export, story, gates."
 ---
 
 # New Component Workflow

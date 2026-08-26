@@ -1,6 +1,6 @@
 ---
 name: release
-description: "Guides the full release process for a published npm package — running all quality checks, building the package, verifying the output, creating a changeset, and preparing the release commit. Use this skill whenever the user says 'release', 'publish', 'cut a release', 'ship a version', 'create a changeset', or 'ready to publish'. Enforces that nothing ships unless all checks pass at 100%. Never skip the verification steps."
+description: "Use when publishing the npm component library — 'release', 'publish', 'cut a release', 'ship a version', 'create a changeset'. Hard-gated in order — full checks, build, dist verify, Storybook, semver bump, changeset. Nothing ships on a failing gate."
 ---
 
 # Release Workflow
