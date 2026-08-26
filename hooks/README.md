@@ -23,6 +23,7 @@ fixed false verdict; change them only with a test:
   makes the commit-on-main rule a no-op in normal use.
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks fable dispatches without a live clearance marker. Ledger: `~/.claude/fable-dispatch.log`. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
+| `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before `autoCompactWindow` (250k) can compact silently. Notes at 100k, louder at 175k (once each), **blocks at 235k**. Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under 100k. Tune with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
 | `stop-reflect-gate.mjs` | Stop | **Relaxed (2026-08-21):** when a recently-touched active checklist is all-ticked except reflect, blocks ONCE with "prompt the user to run reflect", then lets the retry pass (`stop_hook_active`). Reflect is prompted, never forced. |
 | `session-start.mjs` | SessionStart | Emits active checklists (+ first unchecked task) into context; after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
 | `precompact-archive.mjs` | PreCompact | Copies the transcript to `~/.claude/compact-archives/` before every compaction. |
@@ -41,7 +42,10 @@ JSON+shell). Adjust the repo path per machine:
     { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/bash-guard.mjs\"" }] },
     { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs\"" }] }
   ],
-  "UserPromptSubmit": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs\"" }] } ],
+  "UserPromptSubmit": [ { "hooks": [
+    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs\"" },
+    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/context-gauge.mjs\"" }
+  ] } ],
   "Stop": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs\"" }] } ],
   "SessionStart": [ { "hooks": [
     { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/session-start.mjs\"" },
@@ -62,3 +66,18 @@ Keep the settings `deny` rules for `git add -A` forms — the two layers
 - Unit-test by piping JSON to stdin: `echo '{"tool_input":{"command":"git add -A"}}' | node hooks/bash-guard.mjs` — tests live in `scripts/test/`, run `node --test scripts/test/*.test.mjs`.
 - Hook wiring reloads live — no session restart needed to verify new wiring.
 - Env overrides for tests/remotes: `CLAUDE_WORKSPACE_ROOT`, `CLAUDE_CONFIG_REPO`, `STOP_GATE_DOCS_ROOT`.
+- A hook that a test imports must guard its `run()` behind an `import.meta.url === pathToFileURL(process.argv[1]).href` check — an unguarded import blocks forever reading stdin.
+
+## Context-gauge thresholds
+
+The numbers are derived, not round. From `~/.claude/usage-history` (35 sessions):
+peak-context p25 = 120k, p50 = 190k; 89% of sessions cross 100k and **49% cross
+200k**. The context window is 1M, so a block at 200k would fire in half of all
+sessions with 800k of headroom left — a nag, not a gate.
+
+The thing worth blocking is `autoCompactWindow` at 250k, which compacts silently
+and so does exactly what the doctrine forbids (a wave boundary is a `/clear`,
+never a compact). Hence 235k: the last gate before auto-compact. The 100k and
+175k bands are advisory only and fire once each.
+
+Re-derive from the history log before changing them.
