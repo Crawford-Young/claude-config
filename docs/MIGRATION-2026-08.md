@@ -28,23 +28,38 @@ invocations of the `.mjs` set). Notes:
 
 ## 3. Uninstall plugins
 
-All vendored plugins are replaced by owned skills / built-ins:
+**Uninstall only what an owned skill actually replaces.** A plugin whose
+capability nothing here reproduces is a capability loss, not a simplification —
+check `claude plugin list` and sort before running anything.
+
+Replaced — safe to uninstall:
 
 ```
-claude plugin uninstall superpowers claude-md-management vercel sentry stripe frontend-design caveman skill-creator
+claude plugin uninstall superpowers claude-md-management sentry stripe code-simplifier github custom-skills
 ```
 
-(Names as installed — check `claude plugin list`.) The `overrides/` junction
-into the plugin cache is gone; if the cache dir for claude-md-management is
-still a junction into this repo, remove the junction before uninstalling.
-Remove any `skillOverrides` entries in settings.json.
+- brainstorming / writing-plans → plan mode + the `plan` skill
+- reflect → the owned `reflect` skill
+- using-git-worktrees → the `worktree` skill
+- TDD / systematic-debugging / verification-before-completion → domain DoD gates
+- requesting/receiving-code-review → built-in `/code-review`
+- code-simplifier → built-in `/simplify`
+- writing-skills → built-in `skill-creator` (leave it installed — it IS the replacement)
+- sentry / stripe knowledge → `web-recon` + provider docs (distill a one-pager
+  into `workspace/docs/web/` only if a real gap shows)
 
-Replacements: brainstorming/writing-plans → plan mode + `plan` skill ·
-reflect → owned `reflect` skill · worktrees → `worktree` skill ·
-TDD/debugging/verification → domain DoD gates · code-review flows → built-in
-`/code-review` · writing-skills → built-in `skill-creator` ·
-vercel/sentry/stripe knowledge → web-recon + provider docs (distill a
-one-pager into `workspace/docs/web/` only if a real gap shows).
+Not replaced — decide before touching, and keep by default:
+
+| Plugin | Why it survives the restructure |
+|---|---|
+| `caveman` | Active output mode with a live SessionStart hook. Nothing here reproduces it — uninstalling silently ends caveman mode. |
+| `vercel` | Deep platform reference (Next.js, AI SDK, deployments, storage) for the primary web stack. Plugin skills cost only their description line until invoked. |
+| `frontend-design` | No owned equivalent; `visual-asset-gates` covers assets and gates, not aesthetic direction. |
+| `playwright`, `typescript-lsp` | Tooling, not guidance — unaffected. |
+
+The `overrides/` junction into the plugin cache is gone; if the cache dir for
+claude-md-management is still a junction into this repo, remove the junction
+before uninstalling. Remove any `skillOverrides` entries in settings.json.
 
 ## 4. Verify
 
