@@ -48,6 +48,11 @@ function Link-Item($linkPath, $targetPath, $kind) {
     Write-Host "Linked: $linkPath"
 }
 
+# --- Agents (subagent defs) ---
+$agentsDir = Join-Path $repo "agents"
+$claudeAgents = "$env:USERPROFILE\.claude\agents"
+Link-Item $claudeAgents $agentsDir Junction
+
 $domains = 'web', 'games', 'apps'
 
 Link-Item "$code\CLAUDE.md" "$wsRepo\CLAUDE.md" SymbolicLink

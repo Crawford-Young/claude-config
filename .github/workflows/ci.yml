@@ -30,7 +30,11 @@ jobs:
             exit 1
           }
 
-      # A SKILL.md whose frontmatter fails to parse is listed with no description and
-      # becomes unroutable — this gate catches it before it ships.
-      - name: Skill frontmatter publishes
+      # A SKILL.md or agent .md whose frontmatter fails to parse is listed with no
+      # description and becomes unroutable — this gate catches it before it ships. One step
+      # covers both roots: the default invocation resolves both skills/ and agents/ relative
+      # to the script's own directory, not this job's cwd, so it always checks both no
+      # matter where CI runs it from. Two same-scope steps would be misleading (either one
+      # reddening for either root's problem) with no added coverage.
+      - name: Frontmatter publishes (skills + agents)
         run: node scripts/verify-frontmatter.mjs

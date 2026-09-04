@@ -8,9 +8,9 @@
 // its default branch. The continuation skill pastes this block and writes
 // only what no file carries: mission, unresolved decisions, traps.
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { findActiveChecklists, git, log, parseArgs, workspaceRoot } from './lib.mjs';
+import { discoverRepos, findActiveChecklists, git, log, parseArgs, workspaceRoot } from './lib.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const root = workspaceRoot();
@@ -46,21 +46,4 @@ function firstUnchecked(text) {
     if (!fenced && /^\s*- \[ \]/.test(l)) return l.replace(/^\s*- \[ \]\s*/, '').slice(0, 120);
   }
   return null;
-}
-
-function discoverRepos() {
-  const out = [];
-  for (const domain of ['web', 'games', 'apps']) {
-    const dir = join(root, domain);
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      const p = join(dir, name);
-      if (existsSync(join(p, '.git'))) out.push(p);
-    }
-  }
-  for (const name of ['claude-config', 'docs']) {
-    const p = join(root, name);
-    if (existsSync(join(p, '.git'))) out.push(p);
-  }
-  return out;
 }

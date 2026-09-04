@@ -21,7 +21,8 @@ try {
 } catch {
     try {
         $log = Join-Path $env:USERPROFILE '.claude/hook-errors.log'
-        Add-Content -Path $log -Value "[$(Get-Date -Format o)] notification-toast.ps1: $($_.Exception.Message)"
+        $lineText = "[$(Get-Date -Format o)] notification-toast.ps1: $($_.Exception.Message)`n"
+        [System.IO.File]::AppendAllText($log, $lineText, [System.Text.UTF8Encoding]::new($false))
     } catch {}
 }
 exit 0

@@ -8,12 +8,12 @@
 // kills a dev-server port holder and removes a finished worktree (via
 // worktree.mjs's safe sequence). Read-only unless a flag asks otherwise.
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import { die, findActiveChecklists, git, listenerPidFromNetstat, log, parseArgs, workspaceRoot } from './lib.mjs';
+import { die, discoverRepos, findActiveChecklists, git, listenerPidFromNetstat, log, parseArgs, workspaceRoot } from './lib.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
@@ -52,23 +52,6 @@ if (existsSync(docs)) {
   }
 }
 if (dirtyCount === 0) log('workspace clean: no uncommitted changes, no extra worktrees.');
-
-function discoverRepos() {
-  const out = [];
-  for (const domain of ['web', 'games', 'apps']) {
-    const dir = join(root, domain);
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      const p = join(dir, name);
-      if (existsSync(join(p, '.git'))) out.push(p);
-    }
-  }
-  for (const name of ['claude-config', 'docs']) {
-    const p = join(root, name);
-    if (existsSync(join(p, '.git'))) out.push(p);
-  }
-  return out;
-}
 
 function killPort(port) {
   if (!Number.isInteger(port)) die('--kill-port needs a port number');

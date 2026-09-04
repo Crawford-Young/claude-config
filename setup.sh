@@ -47,6 +47,11 @@ link_item() {
     echo "Linked: $link"
 }
 
+# --- Agents (subagent defs) ---
+AGENTS_DIR="$REPO/agents"
+CLAUDE_AGENTS="$HOME/.claude/agents"
+link_item "$CLAUDE_AGENTS" "$AGENTS_DIR"
+
 DOMAINS="web games apps"
 
 link_item "$CODE/CLAUDE.md" "$WS/CLAUDE.md"
