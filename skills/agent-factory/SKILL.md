@@ -24,7 +24,7 @@ Orchestration for multi-task work. Trust the models: dispatch when it helps, kee
 
 See [`agents/ROUTING.md`](../../agents/ROUTING.md) for the evidence-distilled table. Short form:
 
-- **haiku** — recon, existence checks, single-fact read-and-report, doc fetches.
+- **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort is silently dropped there, so those dispatches forfeited the axis this table is built on. Lower the effort, not the model.
 - **sonnet** — scoped implementation with a clear brief; verbatim/mechanical batches; adjudication-style reviews with enumerated probes.
 - **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations).
 - **fable** — usage-billed; per-run user clearance required (the Agent hook enforces it — user replies `FABLE OK`). Reserve for diagnostics after an opus failure or exceptional-stakes review.

@@ -32,7 +32,7 @@ Before planning any spawn, confirm `Agent` is in your tool list. If it is absent
 - **A doc fact you correct in one file is a grep prompt, not a one-file fix.** Repo docs duplicate the same claims across `README.md`, `AGENTS.md`/`CLAUDE.md`, and specs — grep the corrected phrase repo-wide before finalizing, especially for staleness you find INCIDENTALLY, outside your brief, since that is exactly the case with no owner and the likeliest to leave a stale twin behind.
 - Agent definitions must be self-contained — subagents start cold with zero session context
 - Never commit — user approves all commits
-- Default model is sonnet; haiku remains available as an explicit per-dispatch override for trivial edits
+- Default model is sonnet; for trivial edits lower the effort rather than the model
 
 ## Output
 
