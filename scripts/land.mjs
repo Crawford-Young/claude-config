@@ -16,7 +16,7 @@
 // sync:  verify the live edits match origin/main for those paths, then
 //        restore tracked copies and fast-forward the main checkout.
 
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -90,14 +90,65 @@ function cmdStart() {
   log('next: get user approval, then push (git push -u origin chore/' + slug + ') and open the PR (rebase-merge).');
 }
 
+// A path the PR ADDED is untracked on the main checkout but present in
+// origin/main, and the tracked-path machinery mishandles it twice:
+// `git diff origin/main` has no index entry to compare against and reports it
+// as a deletion (spurious drift), and `git restore --source=HEAD` dies outright
+// on a path HEAD never had. Classify those paths separately.
+//
+// Returns { tracked, adopt }: `adopt` is the untracked-but-identical set, whose
+// local copy is deleted so the fast-forward can create it. Dies on real drift.
+function classifySyncPaths(files) {
+  const tracked = [];
+  const adopt = [];
+  for (const f of files) {
+    if (git(cfg, ['ls-files', '--error-unmatch', f]).code === 0) {
+      tracked.push(f);
+      continue;
+    }
+    const remote = git(cfg, ['rev-parse', `origin/main:${f}`]);
+    // Untracked here AND absent from origin/main: someone else's in-flight
+    // file (agents/manager.md was exactly this). Not ours — leave it alone.
+    if (remote.code !== 0) continue;
+    // Nothing on disk: no conflict, the fast-forward just creates it.
+    if (!existsSync(join(cfg, f))) continue;
+    // Compare GIT-NORMALIZED, never byte-for-byte. This repo sets
+    // core.autocrlf=true with `* text=auto`, so every text file is CRLF on disk
+    // and LF in the blob — _hooklib.mjs is 1948 bytes on disk and 1890 as a
+    // blob while `git status` calls it clean. A raw byte compare therefore
+    // reports drift for every text file and this branch would never fire.
+    // `hash-object --path` applies the same filters git applies on checkin.
+    const local = git(cfg, ['hash-object', '--path', f, '--', f]);
+    if (local.code !== 0) {
+      die(`cannot hash local ${f} to compare against origin/main:\n${local.err}`);
+    }
+    if (local.out !== remote.out) {
+      die(
+        `untracked local ${f} differs from origin/main — reconcile before syncing (never discard):\n` +
+          `  local  ${local.out}\n  origin ${remote.out}`,
+      );
+    }
+    adopt.push(f);
+  }
+  return { tracked, adopt };
+}
+
 function cmdSync() {
   const files = paths();
   gitOrDie(cfg, ['fetch', 'origin']);
-  const drift = git(cfg, ['diff', 'origin/main', '--numstat', '--', ...files]);
-  if (drift.out) {
-    die(`live edits differ from origin/main for these paths — reconcile before syncing (never discard):\n${drift.out}`);
+  const { tracked, adopt } = classifySyncPaths(files);
+
+  if (tracked.length) {
+    const drift = git(cfg, ['diff', 'origin/main', '--numstat', '--', ...tracked]);
+    if (drift.out) {
+      die(`live edits differ from origin/main for these paths — reconcile before syncing (never discard):\n${drift.out}`);
+    }
+    gitOrDie(cfg, ['restore', '--source=HEAD', '--worktree', '--', ...tracked]);
   }
-  gitOrDie(cfg, ['restore', '--source=HEAD', '--worktree', '--', ...files]);
+  // Only after every path has been checked — a die() above must not leave the
+  // checkout half-reverted with files already deleted.
+  for (const f of adopt) rmSync(join(cfg, f), { force: true });
+
   const merge = git(cfg, ['merge', '--ff-only', 'origin/main']);
   if (merge.code !== 0) die(`merge --ff-only stopped:\n${merge.err || merge.out}\nIncoming commits touch a locally-modified path — reconcile by hand.`);
   log('main checkout synced to origin/main.');
