@@ -52,6 +52,37 @@ test('start lands only the named path in an ephemeral worktree', () => {
   assert.ok(!existsSync(wt));
 });
 
+test('start lands a file whose last line is blank (patch ends in a lone-space context line)', () => {
+  // Regression: lib.mjs's git() trims stdout, and a patch is whitespace-
+  // significant. The context line for a blank line is a single space, so a diff
+  // whose last changed file ends with a blank line ends with " \n" — trimming
+  // that leaves the hunk one line shorter than its own @@ header claims and git
+  // reports "corrupt patch at <n>" one line past the end. This cost two
+  // workstreams a manual land, and neither the byte-identity nor the CRLF
+  // fixtures above can catch it: the content is pure ASCII and applies fine.
+  // scratchRepo models the real repo (autocrlf + `* text=auto`); the bug does
+  // not reproduce without that setup, which is itself worth knowing.
+  const { root, cfg, env } = scratchRepo({ 'doc.md': 'intro\n\n## Your job\n\n' });
+
+  // Edit an EARLIER line, leaving the trailing blank line as trailing context.
+  writeFileSync(join(cfg, 'doc.md'), 'intro changed\n\n## Your job\n\n');
+
+  const rawDiff = sh(cfg, 'git', ['diff', '--binary', 'HEAD', '--', 'doc.md']);
+  assert.ok(rawDiff.endsWith(' \n'), 'fixture must produce a patch ending in a lone-space context line');
+  assert.notEqual(rawDiff, `${rawDiff.trim()}\n`, 'and trimming it must actually change it');
+
+  execFileSync(process.execPath, [script, 'start', 'blankline', '-m', 'chore: blank-line tail', '--', 'doc.md'], {
+    encoding: 'utf8',
+    env,
+  });
+
+  const wt = join(root, '.worktrees', 'claude-config-blankline');
+  assert.match(sh(wt, 'git', ['show', '--stat', 'HEAD']), /doc\.md/);
+  // Line endings are the checkout's business; what matters is that the trailing
+  // blank line survived rather than being eaten with the patch's last line.
+  assert.equal(readFileSync(join(wt, 'doc.md'), 'utf8').replace(/\r\n/g, '\n'), 'intro changed\n\n## Your job\n\n');
+});
+
 test('start refuses when the main checkout is off main', () => {
   const root = mkdtempSync(join(tmpdir(), 'land-'));
   const origin = join(root, 'origin.git');

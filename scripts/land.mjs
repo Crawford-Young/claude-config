@@ -65,10 +65,24 @@ function cmdStart() {
   gitOrDie(cfg, ['worktree', 'add', wt, '-b', `chore/${slug}`, 'origin/main']);
 
   // Apply the path-scoped diff of YOUR files only.
-  const diff = git(cfg, ['diff', '--binary', 'HEAD', '--', ...files]);
-  if (diff.code !== 0) die(`diff failed: ${diff.err}`);
-  if (diff.out) {
-    const apply = spawnSync('git', ['-C', wt, 'apply', '--index', '-'], { input: `${diff.out}\n`, encoding: 'utf8' });
+  //
+  // Deliberately NOT via lib.mjs's git(): that helper trims stdout, and a patch
+  // is whitespace-significant to the byte. A context line for a blank line is a
+  // single space, so a diff whose last changed file ends in a blank line ends
+  // with " \n" — and trim() destroys exactly that, leaving the hunk one line
+  // short of the count in its own @@ header. git then reports "corrupt patch at
+  // <n>" pointing one line PAST the end of the patch, which reads like a
+  // delivery or encoding fault and is not one. Verified: raw diff applies
+  // (exit 0), the same diff trimmed fails at :198. Cost two workstreams a
+  // manual land before it was diagnosed.
+  const diff = spawnSync('git', ['-C', cfg, 'diff', '--binary', 'HEAD', '--', ...files], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (diff.status !== 0) die(`diff failed: ${diff.stderr}`);
+  const patch = diff.stdout ?? '';
+  if (patch.trim()) {
+    const apply = spawnSync('git', ['-C', wt, 'apply', '--index', '-'], { input: patch, encoding: 'utf8' });
     if (apply.status !== 0) die(`git apply failed in ${wt}:\n${apply.stderr}`);
   }
   // Untracked new files are invisible to diff — copy them explicitly.
