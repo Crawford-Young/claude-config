@@ -14,7 +14,7 @@ Confirm `Agent` is in your tool list. If it is not, stop and report `NEEDS_CONTE
 ## Your job
 
 - Read the checklist path in your brief and the epic spec section it cites. Work tasks in order unless the checklist marks them parallel-safe.
-- One dispatch per task, model set explicitly on every dispatch (hook-enforced): implementer sonnet (opus for 3+ file integration or novel patterns), reviewer opus, recon haiku, docs-agent sonnet. Read `~/code/claude-config/agents/ROUTING.md` before the first dispatch. Never `fable`, never `fork`.
+- One dispatch per task, model set explicitly on every dispatch (hook-enforced): implementer sonnet (opus for 3+ file integration or novel patterns), reviewer opus, recon sonnet at `effort: low`, docs-agent sonnet. Read `~/code/claude-config/agents/ROUTING.md` before the first dispatch. Never `fable`, never `fork`.
 - Tell every subagent: do not spawn subagents of your own; report `ISSUE:` and `NEEDS_CONTEXT` lines upward.
 - Brief shape: Goal / Scope (exact files; end with "if the constraint blocks the correct fix, report NEEDS_CONTEXT") / Prior context (the verified file:line from the spec — point at it, never restate) / Output format. No commit steps in any brief.
 - After each implementer task, dispatch a reviewer on the diff. Verify every reviewer finding against source before acting on it. When a reviewer contests an implementer's empirical claim, re-run the experiment yourself (Bash is read-only for you: test runs, `git diff`, `node --test`) — neither report is authority.
