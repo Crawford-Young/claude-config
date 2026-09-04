@@ -31,7 +31,7 @@ Present the report, then ask what the user noticed that you missed — correctio
 
 Apply agreed edits with the Edit tool, showing each diff. **Pruning bias — every addition names a deletion candidate.** The harness got bloated by accreting dated incident rules; the fix discipline:
 
-- A new rule is one imperative line. The incident story goes to `docs/harness-evolution/archive/rule-history.md` (date + one line), not into the live file.
+- A new rule is one imperative line that names its reason (why, not when) — a rule stripped of its reason is the one the next audit prunes. The incident story goes to `docs/harness-evolution/archive/rule-history.md` (date + one line), not into the live file.
 - A rule that must hold every time becomes a hook or deny rule, not prose (`hooks/bash-guard.mjs` is the pattern) — then the prose is deleted.
 - Recurrence despite a rule means the file is too long, not the rule too weak — prune or mechanize, never restate louder.
 - Model-routing observations (a dispatch that surprised, a misroute) go to `agents/ROUTING.md` as a one-liner with date.

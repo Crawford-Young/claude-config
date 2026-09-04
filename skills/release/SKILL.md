@@ -1,6 +1,7 @@
 ---
 name: release
 description: "Use when publishing the npm component library — 'release', 'publish', 'cut a release', 'ship a version', 'create a changeset'. Hard-gated in order — full checks, build, dist verify, Storybook, semver bump, changeset. Nothing ships on a failing gate."
+disable-model-invocation: true
 ---
 
 # Release Workflow

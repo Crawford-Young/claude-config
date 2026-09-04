@@ -21,3 +21,4 @@ Gates come from the repo itself (justfile `check` recipe, else package.json scri
 - `just check` composition differs per repo — `--list` shows what a gate actually covers; don't quote it as covering e2e when it doesn't.
 - Before e2e: the script warns when :3000/:3001 have listeners — `reuseExistingServer` silently drives whatever answers the port. Kill stale holders first (`cleanup.mjs --kill-port N`).
 - The domain CLAUDE.md's Definition of Done is the gate list for "done" — including the manual pass (playtest for games, hands-on browser QA for UI waves).
+- `/code-review`'s effort level (`low` through `max`) is sticky across sessions — it reuses the last level you typed, even from an earlier session, until you type a new one. At `low`/`medium` it reports only high-confidence findings. Any coverage-first review pass must pass `high` explicitly rather than relying on the (unknown, possibly stale) default.

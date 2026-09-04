@@ -1,13 +1,14 @@
 ---
 name: new-repo
 description: "Use when bootstrapping a repo from scratch — 'new project', 'create a repo', 'scaffold a project', 'start a new app'. Carries the 24-step production setup (git, tooling, testing, Storybook, dark mode, CI, data layer, services), hard-gated in order."
+disable-model-invocation: true
 ---
 
 # New Repository Scaffolding
 
 You are setting up a brand-new production-quality repository. Every step in this checklist exists for a reason — skipping any of them means the project starts below standard and the gap will compound over time.
 
-Read `~/code/CLAUDE.md` for the full standards this setup must satisfy.
+Read `~/code/CLAUDE.md` for universal security/git standards, `~/code/web/CLAUDE.md` for architecture and server-boundary standards, and `~/code/docs/web/TEMPLATES.md` for CI/Justfile/security-header templates.
 
 <HARD-GATE>
 Step 3 (commit .gitignore) must happen before any other files are committed. Never commit secrets, node_modules, .env, or build artifacts. If you are unsure whether a file should be gitignored, gitignore it.
@@ -47,10 +48,10 @@ Work through these in order. Check each off as it completes.
 ### Configuration Files
 - [ ] `package.json` with correct name, version `0.0.1`, scripts for dev/build/test/lint/typecheck
 - [ ] `tsconfig.json` — `strict: true`, `baseUrl: "."`, `paths: { "@/*": ["./src/*"] }`
-- [ ] `next.config.ts` with security headers (full set from `~/code/CLAUDE.md`)
+- [ ] `next.config.ts` with security headers (full set from `~/code/docs/web/TEMPLATES.md`)
 - [ ] `tailwind.config.ts` — `darkMode: "class"`, content paths including `node_modules/@username/ui/src/**` if consuming the component library
 - [ ] `src/env.ts` — t3-env with Zod validation for all env vars
-- [ ] `justfile` — full set of commands from `~/code/CLAUDE.md`
+- [ ] `justfile` — full set of commands from `~/code/docs/web/TEMPLATES.md`
 - [ ] `drizzle.config.ts` (if using Neon/Drizzle)
 
 ### Code Quality
@@ -86,7 +87,7 @@ Work through these in order. Check each off as it completes.
 - [ ] Vercel Analytics — `<Analytics />` and `<SpeedInsights />` in root layout (if deploying to Vercel)
 
 ### CI & Publishing
-- [ ] `.github/workflows/ci.yml` — check job + e2e job from `~/code/CLAUDE.md`
+- [ ] `.github/workflows/ci.yml` — check job + e2e job, see TEMPLATES.md's 'GitHub Actions CI' section
 - [ ] `.github/dependabot.yml` — npm + github-actions, weekly schedule
 - [ ] If published package: `tsup.config.ts`, Changesets init, `src/index.ts` barrel export
 
