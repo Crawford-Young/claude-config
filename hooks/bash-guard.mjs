@@ -3,7 +3,8 @@
 // Port + extension of pretooluse-guard.ps1. Wire with matcher "Bash|PowerShell".
 //
 // Blocks (exit 2):
-//   1. git add -A / --all in any flag order (sweeps concurrent sessions' files)
+//   1. git add -A/--all/. and git commit -a/--all/-am, any flag order (sweeps
+//      concurrent sessions' files)
 //   2. git add/commit of real env files (.env, .env.local — secrets)
 //   3. gate commands piped to tail/head (the pipe's exit code masks the gate's)
 //   4. PowerShell Set-Content/Out-File/Add-Content (mojibake + BOM on UTF-8)
@@ -17,7 +18,9 @@
 // `cd` — the workspace root is not a repo, so `cd <repo> && git commit` is the
 // shape branch rules must see.
 //
-// Fail-open: errors log to ~/.claude/hook-errors.log and allow.
+// Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
+// errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
+// checked nothing, and a silent allow is invisible — a loud block is not.
 
 import { spawnSync } from 'node:child_process';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -74,12 +77,24 @@ export function staticCheck(raw) {
   if (!raw) return null;
   const cmd = stripMessages(raw);
 
-  // 1. git add -A/--all, any flag order/combination — scanned per clause, so an
-  //    unrelated `-A` (grep -A 3, tar -A) elsewhere in the line is not a hit.
+  // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination —
+  //    scanned per clause, so an unrelated `-A` (grep -A 3, tar -A) or `-a`
+  //    (grep -a) elsewhere in the line is not a hit. The bare-`.` check
+  //    requires `.` (optionally `./`) as its own token, so `.env` and
+  //    `.github/workflows/ci.yml` — which merely *begin* with a dot — never
+  //    match; `./src/file.ts` is a specific path, not the whole tree, and is
+  //    also left alone.
   for (const c of clauses(cmd)) {
-    if (!/\bgit\b[^\n]*\badd\b/.test(c)) continue;
-    if (/(\s--all\b|\s-[a-zA-Z]*A[a-zA-Z]*\b)/.test(c)) {
-      return 'git add -A/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
+    if (/\bgit\b[^\n]*\badd\b/.test(c)) {
+      if (/(\s--all\b|\s-[a-zA-Z]*A[a-zA-Z]*\b)/.test(c)) {
+        return 'git add -A/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
+      }
+      if (/(^|\s)\.\/?(?:\s|$)/.test(c)) {
+        return 'git add . is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
+      }
+    }
+    if (/\bgit\b[^\n]*\bcommit\b/.test(c) && /(\s--all\b|\s-[a-zA-Z]*a[a-zA-Z]*\b)/.test(c)) {
+      return 'git commit -a/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths, then commit.';
     }
   }
 
@@ -155,10 +170,14 @@ export function branchRules(raw, cwd) {
 // ---- main (only when executed as a hook, so tests can import the rules) -----
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  run('bash-guard', (payload) => {
-    const cmd = payload?.tool_input?.command || '';
-    const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
-    const reason = staticCheck(cmd) || branchRules(cmd, cwd);
-    if (reason) block(reason);
-  });
+  run(
+    'bash-guard',
+    (payload) => {
+      const cmd = payload?.tool_input?.command || '';
+      const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
+      const reason = staticCheck(cmd) || branchRules(cmd, cwd);
+      if (reason) block(reason);
+    },
+    { failClosed: true },
+  );
 }

@@ -2,13 +2,27 @@
 
 Cross-platform Node hooks (2026-08 restructure — the old PowerShell set is in
 git history). A rule that must hold every time lives here or in a deny rule,
-never as CLAUDE.md prose. All hooks are **fail-open**: errors append to
+never as CLAUDE.md prose. **Fail-open is the default**: errors append to
 `~/.claude/hook-errors.log` and exit 0 — check that log first when a hook
-seems silent.
+seems silent. **Guards opt into fail-closed** (`bash-guard.mjs`,
+`agent-model-guard.mjs`, `pre-model-switch.mjs`, via `run(..., { failClosed:
+true })`): a fail-open guard failure is silent and unbounded (a crashed
+`bash-guard` waves through `git add -A`; a crashed `agent-model-guard` waves
+through an unclearanced usage-billed dispatch), while a fail-closed failure
+is loud, immediate, and recoverable — the Edit tool is not gated by
+`bash-guard`, so a guard can never lock anyone in.
 
 | Script | Event (matcher) | Does |
 |---|---|---|
 | `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout. |
+
+**Text matcher, not intent matcher** — `bash-guard.mjs` matches command *text*,
+so it blocks any command that merely mentions a banned pattern as data (a
+`node -e` script or heredoc carrying `git add .`/`git commit` in a test-fixture
+array, a compound command reading `settings.json`), not just as an action.
+Working as designed, same as the pre-existing `git add -A` rule. Workaround:
+Write the content to a file, then run the file, instead of passing it through
+a shell command line.
 
 **Guard scoping** — three rules about *what a rule is allowed to read*, each one a
 fixed false verdict; change them only with a test:
@@ -21,9 +35,12 @@ fixed false verdict; change them only with a test:
   `cd`**. The workspace root is not itself a repo, so `cd <repo> && git commit` is
   the shape the branch rules actually have to see — reading `payload.cwd` alone
   makes the commit-on-main rule a no-op in normal use.
-| `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks fable dispatches without a live clearance marker. Ledger: `~/.claude/fable-dispatch.log`. |
+| `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
-| `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before `autoCompactWindow` (250k) can compact silently. Notes at 100k, louder at 175k (once each), **blocks at 235k**. Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under 100k. Tune with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
+| `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
+| `post-model-switch.mjs` | PostModelSwitch | Records which model each session is on to `~/.claude/current-model.json`, keyed by `session_id`, newest 50 kept. Not a gate — it is the data `agent-model-guard.mjs` reads to catch a fork on a live fable session. Fires on Claude Code's own switches too (e.g. session resume), which is why records are never expired by age. |
+| `permission-denied.mjs` | PermissionDenied | Logs denials to `~/.claude/permission-denials.log`. **This event cannot block** — its exit code and stderr are ignored by Claude Code and the denial stands regardless. |
+| `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before auto-compact can silently compact a wave boundary. Bands are fractions of the **live window** — note at 0.40, louder at 0.70 (once each), **blocks at 0.94**; 400k / 700k / 940k on today's 1M window, and silent when no source can name the window (thresholds section below). Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Tune with `CLAUDE_CTX_WINDOW`, or per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
 | `stop-reflect-gate.mjs` | Stop | **Relaxed (2026-08-21):** when a recently-touched active checklist is all-ticked except reflect, blocks ONCE with "prompt the user to run reflect", then lets the retry pass (`stop_hook_active`). Reflect is prompted, never forced. |
 | `session-start.mjs` | SessionStart | Emits active checklists (+ first unchecked task) into context; after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
 | `precompact-archive.mjs` | PreCompact | Copies the transcript to `~/.claude/compact-archives/` before every compaction. |
@@ -57,6 +74,18 @@ JSON+shell). Adjust the repo path per machine:
 }
 ```
 
+**Not yet wired** (director-owned `settings.json` — this table describes the
+target wiring, not necessarily what is live; check the live file before
+assuming these fire):
+
+```json
+"PermissionDenied": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/permission-denied.mjs\"" }] } ],
+"PostModelSwitch": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/post-model-switch.mjs\"" }] } ],
+"PreModelSwitch": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/pre-model-switch.mjs\"" }] } ]
+```
+
+None of the three events take a matcher.
+
 Keep the settings `deny` rules for `git add -A` forms — the two layers
 (deny rule + guard regex) deliberately overlap; change both or neither.
 
@@ -70,14 +99,30 @@ Keep the settings `deny` rules for `git add -A` forms — the two layers
 
 ## Context-gauge thresholds
 
-The numbers are derived, not round. From `~/.claude/usage-history` (35 sessions):
-peak-context p25 = 120k, p50 = 190k; 89% of sessions cross 100k and **49% cross
-200k**. The context window is 1M, so a block at 200k would fire in half of all
-sessions with 800k of headroom left — a nag, not a gate.
+The bands are **fractions of the live context window**, not fixed token counts:
+`0.40` nudge, `0.70` warn, `0.94` block. On the 1M window in use today that is
+400k / 700k / **940k**; on a 250k window it is the 100k / 175k / 235k this hook
+shipped with — the ratios are unchanged, only the baked-in assumption that the
+window *is* 250k is gone.
 
-The thing worth blocking is `autoCompactWindow` at 250k, which compacts silently
-and so does exactly what the doctrine forbids (a wave boundary is a `/clear`,
-never a compact). Hence 235k: the last gate before auto-compact. The 100k and
-175k bands are advisory only and fire once each.
+The window is resolved in this order: `CLAUDE_CTX_WINDOW`, then a
+`contextGaugeWindow` key in `settings.json`, then the newest
+`context_window_size` in `~/.claude/usage-history/<YYYY-MM>.jsonl` — the CLI's
+own statusline figure, written there by `statusline/usage-statusline.ps1` on
+every render (live value `1000000`; honours `CLAUDE_USAGE_HISTORY_DIR` the same
+way the statusline does). If none of the three answers, the gauge stays **silent**
+rather than invent a window. It never hardcodes one; that hardcoded 250k is what
+made every band and every message wrong once the window became 1M.
 
-Re-derive from the history log before changing them.
+Why the top band is the only real gate: auto-compact fires as the window fills
+and compacts silently, doing exactly what the doctrine forbids (a wave boundary
+is a `/clear`, never a compact). Re-derived from `~/.claude/usage-history` on
+2026-09-04 (10 sessions, the `2026-09` log, which starts 2026-09-02):
+peak-context p25 = 90k, p50 = 180k, max = 210k; 7 of 10 sessions cross 100k, 2
+cross 200k, **none cross 400k**. So under current habits the two advisory bands
+rarely fire and the block never does — right for a gate that exists for the
+outlier session actually approaching the window, not for a nag on every wave.
+
+Re-derive from the history log before changing the fractions; the sample is
+small. Per-band absolute overrides (`CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` /
+`CLAUDE_CTX_BLOCK`) still win wherever they are set.

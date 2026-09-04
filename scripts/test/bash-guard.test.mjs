@@ -15,6 +15,28 @@ test('blocks git add -A and flag-order variants', () => {
   assert.equal(staticCheck('git add -p src/a.ts'), null);
 });
 
+test('blocks git add . (and ./), not dot-prefixed paths', () => {
+  assert.ok(staticCheck('git add .'));
+  assert.ok(staticCheck('git add ./'));
+  assert.ok(staticCheck('git add . -v'));
+  assert.ok(staticCheck('git -C /x/docs add .'));
+  assert.ok(staticCheck('git add .env')); // still blocked, but by rule 2 (env files), not this one
+  assert.equal(staticCheck('git add .github/workflows/ci.yml'), null);
+  assert.equal(staticCheck('git add ./src/file.ts'), null);
+  assert.equal(staticCheck('git add .gitignore'), null);
+});
+
+test('blocks git commit -a/-am/--all, not -m or -a inside a message', () => {
+  assert.ok(staticCheck('git commit -a'));
+  assert.ok(staticCheck('git commit -am "wip"'));
+  assert.ok(staticCheck('git commit -ma "wip"'));
+  assert.ok(staticCheck('git commit --all -m "wip"'));
+  assert.equal(staticCheck('git commit -m "wip"'), null);
+  assert.equal(staticCheck('git commit -m "add -a flag"'), null);
+  assert.equal(staticCheck('git commit --amend -m "wip"'), null);
+  assert.equal(staticCheck('git commit --author="A <a@x.com>" -m "wip"'), null);
+});
+
 test('blocks env files in git add/commit, allows .env.example', () => {
   assert.ok(staticCheck('git add .env'));
   assert.ok(staticCheck('git add .env.local'));
@@ -60,6 +82,14 @@ test('the -A rule is scoped to the git add clause', () => {
   assert.equal(staticCheck('tar -A -f a.tar b.tar && git add a.tar'), null);
   // ...but still fires when the flag really is on the add.
   assert.ok(staticCheck('grep -c foo a.ts && git add -A'));
+});
+
+test('the commit -a rule is scoped to the git commit clause', () => {
+  // grep -a (treat binary as text) is unrelated to git commit --all.
+  assert.equal(staticCheck('grep -a foo log.txt && git commit -m "wip"'), null);
+  assert.equal(staticCheck('git commit -m "wip" ; grep -a foo log.txt'), null);
+  // ...but still fires when the flag really is on the commit.
+  assert.ok(staticCheck('grep -a foo log.txt && git commit -a'));
 });
 
 // --- scoping: a commit message is prose, not a command -----------------------

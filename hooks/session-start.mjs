@@ -48,7 +48,7 @@ run('session-start', (payload) => {
 
   if (payload?.source === 'compact') {
     lines.push(
-      'Post-compaction: re-read the domain CLAUDE.md for the cwd (compaction drops it) and re-invoke any heavy skill you are mid-way through. The checklist is the source of truth — re-orient from it, not the summary.',
+      'Post-compaction: re-read the domain CLAUDE.md for the cwd (compaction drops it) and re-invoke a skill you were mid-way through only if its body exceeds ~5k tokens (none here does today). The checklist is the source of truth — re-orient from it, not the summary.',
     );
   }
 

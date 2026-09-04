@@ -13,8 +13,6 @@ node ~/code/claude-config/scripts/cleanup.mjs --remove-worktree <p> # safe workt
 
 End-of-wave order:
 
-1. Gates green (`qa` skill), reflect run (`reflect` skill), checklist archived (`checklist.mjs done`).
+1. Gates green (`qa` skill), reflect run (`reflect` skill), checklist archived (`checklist.mjs done` — git-mvs the file to `done/`, which stages the index blob; any further edit to that file needs an explicit `git add`).
 2. `cleanup.mjs` — resolve everything it reports: commit-or-explain uncommitted files, remove finished worktrees, kill stale servers.
 3. Anything left for a next session → `continuation` skill before `/clear`.
-
-Finished background agents: stop stale task registrations (TaskList → TaskStop) so the task list stays readable.

@@ -83,6 +83,12 @@ Assert-True ($plain.Contains('$3.13')) 'D1 session cost'
 Assert-True ($out.Contains("$esc[32m")) 'D1 green fill below 70'
 Assert-True (-not $out.Contains('CAVE')) 'D1 no caveman badge'
 Assert-True ($script:LastExit -eq 0) 'D1 exit 0'
+# prompt_cache: full.json has warm:true, hit_ratio 0.9069852373707306 -> 91%, no miss cause.
+Assert-True ($plain.Contains('cache warm 91%')) 'D1 cache warm + hit ratio'
+Assert-True ($out.Contains("$esc[32mwarm 91%")) 'D1 cache warm rendered in green'
+Assert-True (-not $plain.Contains('miss:')) 'D1 no miss cause when last_miss_cause is null'
+# fast_mode:false in full.json -> no fast tag.
+Assert-True (-not $plain.Contains(' fast ')) 'D1 no fast tag when fast_mode false'
 
 # ---- D2: no rate_limits => location/prefix/ctx/cost only, no rate bars ----
 $tmp2 = New-TestTmp
@@ -118,6 +124,11 @@ Assert-True ($plain4.Contains("7d $(Get-Bar 75) 75%")) 'D4 seven-day 8-cell bar 
 Assert-True ($out.Contains("$esc[31m")) 'D4 red present at 92'
 Assert-True ($out.Contains("$esc[33m")) 'D4 yellow present at 75'
 Assert-True ($script:LastExit -eq 0) 'D4 exit 0'
+# prompt_cache: high-usage.json has warm:false, hit_ratio 0.42 -> 42%, last_miss_cause "eviction".
+Assert-True ($plain4.Contains('cache cold 42% miss:eviction')) 'D4 cache cold + hit ratio + miss cause'
+Assert-True ($out.Contains("$esc[31mcold 42%")) 'D4 cache cold rendered in red'
+# fast_mode:true in high-usage.json -> fast tag in identity row.
+Assert-True ($plain4.Contains("$Dot fast $Dot")) 'D4 fast tag present when fast_mode true'
 
 # ---- D6: two-line layout — identity row, then usage row ----
 $tmp6 = New-TestTmp
@@ -173,6 +184,10 @@ Assert-True ($s.seven_day_pct -eq 4) 'H1 seven_day_pct'
 Assert-True ($s.cache_read_tokens -eq 99099) 'H1 cache_read_tokens'
 Assert-True ($s.model_id -eq 'claude-fable-5') 'H1 model_id'
 Assert-True ($null -ne $s.ts) 'H1 ts present'
+Assert-True ($s.fast_mode -eq $false) 'H1 fast_mode false'
+Assert-True ($s.cache_warm -eq $true) 'H1 cache_warm true'
+Assert-True ([Math]::Round([double]$s.cache_hit_ratio, 2) -eq 0.91) 'H1 cache_hit_ratio'
+Assert-True ($null -eq $s.cache_miss_cause) 'H1 cache_miss_cause null when no miss'
 $stateFile = Join-Path $tmp7 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt'
 Assert-True (Test-Path $stateFile) 'H1 throttle state written'
 
@@ -207,6 +222,22 @@ Assert-True (Test-Path $logFile9) 'H3 sample logged without rate_limits'
 $s9 = @([System.IO.File]::ReadAllLines($logFile9))[0] | ConvertFrom-Json
 Assert-True ($null -eq $s9.five_hour_pct) 'H3 five_hour_pct null'
 Assert-True ($null -ne $s9.cost_usd) 'H3 cost_usd still captured'
+Assert-True ($s9.fast_mode -eq $false) 'H3 fast_mode still captured without rate_limits'
+Assert-True ($null -eq $s9.cache_warm) 'H3 cache_warm null when no prompt_cache'
+
+# ---- H4: cold cache + miss cause fixture logs those fields ----
+$tmp10 = New-TestTmp
+$hist10 = Join-Path $tmp10 'hist'
+Invoke-Statusline (Join-Path $Fixtures 'high-usage.json') @{
+    CLAUDE_USAGE_HISTORY_DIR  = $hist10
+    CLAUDE_USAGE_THROTTLE_DIR = $tmp10
+} | Out-Null
+$logFile10 = Join-Path $hist10 ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.jsonl')
+$s10 = @([System.IO.File]::ReadAllLines($logFile10))[0] | ConvertFrom-Json
+Assert-True ($s10.fast_mode -eq $true) 'H4 fast_mode true'
+Assert-True ($s10.cache_warm -eq $false) 'H4 cache_warm false'
+Assert-True ([Math]::Round([double]$s10.cache_hit_ratio, 2) -eq 0.42) 'H4 cache_hit_ratio'
+Assert-True ($s10.cache_miss_cause -eq 'eviction') 'H4 cache_miss_cause'
 
 Write-Host ""
 Write-Host "$($script:Pass) passed, $($script:Fail) failed"
