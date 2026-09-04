@@ -16,14 +16,15 @@ Plan mode is the default planning surface. This skill carries what plan mode doe
    node ~/code/claude-config/scripts/checklist.mjs new <project-docs-dir> <slug> --branch feat/x --spec <path>
    ```
    Fill the tasks from the approved plan. The checklist is the resume file across sessions — tick via `checklist.mjs tick` (real UTC stamps), archive via `checklist.mjs done`.
+4. **Task and checklist granularity is a function of the executing model, not a constant** — a model that holds long sessions without losing the thread can profitably take larger, less-decomposed tasks than this workspace's checklist convention defaults to.
 
 ## Five checks before a plan is trusted
 
-1. **Verify every cited path, export, and API at plan time** (Glob/grep/read the installed dist) — unverifiable premises are written as assumptions to confirm, never as facts.
-2. **Enumerate consumers of anything the plan changes** — a shared payload field, a predicate's meaning, a deleted symbol, a schema column. Grep at plan time; test fixtures count as consumers.
-3. **Run verbatim code blocks through the repo's real tooling** (prettier, eslint, tsc) before they enter the plan — a byte-faithful implementer reproduces the drift.
-4. **Value-judgment choices go to the user at spec time** — anything encoding product feel (presentation archetype, motion, semantics of a display) is a question with options, never a plan walk-rule.
-5. **Process/context-change waves get a cold-session plan review before execution** — the author cannot see their own premises (measured: 6 runs, 0 self-caught). Hand a fresh session the plan, ask for defects, no summary of intent.
+1. Verify every cited path, export, and API at plan time (Glob/grep/read the installed dist) — unverifiable premises are written as assumptions to confirm, never as facts.
+2. Enumerate consumers of anything the plan changes — a shared payload field, a predicate's meaning, a deleted symbol, a schema column. Grep at plan time; test fixtures count as consumers.
+3. Run verbatim code blocks through the repo's real tooling (prettier, eslint, tsc) before they enter the plan — a byte-faithful implementer reproduces the drift.
+4. Value-judgment choices go to the user at spec time — anything encoding product feel (presentation archetype, motion, semantics of a display) is a question with options, never a plan walk-rule.
+5. **Process/context-change waves get a cold-session plan review before execution** — the author cannot see their own premises (n=13, 0 self-caught lifetime as of 2026-08-09 — see `docs/harness-evolution/archive/2026-08-21-agent-profiles.md`). Hand a fresh session the plan, ask for defects, no summary of intent.
 
 ## Design forks — argue the trade-offs
 

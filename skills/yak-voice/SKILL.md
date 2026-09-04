@@ -1,6 +1,7 @@
 ---
 name: yak-voice
 description: Generate CarsickYak channel copy — YT titles/descriptions, shorts captions, stream titles, social posts — from the real-sample corpus. Use for ANY CarsickYak-facing text.
+disable-model-invocation: true
 ---
 
 # yak-voice — corpus-driven CarsickYak copy
@@ -20,9 +21,9 @@ Base directory: `~/code/claude-config/skills/yak-voice/` (junction-visible at `~
 
 ## Voice notes (evidence-backed, from accepted copy — NOT adjectives to generate from)
 
-- **Register is literal-practical.** Lines that scan as flex are literal explanations ("leveling up for ranked is my warm up" = the warm-up phase, nothing more). Never amplify a line into swagger; user correction 2026-07-23: "im not trying to be cocky... im just explaning."
-- **Personality carriers observed in accepted copy:** parentheticals ("(if I'm not outside touching grass)"), self-aware callbacks ("and yes, still gaming"), coined words ("friendslop"), inside-joke names with zero explanation ("Do the Face"). Options stripping ALL carriers read flat/vague — first acceptance round failed exactly this way (T6, 2026-07-23). Carriers come from the user's material, never invented.
-- **Persona deep-dive landed 2026-07-23** → `persona.md` (raw journals/poems distilled: two registers + surface mapping, 9 concrete patterns with verbatim evidence). Read it every generation. Validated same day: first post-persona round passed clean on first presentation (user: "all three are so much better") — provisional flag lifted.
+- **Register is literal-practical.** Lines that scan as flex are literal explanations ("leveling up for ranked is my warm up" = the warm-up phase, nothing more). Never amplify a line into swagger — the user reads their own material as literal explanation, not boasting, and amplifying it misrepresents them.
+- **Personality carriers observed in accepted copy:** parentheticals ("(if I'm not outside touching grass)"), self-aware callbacks ("and yes, still gaming"), coined words ("friendslop"), inside-joke names with zero explanation ("Do the Face"). Options stripping ALL carriers read flat/vague — keep at least one carrier per option. Carriers come from the user's material, never invented.
+- **`persona.md` distills the persona deep-dive** (raw journals/poems distilled: two registers + surface mapping, 9 concrete patterns with verbatim evidence) — read it every generation; it is the validated source for register and carriers, not a draft.
 
 ## Hard rules
 

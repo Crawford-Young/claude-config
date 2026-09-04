@@ -1,6 +1,7 @@
 ---
 name: new-component
 description: "Use when adding a reusable component to the Radix + CVA + Tailwind component library — 'add a component', 'build a badge/dialog/input', 'new ui component'. Enforces the TDD chain in order — requirements, failing test, implement, export, story, gates."
+disable-model-invocation: true
 ---
 
 # New Component Workflow

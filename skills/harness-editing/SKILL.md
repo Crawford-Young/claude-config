@@ -21,7 +21,9 @@ description: Use before editing the workspace harness — the CLAUDE.md chain, c
 - **Junctions load the MAIN checkout only.** Live edits land on its disk (Edit tool needs the real `claude-config/...` path — it refuses symlinks); commits go through `git-ops` (`land.mjs` — ephemeral worktree from `origin/main`, path-scoped diff). Never commit on the main checkout (hook-enforced).
 - **Mid-session CLAUDE.md edits are inert** until the next `/clear`, `/compact`, or restart. Hook wiring changes, by contrast, apply live.
 - **A rule that must hold every time is a hook or deny rule, not prose** — extend `hooks/bash-guard.mjs` (with a test) instead of adding a "never X" line.
-- **New rules are one imperative line**; the incident story goes to `docs/harness-evolution/archive/rule-history.md`. Recurrence despite a rule = prune or mechanize, never restate louder.
+- Separately from whether a rule becomes a hook: **scaffolding that prevents an irreversible mistake stays even when it duplicates something stated elsewhere** (ordering constraints like "commit `.gitignore` before any other file" or "no changeset before verification passes") — scaffolding that only restates a habit or a default behavior the executing agent already follows (e.g. the TDD chain the implementer agent definition already enforces) is a deletion candidate.
+- **`/rewind`'s code-restore is a no-op on claude-config's live-edited harness files** — junctioned/symlinked into `~/code` and `~/.claude`, so `/rewind` can't see through the link to what changed; git via `land.mjs` is the only real undo path.
+- **New rules are one imperative line that names its reason** (why, not when) — a rule stripped of its reason is the one the next audit prunes. The incident story goes to `docs/harness-evolution/archive/rule-history.md`. Recurrence despite a rule = prune or mechanize, never restate louder.
 - Skill frontmatter: an unquoted `: ` in `description` silently unpublishes the skill (`verify-frontmatter.mjs` gates it in CI); lead descriptions with discriminating keywords.
 
 ## Verification
