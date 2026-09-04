@@ -1,13 +1,13 @@
 # claude-config
 
-Personal Claude Code harness — fully owned skills, cross-platform Node scripts and hooks, workspace standards across three domains (web, games, apps). Restructured 2026-08 around simplification and trust in the models: skills are the actionable workflow units, scripts do the mechanical work, hooks enforce the rules that must always hold, and incident history lives in the docs repo's archive instead of always-loaded context.
+Personal Claude Code harness — fully owned skills, cross-platform Node scripts and hooks, workspace standards across three domains (web, games, apps). Restructured 2026-08 around simplification and trust in the models: skills are the actionable workflow units, scripts do the mechanical work, hooks enforce the rules that must always hold (one hook, `notification-toast.ps1`, stays PowerShell because it calls Windows Runtime toast-notification APIs with no cross-platform equivalent), and incident history lives in the docs repo's archive instead of always-loaded context.
 
 ## Layout
 
 | Path | What | Linked to |
 |---|---|---|
 | `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops`, `reflect`, `continuation`, `cleanup`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
-| `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state` — all `.mjs`, tested via `node --test scripts/test/`) | invoked by skills |
+| `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state`, `verify-frontmatter` — all `.mjs`, tested via `node --test scripts/test/`) | invoked by skills |
 | `hooks/` | Node hooks (guards, gates, logs — see `hooks/README.md` for the settings.json wiring) | `~/.claude/settings.json` `hooks` block |
 | `agents/` | Subagent defs (`implementer`, `reviewer`, `recon`, `web-recon`, `docs-agent`, `Explore`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
 | `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
@@ -36,7 +36,7 @@ git clone https://github.com/Crawford-Young/claude-config
 cd claude-config && bash setup.sh
 ```
 
-Both are idempotent and dynamic — a new skill directory or workspace doc links on the next run. Hook wiring is manual: copy the block from `hooks/README.md` into `~/.claude/settings.json`. Migrating from the pre-2026-08 harness: `docs/MIGRATION-2026-08.md`.
+Both are idempotent and dynamic — a new skill directory or workspace doc links on the next run. Hook wiring is manual: copy the block from `hooks/README.md` into `~/.claude/settings.json`. Migrating from the pre-2026-08 harness: `docs/MIGRATION-2026-08.md`. `settings.json`'s `"model"` key is set to `"opus"` — Opus 5 is the standing default; Fable is opted into per wave via `/model` at a `/clear` boundary.
 
 > **Windows:** file symlinks need Developer Mode or an elevated shell; directory junctions need neither.
 

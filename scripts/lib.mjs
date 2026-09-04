@@ -58,6 +58,24 @@ export function isRepo(p) {
   return existsSync(join(p, '.git'));
 }
 
+/** Discover repos under the workspace: web/games/apps domain dirs plus claude-config/docs at root. */
+export function discoverRepos(root = workspaceRoot()) {
+  const out = [];
+  for (const domain of ['web', 'games', 'apps']) {
+    const dir = join(root, domain);
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (existsSync(join(p, '.git'))) out.push(p);
+    }
+  }
+  for (const name of ['claude-config', 'docs']) {
+    const p = join(root, name);
+    if (existsSync(join(p, '.git'))) out.push(p);
+  }
+  return out;
+}
+
 /** Read a file if it exists, else null. */
 export function readIfExists(p) {
   try {
