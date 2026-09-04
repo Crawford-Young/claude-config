@@ -80,6 +80,7 @@ if ($Status) {
     } catch { }
     if ($Status.model -and $Status.model.display_name) { $TopPieces += [string]$Status.model.display_name }
     if ($Status.effort -and $Status.effort.level) { $TopPieces += [string]$Status.effort.level }
+    if ($Status.fast_mode -eq $true) { $TopPieces += 'fast' }
     $CW = $Status.context_window
     if ($CW -and $null -ne $CW.used_percentage) {
         $CtxPct = [int]$CW.used_percentage
@@ -93,6 +94,18 @@ if ($Status) {
             $Counts = ' ' + (Format-Tokens $Used) + '/' + (Format-Tokens ([long]$CW.context_window_size))
         }
         $BarPieces += "ctx $(Get-FillBar $CtxPct)$Counts $(Get-UsageColor $CtxPct)$CtxPct%$Esc[0m"
+    }
+    # prompt_cache: warm/cold state (color-coded), hit ratio, and the last
+    # miss cause when one is recorded. Absent field => piece dropped.
+    if ($Status.prompt_cache -and $null -ne $Status.prompt_cache.warm) {
+        $PC = $Status.prompt_cache
+        $WarmLabel = if ($PC.warm) { 'warm' } else { 'cold' }
+        $CacheColor = if ($PC.warm) { "$Esc[32m" } else { "$Esc[31m" }
+        $HitPct = ''
+        if ($null -ne $PC.hit_ratio) { $HitPct = ' ' + [string][int]([Math]::Round([double]$PC.hit_ratio * 100)) + '%' }
+        $MissPart = ''
+        if ($PC.last_miss_cause) { $MissPart = " miss:$($PC.last_miss_cause)" }
+        $BarPieces += "cache $CacheColor$WarmLabel$HitPct$Esc[0m$MissPart"
     }
     if ($Status.rate_limits) {
         foreach ($Win in @(
@@ -145,12 +158,14 @@ try {
             if (-not (Test-Path $HistoryDir)) { New-Item -ItemType Directory -Path $HistoryDir -Force | Out-Null }
             $RL = $Status.rate_limits
             $CW = $Status.context_window
+            $PC = $Status.prompt_cache
             $Sample = [ordered]@{
                 ts                    = [DateTimeOffset]::Now.ToString('o')
                 session_id            = $Status.session_id
                 cwd                   = $Status.cwd
                 model_id              = $(if ($Status.model) { $Status.model.id } else { $null })
                 effort                = $(if ($Status.effort) { $Status.effort.level } else { $null })
+                fast_mode             = $Status.fast_mode
                 five_hour_pct         = $(if ($RL -and $RL.five_hour) { $RL.five_hour.used_percentage } else { $null })
                 five_hour_resets_at   = $(if ($RL -and $RL.five_hour) { $RL.five_hour.resets_at } else { $null })
                 seven_day_pct         = $(if ($RL -and $RL.seven_day) { $RL.seven_day.used_percentage } else { $null })
@@ -160,6 +175,9 @@ try {
                 context_window_size   = $(if ($CW) { $CW.context_window_size } else { $null })
                 cache_read_tokens     = $(if ($CW -and $CW.current_usage) { $CW.current_usage.cache_read_input_tokens } else { $null })
                 cache_creation_tokens = $(if ($CW -and $CW.current_usage) { $CW.current_usage.cache_creation_input_tokens } else { $null })
+                cache_warm            = $(if ($PC) { $PC.warm } else { $null })
+                cache_hit_ratio       = $(if ($PC) { $PC.hit_ratio } else { $null })
+                cache_miss_cause      = $(if ($PC) { $PC.last_miss_cause } else { $null })
                 exceeds_200k          = $Status.exceeds_200k_tokens
             }
             $LogFile = Join-Path $HistoryDir ([DateTimeOffset]::Now.ToString('yyyy-MM') + '.jsonl')

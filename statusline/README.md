@@ -9,14 +9,19 @@ Targets Windows PowerShell 5.1. ASCII-only source; display glyphs built from `[c
 Two rows, empty pieces dropped, pieces joined with `·`:
 
 ```
-claude-config@feat/usage-statusline · Fable 5 · high · $22.96
-ctx ▰▱▱▱▱▱▱▱▱▱ 102k/1M 8% · 5h ▰▰▰▱▱▱▱▱▱▱ 27%→14:00 · 7d ▰▱▱▱▱▱▱▱▱▱ 5%→Wed
+claude-config@feat/usage-statusline · Fable 5 · high · fast · $22.96
+ctx ▰▱▱▱▱▱▱▱▱▱ 102k/1M 8% · cache warm 91% · 5h ▰▰▰▱▱▱▱▱▱▱ 27%→14:00 · 7d ▰▱▱▱▱▱▱▱▱▱ 5%→Wed
 ```
 
-- **Row 1 — identity:** location `repo@branch` (git toplevel basename + current branch; worktrees show their own dir name; detached HEAD shows short SHA; non-git dirs show the folder name), model display name, effort level, session cost `$0.00`.
-- **Row 2 — usage:** context window (10-cell fill bar, used/total token counts, percent), five-hour window (bar, percent, `→HH:mm` local reset), seven-day window (bar, percent, `→ddd` reset day).
+- **Row 1 — identity:** location `repo@branch` (git toplevel basename + current branch; worktrees show their own dir name; detached HEAD shows short SHA; non-git dirs show the folder name), model display name, effort level, a `fast` tag when `fast_mode` is `true` (omitted otherwise), session cost `$0.00`.
+- **Row 2 — usage:** context window (10-cell fill bar, used/total token counts, percent), prompt-cache state (`cache warm 91%` / `cache cold 42% miss:eviction` — omitted when `prompt_cache` is absent from stdin), five-hour window (bar, percent, `→HH:mm` local reset), seven-day window (bar, percent, `→ddd` reset day).
 - **Bars:** 10 cells, 1 cell = 10%, ceiling-rounded so any nonzero usage shows at least one cell. Filled cells colored by threshold — green < 70%, yellow ≥ 70%, red ≥ 90% — empty cells dim. The percent number carries the same color.
+- **Prompt cache:** `warm`/`cold` label colored green/red from `prompt_cache.warm`, hit ratio from `prompt_cache.hit_ratio` (rounded to a whole percent), and `miss:<cause>` appended when `prompt_cache.last_miss_cause` is non-null. `prompt_cache` is absent from stdin until the session's first API response (observed live, `claude-fable-5`/`claude-opus-5`, CLI v2.1.260) — the whole piece is dropped when it is missing, same as every other optional row-2 piece.
 - Git runs through `cmd /c "git ... 2>nul"` — under `$ErrorActionPreference = 'Stop'`, a PowerShell-level stderr redirect of a native command throws (`NativeCommandError`); the cmd-level redirect avoids it.
+
+### Not implemented: `rate_limits.spend_limit`
+
+The statusline JSON schema documents a `rate_limits.spend_limit.{used_percentage,resets_at}` field ("behind a Claude apps gateway"), but it did not appear in any live payload captured on this machine (four consecutive samples, CLI v2.1.260, this account). Not rendered and not logged. If it starts appearing, extend the `rate_limits` render loop (`usage-statusline.ps1`, the `$Win` array) and the history sample the same way `five_hour`/`seven_day` are handled.
 
 ## Fail-open guarantees
 
@@ -39,6 +44,7 @@ One JSON object per line, appended to `~/.claude/usage-history/yyyy-MM.jsonl` (m
 | `cwd` | `cwd` | absent in stdin |
 | `model_id` | `model.id` | no `model` |
 | `effort` | `effort.level` | no `effort` |
+| `fast_mode` | `fast_mode` | absent in stdin |
 | `five_hour_pct` | `rate_limits.five_hour.used_percentage` | no `rate_limits` |
 | `five_hour_resets_at` | `rate_limits.five_hour.resets_at` (unix epoch) | no `rate_limits` |
 | `seven_day_pct` | `rate_limits.seven_day.used_percentage` | no `rate_limits` |
@@ -48,6 +54,9 @@ One JSON object per line, appended to `~/.claude/usage-history/yyyy-MM.jsonl` (m
 | `context_window_size` | `context_window.context_window_size` | no `context_window` |
 | `cache_read_tokens` | `context_window.current_usage.cache_read_input_tokens` | no `current_usage` |
 | `cache_creation_tokens` | `context_window.current_usage.cache_creation_input_tokens` | no `current_usage` |
+| `cache_warm` | `prompt_cache.warm` | no `prompt_cache` |
+| `cache_hit_ratio` | `prompt_cache.hit_ratio` | no `prompt_cache` |
+| `cache_miss_cause` | `prompt_cache.last_miss_cause` | no `prompt_cache`, or no miss recorded |
 | `exceeds_200k` | `exceeds_200k_tokens` | absent in stdin |
 
 ## Env overrides (tests)
@@ -65,7 +74,7 @@ One JSON object per line, appended to `~/.claude/usage-history/yyyy-MM.jsonl` (m
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
 ```
 
-Covers display layout (ANSI-stripped exact-line asserts + raw color asserts), bar arithmetic/thresholds, location resolution (temp git repo + plain folder), malformed-input sentinel, history schema, throttle suppress/allow, and null-field degradation. The runner forces UTF-8 `OutputEncoding` to match the script.
+Covers display layout (ANSI-stripped exact-line asserts + raw color asserts), bar arithmetic/thresholds, location resolution (temp git repo + plain folder), malformed-input sentinel, history schema, throttle suppress/allow, null-field degradation, prompt-cache warm/cold + hit-ratio + miss-cause rendering and logging, and the `fast_mode` tag. The runner forces UTF-8 `OutputEncoding` to match the script.
 
 ## Rollback
 

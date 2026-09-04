@@ -10,7 +10,12 @@ import { claudeDir, run } from './_hooklib.mjs';
 
 run('fable-clearance-grant', (payload) => {
   const prompt = payload?.prompt || payload?.user_prompt || '';
-  if (!/\bFABLE OK\b/.test(prompt)) return;
+  // Grant only when the token OPENS the prompt (after trimming whitespace),
+  // never when it merely appears somewhere in it — quoting the phrase in
+  // passing must not mint a clearance (issue log row 9: an unconsumed grant
+  // from a prompt that only mentioned the token). The trailing \b keeps a
+  // longer word like "FABLE OKAY" from matching.
+  if (!/^FABLE OK\b/.test(prompt.trim())) return;
   mkdirSync(claudeDir, { recursive: true });
   writeFileSync(join(claudeDir, 'fable-clearance.json'), JSON.stringify({ granted: new Date().toISOString() }));
   appendFileSync(join(claudeDir, 'fable-dispatch.log'), `${new Date().toISOString()} GRANT (FABLE OK in user prompt)\n`);
