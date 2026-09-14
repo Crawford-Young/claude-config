@@ -21,7 +21,7 @@ The owned skills in `claude-config/skills/` are the actionable units; their scri
 - **agent-factory** — executing a multi-task plan, any dispatch or model decision (`agents/ROUTING.md` is the model guide)
 - **qa** — running gates or verifying work (`qa.mjs` keeps exit codes honest)
 - **git-ops** — landing claude-config changes (`land.mjs`), finishing branches, git recovery
-- **reflect** — at every phase end (the stop gate reminds once; user can decline)
+- **reflect** — at every phase end (the stop gate reminds once per turn end until the line is ticked; user can decline)
 - **continuation** — before `/clear` whenever work remains
 - **cleanup** — end-of-wave workspace sweep
 - **harness-editing** — before editing this chain, skills, hooks, or agents
