@@ -62,6 +62,12 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md updated, 
 - Auto-compact thrashing despite the pre-emptive context-gauge gate (e.g. a single huge paste): recover via chunked reads → focused `/compact` → subagent offload → `/clear`.
 - Before ending a turn, check the last paragraph you're about to write — if it's a plan, a promise, or a next-step list rather than the work itself, do the work now instead.
 - Switch the session's own model only at a `/clear` boundary, never mid-session — switching mid-session drops the prior model's thinking blocks and forces the whole context to be re-read uncached. (Switching specifically into fable additionally needs live clearance — see Orchestration.)
+
+## Response shape
+
+- Simplest form that loses nothing — cut preamble, restatement, and narration of what a tool result already shows; never cut a fact, a caveat, or a number the user needs to act.
+- The user's action items go last, under their own heading — everything needing their decision, approval, or hands, as a short list. Nothing for them to do is itself one line, not silence.
+- Asking the user to choose uses `AskUserQuestion` (multi-select where the options aren't exclusive; "Other" is automatic), never a prose question — clicking an option is faster than composing an answer.
 - Narrate at natural checkpoints (start, findings, blockers, done) — a Fable wave layers its own denser cadence on top of this via `docs/harness-evolution/fable-wave-preamble.md`, additive to this line, never a replacement for it.
 
 ## Security
