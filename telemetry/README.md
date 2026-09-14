@@ -34,6 +34,29 @@ Only the three `KEPT_METRICS` above are stored; all log-record events pass throu
 `user.account_uuid`. Data files are local-only (`~/.claude/otel/` is outside every
 repo) — never copy rows into commits, issues, or shared docs without scrubbing.
 
+## Per-agent attribution — `agent.name` is redacted (D1 live probe, 2026-09-14)
+
+**`agent.name` never carries the agent type.** On every cost/token metric row and on
+`api_request` events it is the literal string `custom`, whatever was dispatched —
+82/82 historical rows in `2026-09.ndjson`, plus a two-dispatch probe (`Explore` and
+`recon`, both emitted `custom`). `query_source` degrades the same way: `agent:custom`.
+The earlier per-agent cost claim rested on a test fixture that fed the parser
+`'agent.name': 'implementer'` — a value the emitter does not produce.
+
+**The real type survives on `subagent_completed` events**, as `agent_type`, next to
+`agent.source`, `is_built_in`, `is_async`, `total_tokens`, `total_tool_uses`,
+`duration_ms`, and `model`/`final_model`/`model_swapped`. That event carries **no cost**.
+
+**Cost is therefore not attributable to an agent type, and no join recovers it.**
+`prompt.id` is the only key shared between the redacted rows and `subagent_completed`,
+and it identifies the *parent turn*, not the subagent: the probe's single turn fanned
+out to two agent types and both `subagent_completed` rows carry the same `prompt.id`.
+Verified on the wire, not inferred.
+
+So the report's **Per-agent table is run-shaped** — runs / tokens / tool uses /
+duration / models, with no cost column. Subagent rows that produced no
+`subagent_completed` event raise a gap warning rather than a silent `custom` bucket.
+
 ## Data location & cleanup
 
 - Data: `~/.claude/otel/YYYY-MM.ndjson` (override dir: `OTEL_RECEIVER_DATA_DIR`)
@@ -84,7 +107,8 @@ Joins checklist tick stamps (`<!-- done <ISO8601> -->` as last content on ticked
 `- [x]` lines, outside code fences — `scripts/checklist.mjs tick` writes them) against NDJSON rows. Task windows
 chain previous-done → done; the first window defaults to 4h before the first stamp
 (pass `--from` to widen — a stderr note fires). Outputs markdown tables: per-task,
-per-phase (COMPACT POINT markers delimit phases), per-agent, per-source, per-skill
+per-phase (COMPACT POINT markers delimit phases), per-agent (run-shaped, no cost —
+see **Per-agent attribution** above), per-source, per-skill
 (`skill_activated` events), plus gap warnings (no-rows vs events-without-cost).
 
 ## Eval runner (G72)

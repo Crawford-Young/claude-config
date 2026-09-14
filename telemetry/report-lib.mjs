@@ -81,6 +81,7 @@ export function summarize(rows, windows, skillEventName = 'skill_activated') {
   const agents = {};
   const sources = {};
   const skills = {};
+  let subagentRows = 0;
   for (const rowItem of rows) {
     const when = new Date(rowItem.ts);
     const index = windows.findIndex((w) => when > w.from && when <= w.to);
@@ -91,10 +92,26 @@ export function summarize(rows, windows, skillEventName = 'skill_activated') {
       addRow(task, rowItem);
       addRow((phases[String(task.phase)] ??= emptyBucket()), rowItem);
     }
-    const agent = rowItem.attrs['agent.name'];
-    if (agent) addRow((agents[agent] ??= emptyBucket()), rowItem);
+    // D1 live probe 2026-09-14: `agent.name` on the cost/token metric rows is ALWAYS
+    // the literal "custom" (82/82 historical rows, plus both probe dispatches — a
+    // built-in type and a userSettings type alike). The real type is redacted out of
+    // the metrics stream; it survives only on `subagent_completed` events as
+    // `agent_type`. Those events carry no cost, and `prompt.id` cannot rescue the join
+    // (one parent turn covers every agent it fans out to), so per-agent totals are
+    // run-shaped — runs/tokens/duration, never cost. See README "Per-agent attribution".
+    if (rowItem.name === 'subagent_completed') {
+      const type = rowItem.attrs.agent_type ?? 'unknown';
+      const bucket = (agents[type] ??= { runs: 0, tokens: 0, toolUses: 0, durationMs: 0, models: {} });
+      bucket.runs += 1;
+      bucket.tokens += rowItem.attrs.total_tokens ?? 0;
+      bucket.toolUses += rowItem.attrs.total_tool_uses ?? 0;
+      bucket.durationMs += rowItem.attrs.duration_ms ?? 0;
+      const model = rowItem.attrs.final_model ?? rowItem.attrs.model;
+      if (model) bucket.models[model] = (bucket.models[model] ?? 0) + 1;
+    }
     const source = rowItem.attrs.query_source;
     if (source) addRow((sources[source] ??= emptyBucket()), rowItem);
+    if (source === 'subagent' || String(source ?? '').startsWith('agent:')) subagentRows += 1;
     if (rowItem.kind === 'event' && rowItem.name.endsWith(skillEventName)) {
       const skill = rowItem.attrs['skill.name'] ?? 'unknown';
       (skills[skill] ??= { count: 0, triggers: {} }).count += 1;
@@ -109,6 +126,9 @@ export function summarize(rows, windows, skillEventName = 'skill_activated') {
     if (task.rowsAny === 0) gaps.push(`${task.name}: no rows in window — receiver down, sessions predating env config, or unmetered work`);
     else if (task.events > 0 && task.cost === 0) gaps.push(`${task.name}: session events present but zero cost rows — metrics pipeline suspect`);
   }
+  // D1: subagent traffic that produced no subagent_completed event is unattributable —
+  // its metric rows say "custom" and nothing else on them recovers the agent type.
+  if (subagentRows > 0 && Object.keys(agents).length === 0) gaps.push(`${subagentRows} subagent rows but no subagent_completed events — per-agent table unavailable (agent.name is redacted to "custom")`);
   return { tasks, phases, agents, sources, skills, gaps };
 }
 
@@ -127,7 +147,12 @@ export function renderMarkdown(report) {
     lines.push(`| ${task.name} | ${TOKEN_TYPES.map((t) => fmt(task.tokens[t])).join(' | ')} | ${fmt(task.cost)} | ${task.durationMin} |`);
   }
   bucketTable(lines, 'Per-phase', 'Phase', Object.fromEntries(Object.entries(report.phases).map(([k, v]) => [`Phase ${k}`, v])));
-  bucketTable(lines, 'Per-agent', 'Agent', report.agents);
+  // Per-agent is deliberately NOT a bucketTable: no cost is attributable to an agent type (D1).
+  lines.push('', '## Per-agent', '', '| Agent | runs | tokens | tool uses | duration sec | models |', '|---|---|---|---|---|---|');
+  for (const [name, bucket] of Object.entries(report.agents)) {
+    const models = Object.entries(bucket.models).map(([model, count]) => `${model}:${count}`).join(', ');
+    lines.push(`| ${name} | ${bucket.runs} | ${bucket.tokens} | ${bucket.toolUses} | ${Math.round(bucket.durationMs / 1000)} | ${models} |`);
+  }
   bucketTable(lines, 'Per-source', 'query_source', report.sources);
   lines.push('', '## Per-skill', '', '| Skill | fires | triggers |', '|---|---|---|');
   for (const [name, entry] of Object.entries(report.skills)) {
