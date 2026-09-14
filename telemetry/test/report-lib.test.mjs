@@ -35,8 +35,12 @@ const row = (ts, name, val, attrs = {}) => ({ v: 1, ts, sid: 's', kind: name.sta
 const ROWS = [
   row('2026-08-07T13:45:00.000Z', 'claude_code.token.usage', 1000, { type: 'output', model: 'claude-sonnet-5', query_source: 'main' }),
   row('2026-08-07T13:50:00.000Z', 'claude_code.cost.usage', 0.25, { model: 'claude-sonnet-5', query_source: 'main' }),
-  row('2026-08-07T15:00:00.000Z', 'claude_code.token.usage', 500, { type: 'input', 'agent.name': 'implementer', query_source: 'subagent' }),
-  row('2026-08-07T15:10:00.000Z', 'claude_code.cost.usage', 0.1, { 'agent.name': 'implementer', query_source: 'subagent' }),
+  // D1 live probe 2026-09-14: metric rows carry 'agent.name': 'custom' and nothing else —
+  // the real type never reaches the metrics stream. These two rows encode that redaction
+  // on purpose; the agent type below comes from the subagent_completed event, as on the wire.
+  row('2026-08-07T15:00:00.000Z', 'claude_code.token.usage', 500, { type: 'input', 'agent.name': 'custom', query_source: 'subagent' }),
+  row('2026-08-07T15:10:00.000Z', 'claude_code.cost.usage', 0.1, { 'agent.name': 'custom', query_source: 'subagent' }),
+  { v: 1, ts: '2026-08-07T15:15:00.000Z', sid: 's', kind: 'event', name: 'subagent_completed', val: 1, attrs: { agent_type: 'implementer', 'agent.source': 'userSettings', is_built_in: false, total_tokens: 500, total_tool_uses: 3, duration_ms: 90_000, model: 'claude-sonnet-5', final_model: 'claude-sonnet-5' } },
   { v: 1, ts: '2026-08-07T15:05:00.000Z', sid: 's', kind: 'event', name: 'skill_activated', val: 1, attrs: { 'skill.name': 'agent-factory', invocation_trigger: 'claude' } },
   { v: 1, ts: '2026-08-01T00:30:00.000Z', sid: 's', kind: 'event', name: 'claude_code.api_request', val: 1, attrs: {} },
 ];
@@ -75,7 +79,12 @@ test('summarize buckets per task/phase/agent/source plus skill table', () => {
   assert.equal(report.tasks[1].tokens.input, 500);
   assert.equal(report.phases['0'].cost, 0.25);
   assert.equal(report.phases['1'].cost, 0.1);
-  assert.equal(report.agents.implementer.cost, 0.1);
+  assert.equal(report.agents.implementer.runs, 1);
+  assert.equal(report.agents.implementer.tokens, 500);
+  assert.equal(report.agents.implementer.toolUses, 3);
+  assert.equal(report.agents.implementer.durationMs, 90_000);
+  assert.deepEqual(report.agents.implementer.models, { 'claude-sonnet-5': 1 });
+  assert.equal(report.agents.custom, undefined); // D1: the redacted label is never a bucket
   assert.equal(report.sources.main.cost, 0.25);
   assert.equal(report.sources.subagent.tokens.input, 500);
   assert.equal(report.skills['agent-factory'].count, 1);
@@ -125,12 +134,21 @@ test('stale date-only stamp from an earlier day still skips with warning', () =>
   assert.equal(warnings.length, 1);
 });
 
+test('summarize gap class: subagent rows with no subagent_completed event are unattributable', () => {
+  const { windows } = taskWindows(parseChecklist(CHECKLIST), new Date('2026-08-07T13:00:00.000Z'));
+  const orphaned = ROWS.filter((r) => r.name !== 'subagent_completed');
+  const report = summarize(orphaned, windows);
+  assert.deepEqual(report.agents, {});
+  assert.equal(report.gaps.length, 1);
+  assert.match(report.gaps[0], /2 subagent rows but no subagent_completed events/);
+});
+
 test('renderMarkdown emits per-task, per-phase, per-agent, per-source, per-skill tables and gaps', () => {
   const { windows } = taskWindows(parseChecklist(CHECKLIST), new Date('2026-08-07T13:00:00.000Z'));
   const md = renderMarkdown(summarize(ROWS, windows));
   assert.match(md, /\| Task 1: Parser \|/);
   assert.match(md, /\| Phase 0 \|/);
-  assert.match(md, /\| implementer \|/);
+  assert.match(md, /\| implementer \| 1 \| 500 \| 3 \| 90 \| claude-sonnet-5:1 \|/);
   assert.match(md, /\| subagent \|/);
   assert.match(md, /\| agent-factory \|/);
 });
