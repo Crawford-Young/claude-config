@@ -5,7 +5,7 @@ description: Use when a development phase ends — branch merged, wave finished,
 
 # Reflect
 
-End-of-phase dialogue: self-reflect, hear the user, land agreed harness edits. Prompted at wave close (the stop gate reminds once); the user can decline.
+End-of-phase dialogue: self-reflect, hear the user, land agreed harness edits. Prompted at wave close (the stop gate reminds once per turn end until the line is ticked); the user can decline.
 
 ## 1. Gather
 
@@ -31,7 +31,7 @@ Present the report, then ask what the user noticed that you missed — correctio
 
 Apply agreed edits with the Edit tool, showing each diff. **Pruning bias — every addition names a deletion candidate.** The harness got bloated by accreting dated incident rules; the fix discipline:
 
-- A new rule is one imperative line that names its reason (why, not when) — a rule stripped of its reason is the one the next audit prunes. The incident story goes to `docs/harness-evolution/archive/rule-history.md` (date + one line), not into the live file.
+- A new rule is one imperative line that names its reason (why, not when) — a rule stripped of its reason is the one the next audit prunes. The incident story goes to `docs/harness-evolution/archive/rule-history.md` (date + one line), not into the live file. **Caveat: where the reason is posture-, domain-, or version-dependent, the date was load-bearing** — carry the condition into the line or rest it on a condition-free reason, else compression turns a fact that was true *somewhere* into a false standing claim. Two variants: *temporal* (the dropped date is the flag) and *domain* (nothing flags it — spot-check against the root `CLAUDE.md` domain table).
 - A rule that must hold every time becomes a hook or deny rule, not prose (`hooks/bash-guard.mjs` is the pattern) — then the prose is deleted.
 - Recurrence despite a rule means the file is too long, not the rule too weak — prune or mechanize, never restate louder.
 - Model-routing observations (a dispatch that surprised, a misroute) go to `agents/ROUTING.md` as a one-liner with date.

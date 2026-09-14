@@ -3,9 +3,17 @@
 //
 // Old behavior: hard-block turn end (up to the platform's 8-block cap) when a
 // recently-touched active checklist is all-ticked except its reflect line.
-// New behavior (2026-08-21 restructure): remind exactly once — the first Stop
-// attempt blocks with an instruction to PROMPT the user about reflect; the
+// New behavior (2026-08-21 restructure): remind once PER TURN END — the first
+// Stop attempt blocks with an instruction to PROMPT the user about reflect; the
 // retry (stop_hook_active = true) passes. Reflect is prompted, never forced.
+//
+// "Once" is scoped to one stop, not to the session: `stop_hook_active` resets at
+// every turn end, and the gate persists no decision, so it re-fires on every
+// turn end while the checklist stays in this state and inside WINDOW_MS. The
+// message says so — prose claiming a single lifetime reminder cost three
+// workstreams ~13 declines apiece (issue row 63) and, worse, invited a session
+// to run reflect on a wave it had not executed. Persisting a decline is the
+// open follow-up; this only stops the gate from lying about what it does.
 //
 // Env: STOP_GATE_DOCS_ROOT overrides the docs root (tests/fixtures).
 
@@ -60,7 +68,7 @@ run('stop-reflect-gate', (payload) => {
     if (now - st.mtimeMs > WINDOW_MS) continue;
     if (needsReflect(readFileSync(f, 'utf8'))) {
       block(
-        `Checklist ${f} is complete except reflect. Before ending: prompt the user to run the reflect skill now (or to explicitly skip it). This gate reminds once and will not block again.`,
+        `Checklist ${f} is complete except reflect. Before ending: prompt the user to run the reflect skill now (or to explicitly skip it). This gate blocks once per turn end — the retry passes — but it stores no decision, so it fires again at every turn end until that reflect line is ticked or the checklist moves to done/. If the user has already declined, say that and end the turn; do not re-decide silently, and do not run reflect on a wave this session did not execute.`,
       );
     }
   }
