@@ -310,7 +310,7 @@
     "No .env in git",
     "No gate piped to tail/head",
     "No Set-Content/Out-File",
-    "No commit on main in code repos",
+    "No commit on main in code repos (each git call judged in its own cd'd repo)",
     "claude-config main never switches branch or restores files",
     "claude --model fable needs FABLE OK"
    ]

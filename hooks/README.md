@@ -16,13 +16,12 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 |---|---|---|
 | `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout. |
 
-**Text matcher, not intent matcher** — `bash-guard.mjs` matches command *text*,
-so it blocks any command that merely mentions a banned pattern as data (a
-`node -e` script or heredoc carrying `git add .`/`git commit` in a test-fixture
-array, a compound command reading `settings.json`), not just as an action.
-Working as designed, same as the pre-existing `git add -A` rule. Workaround:
-Write the content to a file, then run the file, instead of passing it through
-a shell command line.
+**Text matcher, not intent matcher** — the static rules (1–4) match command
+*text*, so they block a command that merely mentions a banned pattern as data
+(a `node -e` script carrying `git add .` in a test-fixture array), not just as
+an action. Working as designed. Workaround: Write the content to a file, then
+run the file, instead of passing it through a shell command line. The branch
+rules (5–6) read parsed git calls instead, so quoted text never trips them.
 
 **Guard scoping** — three rules about *what a rule is allowed to read*, each one a
 fixed false verdict; change them only with a test:
@@ -31,10 +30,12 @@ fixed false verdict; change them only with a test:
   `git commit -m "handle .env loading"` stages nothing and must not block.
 - Flag rules are scanned **per clause**, so `git add -p a.ts && grep -A 3 x a.ts`
   is not a `git add -A`.
-- The repo a git command targets is the payload cwd **walked through any leading
-  `cd`**. The workspace root is not itself a repo, so `cd <repo> && git commit` is
-  the shape the branch rules actually have to see — reading `payload.cwd` alone
-  makes the commit-on-main rule a no-op in normal use.
+- The branch rules judge each **git call** — a clause whose command word is
+  `git` (quoted text and `echo "git commit"` are not calls; `bash -c "…"` is
+  parsed) — in the repo it runs in: the payload cwd walked through every
+  `cd`/`Set-Location`/`pushd` clause **before that call**, then `-C`. The
+  workspace root is not itself a repo, so `cd <repo> && git commit` is the shape
+  they must see, and `cd a; git status; cd docs && git commit` commits in docs.
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
