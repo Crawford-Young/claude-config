@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { staticCheck, gitTargetRepo, effectiveCwd, clauses, stripMessages, billedLaunch } from '../../hooks/bash-guard.mjs';
+import { staticCheck, gitTargetRepo, effectiveCwd, clauses, stripMessages, stripHeredocs, billedLaunch } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
   assert.ok(staticCheck('git add -A'));
@@ -131,6 +131,31 @@ test('effectiveCwd walks leading cd segments', () => {
 test('gitTargetRepo honours the cd, and -C still wins over it', () => {
   assert.equal(gitTargetRepo('cd /repo && git commit -m x', '/cwd'), '/repo');
   assert.equal(gitTargetRepo('cd /repo && git -C /other commit -m x', '/cwd'), '/other');
+});
+
+// --- scoping: a heredoc body written to a file is data, not commands ---------
+
+test('stripHeredocs drops bodies but keeps the opening and closing lines', () => {
+  const cmd = "cat >> notes.md <<'EOF'\nrun git add -A then git commit -a\nEOF\necho done";
+  assert.equal(stripHeredocs(cmd), "cat >> notes.md <<'EOF'\nEOF\necho done");
+  // <<- allows tab-indented terminators.
+  assert.equal(stripHeredocs('cat > f <<-END\n\tgit add .\n\tEND'), 'cat > f <<-END\n\tEND');
+  // Unterminated: nothing to strip safely.
+  assert.equal(stripHeredocs('cat > f <<EOF\ngit add -A'), 'cat > f <<EOF\ngit add -A');
+});
+
+test('heredoc bodies written to files no longer trip the rules', () => {
+  assert.equal(staticCheck("cat >> t.mjs <<'EOF'\nassert.ok(staticCheck('git add -A'));\nEOF"), null);
+  assert.equal(staticCheck("cat > a.md <<EOF\nnever Set-Content here\nEOF"), null);
+  assert.equal(billedLaunch("cat > run.sh <<'EOF'\nclaude --model fable\nEOF"), null);
+  // The consuming command itself is still checked.
+  assert.ok(staticCheck("git add -A && cat > a <<EOF\nx\nEOF"));
+});
+
+test('heredocs fed to an interpreter are still checked — the body runs', () => {
+  assert.ok(staticCheck("bash <<'EOF'\ngit add -A\nEOF"));
+  assert.ok(staticCheck("sh -s <<EOF\ngit commit -a\nEOF"));
+  assert.equal(billedLaunch("bash <<'EOF'\nclaude --model fable\nEOF"), 'fable');
 });
 
 // --- rule 7: shell-launched claude on a billed model -------------------------

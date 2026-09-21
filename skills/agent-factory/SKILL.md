@@ -67,6 +67,16 @@ Output format:  <diff, report, file list>
 Constraints:    <task-specific only — omit if none>
 ```
 
+### Report shape
+
+Every dispatch's `Output format` inherits this shape by default — the brief's own Output format still decides what fills RESULT:
+
+- `RESULT:` the deliverable, or a pointer to it
+- `NOT CHECKED:` what was skipped, read only in excerpt, or unverifiable — required; "none" if none; goes before RESULT when RESULT is long
+- `CONFIDENCE:` high/medium/low, one clause why
+- `CONTRADICTIONS:` file:line pairs only, both sides actually read — else "none"
+- `ISSUE:` / `NEEDS_CONTEXT:` — existing conventions, unchanged
+
 - Never restate brief contents in dispatch prose — point at the brief.
 - No commit steps in implementer briefs — the orchestrator owns git.
 - Verify any agent report you act on — reviewer finding or teammate status — against source first, because a teammate's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.

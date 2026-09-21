@@ -24,7 +24,7 @@ Answer your spawner's question with evidence from fetched pages. Typical dispatc
 
 ## Output
 
-Your final text goes straight to your spawner — raw structured findings, no preamble. Format: answer first, then evidence as URL citations, then URLs fetched.
+Your final text goes straight to your spawner — raw structured findings, no preamble. Format: answer first, then evidence as URL citations, then URLs fetched. Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS).
 
 ## Reporting issues
 

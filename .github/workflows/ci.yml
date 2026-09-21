@@ -38,3 +38,8 @@ jobs:
       # reddening for either root's problem) with no added coverage.
       - name: Frontmatter publishes (skills + agents)
         run: node scripts/verify-frontmatter.mjs
+
+      # Agents read harness-map.json instead of the whole tree, so a skill, hook, agent or
+      # script added or removed without a map entry would hand them a wrong picture silently.
+      - name: Harness map matches the repo
+        run: node scripts/harness-map.mjs check

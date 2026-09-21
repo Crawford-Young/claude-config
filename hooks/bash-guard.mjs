@@ -16,8 +16,9 @@
 //      live FABLE OK marker — the same single-use clearance the Agent and
 //      /model gates spend (_hooklib.mjs), logged to the same dispatch log
 //
-// Scoping (matters as much as the rules): commit-message payloads are stripped
-// before any rule reads the line, flag rules are scanned per clause, and the
+// Scoping (matters as much as the rules): commit-message payloads and heredoc
+// bodies not fed to an interpreter are stripped before any rule reads the
+// line, flag rules are scanned per clause, and the
 // repo a git command targets is the payload cwd walked through any leading
 // `cd` — the workspace root is not a repo, so `cd <repo> && git commit` is the
 // shape branch rules must see.
@@ -53,6 +54,35 @@ export function stripMessages(cmd) {
     .replace(/(-m|--message)(=|\s+)'(?:[^'\\]|\\.)*'/g, "$1 'MSG'");
 }
 
+/** Drop heredoc bodies: text written into a file is not a command, and a body
+ *  that mentions `git commit` must not trip the branch rules. The opening line
+ *  stays, so the command that consumes the heredoc is still checked. A body fed
+ *  to an interpreter (`bash <<EOF`, `node - <<EOF`) can run commands and is kept. */
+export function stripHeredocs(cmd) {
+  const lines = cmd.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    out.push(line);
+    const m = line.match(/<<(-?)\s*(["']?)([\w.-]+)\2/);
+    if (!m) continue;
+    // The heredoc's consumer is the command word of the clause holding the `<<`
+    // (so `cat > run.sh <<EOF` is cat, not sh).
+    const consumer = (clauses(line.slice(0, m.index)).pop() || '').split(/\s+/)[0].split(/[/\\]/).pop();
+    if (/^(bash|sh|zsh|dash|pwsh|powershell|cmd|node|python3?|deno|bun)(\.exe)?$/i.test(consumer)) continue;
+    const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
+    if (end === -1) continue; // unterminated — leave it for the rules to read
+    out.push(lines[end]);
+    i = end;
+  }
+  return out.join('\n');
+}
+
+/** Everything the rules should NOT read as command text. */
+export function scrub(raw) {
+  return stripMessages(stripHeredocs(raw));
+}
+
 /** Expand a leading `~` — Git Bash paths reach the hook unexpanded. */
 function expandHome(p) {
   if (p === '~') return homedir();
@@ -79,7 +109,7 @@ export function effectiveCwd(cmd, cwd) {
 
 export function staticCheck(raw) {
   if (!raw) return null;
-  const cmd = stripMessages(raw);
+  const cmd = scrub(raw);
 
   // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination —
   //    scanned per clause, so an unrelated `-A` (grep -A 3, tar -A) or `-a`
@@ -130,7 +160,7 @@ export function staticCheck(raw) {
  *  clause (`$env:ANTHROPIC_MODEL = 'fable'; claude -p …` splits across two). */
 export function billedLaunch(raw) {
   if (!raw) return null;
-  const cmd = stripMessages(raw);
+  const cmd = scrub(raw);
   if (!/(?:^|[\s"'&;|(/\\])claude(?:\.exe|\.cmd)?(?=[\s"')]|$)/i.test(cmd)) return null;
   const flag = cmd.match(/--model(?:=|\s+)["']?([^\s"';|&]+)/gi) || [];
   const env = cmd.match(/[A-Z_]*MODEL\s*=\s*["']?([^\s"';|&]+)/gi) || [];
@@ -157,7 +187,7 @@ function currentBranch(repo) {
 }
 
 export function branchRules(raw, cwd) {
-  const cmd = stripMessages(raw);
+  const cmd = scrub(raw);
   const isCommit = /\bgit\b[^\n;|&]*\bcommit\b/.test(cmd);
   const isSwitch = /\bgit\b[^\n;|&]*\b(checkout|switch)\b/.test(cmd) && !/\s--\s/.test(cmd) && !/\bcheckout\b[^\n;|&]*\s--\s/.test(cmd);
   if (!isCommit && !isSwitch) return null;

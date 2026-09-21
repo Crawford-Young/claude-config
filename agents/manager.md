@@ -30,6 +30,8 @@ Confirm `Agent` is in your tool list. If it is not, stop and report `NEEDS_CONTE
 
 ## Output
 
+Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS) — RESULT is the block below. Before relaying any child's report, confirm it states a NOT CHECKED line; a child report missing one is incomplete — send it back rather than relay it upward.
+
 ```
 WORKSTREAM: <id>
 DONE: <task ids completed, with the gate summary line + exit code>

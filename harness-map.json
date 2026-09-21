@@ -1,0 +1,1224 @@
+{
+ "$comment": "Harness wiring map. Checked by scripts/harness-map.mjs check (CI); rendered by harness-map.mjs render. Add a node when you add a skill, hook, agent or script.",
+ "nodes": [
+  {
+   "id": "doc:claude-md-root",
+   "kind": "config",
+   "label": "CLAUDE.md (root)",
+   "file": "workspace/CLAUDE.md",
+   "summary": "Universal standards: domain table, skills-are-the-workflow list, git, context, orchestration and security rules.",
+   "rules": [
+    "More specific CLAUDE.md wins on conflict",
+    "No commit or push without explicit approval",
+    "All branch work happens in worktrees"
+   ]
+  },
+  {
+   "id": "doc:claude-md-web",
+   "kind": "config",
+   "label": "web/CLAUDE.md",
+   "file": "workspace/web/CLAUDE.md",
+   "summary": "Next.js, TypeScript, Tailwind, Radix+CVA, Vitest, Playwright, Vercel stack rules.",
+   "rules": [
+    "Hand-load TESTING-TRAPS.md before interactive-UI test work"
+   ]
+  },
+  {
+   "id": "doc:claude-md-games",
+   "kind": "config",
+   "label": "games/CLAUDE.md",
+   "file": "workspace/games/CLAUDE.md",
+   "summary": "Godot 4, GDScript, GUT stack rules.",
+   "rules": [
+    "Hand-load DIAGNOSTICS.md before movement/physics/feel work"
+   ]
+  },
+  {
+   "id": "doc:claude-md-apps",
+   "kind": "config",
+   "label": "apps/CLAUDE.md",
+   "file": "workspace/apps/CLAUDE.md",
+   "summary": "Expo (React Native), Tauri v2, Jest+RNTL, Maestro stack rules.",
+   "rules": [
+    "TypeScript strict, no any or @ts-ignore"
+   ]
+  },
+  {
+   "id": "store:settings-json",
+   "kind": "config",
+   "label": "settings.json",
+   "file": "~/.claude/settings.json",
+   "summary": "Wires every hook by event and matcher; session default model opus; teams on; OTel env.",
+   "rules": [
+    "Denies git add -A / --all at the permission layer too"
+   ],
+   "external": true
+  },
+  {
+   "id": "doc:routing",
+   "kind": "config",
+   "label": "ROUTING.md",
+   "file": "agents/ROUTING.md",
+   "summary": "Evidence-distilled table: which model and effort for which kind of dispatch.",
+   "rules": [
+    "fable needs per-run FABLE OK",
+    "No haiku routing (user decision 2026-09-04)",
+    "Opus fails → one read-only fable diagnostic, then the user"
+   ]
+  },
+  {
+   "id": "phase:spec",
+   "kind": "phase",
+   "label": "spec",
+   "summary": "Design doc for open-shape work; the user approves before planning.",
+   "rules": [
+    "Lives in docs/<domain>/<project>/specs/",
+    "Skipped when the shape is obvious"
+   ]
+  },
+  {
+   "id": "phase:plan",
+   "kind": "phase",
+   "label": "plan",
+   "summary": "Plan mode; multi-session work persists as a checklist.",
+   "rules": [
+    "User approves the plan, then execution runs without per-change approval"
+   ]
+  },
+  {
+   "id": "phase:worktree",
+   "kind": "phase",
+   "label": "worktree",
+   "summary": "Branch cut into a worktree; main checkouts never leave main."
+  },
+  {
+   "id": "phase:execute-dispatch",
+   "kind": "phase",
+   "label": "execute / dispatch",
+   "summary": "Work done directly or dispatched to subagents, teammates or workflows.",
+   "rules": [
+    "Pause only when done, blocked, or the plan needs revision"
+   ]
+  },
+  {
+   "id": "phase:qa",
+   "kind": "phase",
+   "label": "qa",
+   "summary": "The domain's gate list at 100% before calling work done.",
+   "rules": [
+    "UI waves get hands-on user QA before push/PR"
+   ]
+  },
+  {
+   "id": "phase:land-pr",
+   "kind": "phase",
+   "label": "land / PR",
+   "summary": "Commit, push, PR, watch checks until green, rebase-merge.",
+   "rules": [
+    "Rebase and merge, never squash",
+    "Zero check runs ≠ passing"
+   ]
+  },
+  {
+   "id": "phase:reflect",
+   "kind": "phase",
+   "label": "reflect",
+   "summary": "End-of-phase review with the user; lands agreed harness edits.",
+   "rules": [
+    "User can decline"
+   ]
+  },
+  {
+   "id": "phase:cleanup-continuation",
+   "kind": "phase",
+   "label": "cleanup / continuation",
+   "summary": "Workspace sweep, then a paste-ready resume prompt before /clear.",
+   "rules": [
+    "Continuation is a prompt, never a file"
+   ]
+  },
+  {
+   "id": "skill:plan",
+   "kind": "skill",
+   "label": "plan",
+   "file": "skills/plan/SKILL.md",
+   "summary": "Plan-mode conventions: spec/checklist persistence, five plan-time checks, design-fork debate.",
+   "rules": [
+    "Spec first when the shape is open"
+   ]
+  },
+  {
+   "id": "skill:worktree",
+   "kind": "skill",
+   "label": "worktree",
+   "file": "skills/worktree/SKILL.md",
+   "summary": "Creates and removes feature worktrees with env files copied.",
+   "rules": [
+    "Main checkout never leaves main"
+   ]
+  },
+  {
+   "id": "skill:agent-factory",
+   "kind": "skill",
+   "label": "agent-factory",
+   "file": "skills/agent-factory/SKILL.md",
+   "summary": "Spawn posture, dispatch template, lane choice and model routing.",
+   "rules": [
+    "Raise your own thinking level before dispatching",
+    "Name an agent only when it must exchange results mid-task (teams)"
+   ]
+  },
+  {
+   "id": "skill:qa",
+   "kind": "skill",
+   "label": "qa",
+   "file": "skills/qa/SKILL.md",
+   "summary": "Runs the repo's own gates via qa.mjs with honest exit codes."
+  },
+  {
+   "id": "skill:git-ops",
+   "kind": "skill",
+   "label": "git-ops",
+   "file": "skills/git-ops/SKILL.md",
+   "summary": "Git conventions, the claude-config land lane, branch finishing, recovery.",
+   "rules": [
+    "Explicit paths always",
+    "Docs repo commits direct to master"
+   ]
+  },
+  {
+   "id": "skill:reflect",
+   "kind": "skill",
+   "label": "reflect",
+   "file": "skills/reflect/SKILL.md",
+   "summary": "End-of-phase dialogue; gathers inputs via reflect-gather.mjs."
+  },
+  {
+   "id": "skill:continuation",
+   "kind": "skill",
+   "label": "continuation",
+   "file": "skills/continuation/SKILL.md",
+   "summary": "Paste-ready resume prompt for after /clear.",
+   "rules": [
+    "Skip only when nothing remains"
+   ]
+  },
+  {
+   "id": "skill:cleanup",
+   "kind": "skill",
+   "label": "cleanup",
+   "file": "skills/cleanup/SKILL.md",
+   "summary": "End-of-wave sweep: worktrees, dev servers, checklists, uncommitted files."
+  },
+  {
+   "id": "skill:harness-editing",
+   "kind": "skill",
+   "label": "harness-editing",
+   "file": "skills/harness-editing/SKILL.md",
+   "summary": "Layout map, live-vs-commit rule and verification discipline for harness edits.",
+   "rules": [
+    "A rule that must always hold is a hook, not prose",
+    "Behavior claims are verified by probe"
+   ]
+  },
+  {
+   "id": "skill:new-component",
+   "kind": "skill",
+   "label": "new-component",
+   "file": "skills/new-component/SKILL.md",
+   "summary": "Hard-gated TDD chain for Radix+CVA+Tailwind components."
+  },
+  {
+   "id": "skill:new-repo",
+   "kind": "skill",
+   "label": "new-repo",
+   "file": "skills/new-repo/SKILL.md",
+   "summary": "24-step hard-gated production repo scaffold.",
+   "rules": [
+    ".gitignore is committed before anything else"
+   ]
+  },
+  {
+   "id": "skill:release",
+   "kind": "skill",
+   "label": "release",
+   "file": "skills/release/SKILL.md",
+   "summary": "Hard-gated npm release: checks, build, dist verify, Storybook, semver, changeset.",
+   "rules": [
+    "Nothing ships on a failing gate"
+   ]
+  },
+  {
+   "id": "skill:visual-asset-gates",
+   "kind": "skill",
+   "label": "visual-asset-gates",
+   "file": "skills/visual-asset-gates/SKILL.md",
+   "summary": "Per-asset user gates for images, SVGs, palettes and screenshots.",
+   "rules": [
+    "Two direction rejections in a row → stop and re-anchor"
+   ]
+  },
+  {
+   "id": "skill:yak-voice",
+   "kind": "skill",
+   "label": "yak-voice",
+   "file": "skills/yak-voice/SKILL.md",
+   "summary": "Corpus-driven CarsickYak channel copy from accepted real samples.",
+   "rules": [
+    "Few-shot from accepted copy only"
+   ]
+  },
+  {
+   "id": "hook:fable-clearance-grant",
+   "kind": "hook",
+   "label": "fable-clearance-grant",
+   "file": "hooks/fable-clearance-grant.mjs",
+   "summary": "UserPromptSubmit: writes a single-use, 30-minute clearance marker when you type FABLE OK.",
+   "rules": [
+    "A menu answer does not grant — it must be a typed message"
+   ]
+  },
+  {
+   "id": "hook:agent-model-guard",
+   "kind": "hook",
+   "label": "agent-model-guard",
+   "file": "hooks/agent-model-guard.mjs",
+   "summary": "PreToolUse:Agent — requires an explicit model, resolves a fork's real model, spends clearance for fable/mythos.",
+   "rules": [
+    "Fails closed",
+    "A rejected dispatch still spends the grant (accepted 2026-09-21)"
+   ]
+  },
+  {
+   "id": "hook:pre-model-switch",
+   "kind": "hook",
+   "label": "pre-model-switch",
+   "file": "hooks/pre-model-switch.mjs",
+   "summary": "PreModelSwitch — a /model switch to fable spends the same clearance.",
+   "rules": [
+    "Switching away from fable is always free"
+   ]
+  },
+  {
+   "id": "hook:bash-guard",
+   "kind": "hook",
+   "label": "bash-guard",
+   "file": "hooks/bash-guard.mjs",
+   "summary": "PreToolUse:Bash|PowerShell — seven rules, incl. shell-launched fable (rule 7, added in C8).",
+   "rules": [
+    "No git add -A / commit -a",
+    "No .env in git",
+    "No gate piped to tail/head",
+    "No Set-Content/Out-File",
+    "No commit on main in code repos",
+    "claude-config main never switches branch",
+    "claude --model fable needs FABLE OK"
+   ]
+  },
+  {
+   "id": "hook:_hooklib",
+   "kind": "hook",
+   "label": "_hooklib",
+   "file": "hooks/_hooklib.mjs",
+   "summary": "Shared plumbing: payload parsing, block/allow, fail-open default, and (since C8) the one billed-model clearance check.",
+   "rules": [
+    "Guards opt into failClosed"
+   ]
+  },
+  {
+   "id": "hook:post-model-switch",
+   "kind": "hook",
+   "label": "post-model-switch",
+   "file": "hooks/post-model-switch.mjs",
+   "summary": "PostModelSwitch — records the live model per session.",
+   "rules": [
+    "Fires on Claude Code's own switches too"
+   ]
+  },
+  {
+   "id": "hook:context-gauge",
+   "kind": "hook",
+   "label": "context-gauge",
+   "file": "hooks/context-gauge.mjs",
+   "summary": "UserPromptSubmit — forces a checkpoint before silent auto-compact.",
+   "rules": [
+    "Bands are fractions of the live window"
+   ]
+  },
+  {
+   "id": "hook:session-start",
+   "kind": "hook",
+   "label": "session-start",
+   "file": "hooks/session-start.mjs",
+   "summary": "SessionStart — lists active checklists and post-compaction reminders."
+  },
+  {
+   "id": "hook:stop-reflect-gate",
+   "kind": "hook",
+   "label": "stop-reflect-gate",
+   "file": "hooks/stop-reflect-gate.mjs",
+   "summary": "Stop — reminds once per turn end to run reflect when only the reflect line is left.",
+   "rules": [
+    "Reminds, never hard-blocks (since 2026-08-21)"
+   ]
+  },
+  {
+   "id": "hook:precompact-archive",
+   "kind": "hook",
+   "label": "precompact-archive",
+   "file": "hooks/precompact-archive.mjs",
+   "summary": "PreCompact — copies the transcript to ~/.claude/compact-archives/."
+  },
+  {
+   "id": "hook:subagentstop-log",
+   "kind": "hook",
+   "label": "subagentstop-log",
+   "file": "hooks/subagentstop-log.mjs",
+   "summary": "SubagentStop — one log line per subagent stop."
+  },
+  {
+   "id": "hook:permission-denied",
+   "kind": "hook",
+   "label": "permission-denied",
+   "file": "hooks/permission-denied.mjs",
+   "summary": "PermissionDenied — logs each denial; cannot block."
+  },
+  {
+   "id": "hook:otel-receiver-spawn",
+   "kind": "hook",
+   "label": "otel-receiver-spawn",
+   "file": "hooks/otel-receiver-spawn.mjs",
+   "summary": "SessionStart — lazily spawns the local OTel usage receiver on :4318."
+  },
+  {
+   "id": "agent:manager",
+   "kind": "agent",
+   "label": "manager",
+   "file": "agents/manager.md",
+   "summary": "Runs one workstream checklist by dispatching the other agents.",
+   "rules": [
+    "Never edits, commits, or dispatches fable",
+    "Teams-mode role under review (A3)"
+   ]
+  },
+  {
+   "id": "agent:implementer",
+   "kind": "agent",
+   "label": "implementer",
+   "file": "agents/implementer.md",
+   "summary": "One scoped task via strict TDD.",
+   "rules": [
+    "Failing test first",
+    "opus override for 3+ file integration"
+   ]
+  },
+  {
+   "id": "agent:reviewer",
+   "kind": "agent",
+   "label": "reviewer",
+   "file": "agents/reviewer.md",
+   "summary": "Read-only spec-compliance and quality review.",
+   "rules": [
+    "Never fixes, only reports"
+   ]
+  },
+  {
+   "id": "agent:recon",
+   "kind": "agent",
+   "label": "recon",
+   "file": "agents/recon.md",
+   "summary": "Read-only fact-finding; also the fable diagnostic lane.",
+   "rules": [
+    "No Write/Edit"
+   ]
+  },
+  {
+   "id": "agent:web-recon",
+   "kind": "agent",
+   "label": "web-recon",
+   "file": "agents/web-recon.md",
+   "summary": "Read-only web fact-checks with citations."
+  },
+  {
+   "id": "agent:docs-agent",
+   "kind": "agent",
+   "label": "docs-agent",
+   "file": "agents/docs-agent.md",
+   "summary": "Prose and doc work; never commits."
+  },
+  {
+   "id": "agent:Explore",
+   "kind": "agent",
+   "label": "Explore",
+   "file": "agents/Explore.md",
+   "summary": "Broad read-only fan-out search; reports conclusions with file:line.",
+   "rules": [
+    "Pinned sonnet/low"
+   ]
+  },
+  {
+   "id": "model:opus",
+   "kind": "model",
+   "label": "opus",
+   "summary": "Session default; reviewer; integration and high-stakes implementation."
+  },
+  {
+   "id": "model:sonnet",
+   "kind": "model",
+   "label": "sonnet",
+   "summary": "Default for recon, scoped implementation and most dispatches."
+  },
+  {
+   "id": "model:fable",
+   "kind": "model",
+   "label": "fable",
+   "summary": "Usage-billed. Reachable on plan quota (C7, 2026-09-21). Every path in needs FABLE OK."
+  },
+  {
+   "id": "model:haiku",
+   "kind": "model",
+   "label": "haiku",
+   "summary": "Not routed — effort is silently dropped on haiku (user decision 2026-09-04)."
+  },
+  {
+   "id": "script:checklist",
+   "kind": "script",
+   "label": "checklist.mjs",
+   "file": "scripts/checklist.mjs",
+   "summary": "new / tick / status / done for wave checklists."
+  },
+  {
+   "id": "script:worktree",
+   "kind": "script",
+   "label": "worktree.mjs",
+   "file": "scripts/worktree.mjs",
+   "summary": "Create, remove and list feature worktrees from origin's default branch."
+  },
+  {
+   "id": "script:qa",
+   "kind": "script",
+   "label": "qa.mjs",
+   "file": "scripts/qa.mjs",
+   "summary": "Runs repo gates foreground and unpiped."
+  },
+  {
+   "id": "script:land",
+   "kind": "script",
+   "label": "land.mjs",
+   "file": "scripts/land.mjs",
+   "summary": "claude-config commit lane: ephemeral worktree from origin/main, path-scoped diff.",
+   "rules": [
+    "finish leaves merged branches behind (known bug)"
+   ]
+  },
+  {
+   "id": "script:reflect-gather",
+   "kind": "script",
+   "label": "reflect-gather.mjs",
+   "file": "scripts/reflect-gather.mjs",
+   "summary": "Checklist, issue log and per-repo git history in one payload."
+  },
+  {
+   "id": "script:session-state",
+   "kind": "script",
+   "label": "session-state.mjs",
+   "file": "scripts/session-state.mjs",
+   "summary": "Active checklists and dirty/off-branch repos, for continuation prompts."
+  },
+  {
+   "id": "script:cleanup",
+   "kind": "script",
+   "label": "cleanup.mjs",
+   "file": "scripts/cleanup.mjs",
+   "summary": "End-of-wave sweep report; kill-port and remove-worktree options."
+  },
+  {
+   "id": "script:verify-frontmatter",
+   "kind": "script",
+   "label": "verify-frontmatter.mjs",
+   "file": "scripts/verify-frontmatter.mjs",
+   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter."
+  },
+  {
+   "id": "script:lib",
+   "kind": "script",
+   "label": "lib.mjs",
+   "file": "scripts/lib.mjs",
+   "summary": "Shared helpers for the workflow scripts; Node builtins only."
+  },
+  {
+   "id": "store:docs-repo",
+   "kind": "store",
+   "label": "~/code/docs",
+   "file": "~/code/docs",
+   "summary": "Private planning repo: specs, checklists active/done, issues, screenshots.",
+   "rules": [
+    "Commits direct to master with explicit paths",
+    "Pushed at wave close"
+   ],
+   "external": true
+  },
+  {
+   "id": "store:clearance",
+   "kind": "store",
+   "label": "fable-clearance.json",
+   "file": "~/.claude/fable-clearance.json",
+   "summary": "The single-use FABLE OK marker. Valid 30 minutes; deleted by whichever gate spends it.",
+   "external": true
+  },
+  {
+   "id": "store:dispatch-log",
+   "kind": "store",
+   "label": "fable-dispatch.log",
+   "file": "~/.claude/fable-dispatch.log",
+   "summary": "One ALLOW/BLOCK line per billed-act decision, from all three gates.",
+   "external": true
+  },
+  {
+   "id": "store:current-model-json",
+   "kind": "store",
+   "label": "current-model.json",
+   "file": "~/.claude/current-model.json",
+   "summary": "Live model per session — how the guard knows what a fork really runs on.",
+   "external": true
+  },
+  {
+   "id": "store:compact-archives",
+   "kind": "store",
+   "label": "compact-archives/",
+   "file": "~/.claude/compact-archives/",
+   "summary": "Transcript copies taken before every compaction.",
+   "external": true
+  },
+  {
+   "id": "doc:harness-evolution-archive",
+   "kind": "store",
+   "label": "harness-evolution/archive",
+   "file": "~/code/docs/harness-evolution/archive/",
+   "summary": "Incident history and rule history — cite it, don't reload it.",
+   "external": true
+  },
+  {
+   "id": "hook:notification-toast",
+   "kind": "hook",
+   "label": "notification-toast",
+   "file": "hooks/notification-toast.ps1",
+   "summary": "Notification — Windows toast when Claude Code needs attention (WezTerm has no native one)."
+  },
+  {
+   "id": "script:harness-map",
+   "kind": "script",
+   "label": "harness-map.mjs",
+   "file": "scripts/harness-map.mjs",
+   "summary": "check: this map covers every skill, hook, agent and script, and every file exists. render: builds the diagram page.",
+   "rules": [
+    "CI fails when a harness file is added or removed without a map entry"
+   ]
+  },
+  {
+   "id": "script:export-harness",
+   "kind": "script",
+   "label": "export-harness.ps1",
+   "file": "scripts/export-harness.ps1",
+   "summary": "Zips the harness and workspace MDs for moving to another machine."
+  },
+  {
+   "id": "script:import-harness",
+   "kind": "script",
+   "label": "import-harness.ps1",
+   "file": "scripts/import-harness.ps1",
+   "summary": "Restores the harness from that zip on a new Windows machine."
+  },
+  {
+   "id": "script:open-admin-shells",
+   "kind": "script",
+   "label": "open-admin-shells.ps1",
+   "file": "scripts/open-admin-shells.ps1",
+   "summary": "Opens three elevated PowerShell windows."
+  },
+  {
+   "id": "store:harness-map-json",
+   "kind": "store",
+   "label": "harness-map.json",
+   "file": "harness-map.json",
+   "summary": "This map. Read it before sweeping files; update it in the same change as any wiring change."
+  }
+ ],
+ "edges": [
+  {
+   "from": "doc:claude-md-root",
+   "to": "doc:claude-md-web",
+   "kind": "loads",
+   "label": "domain file wins"
+  },
+  {
+   "from": "doc:claude-md-root",
+   "to": "doc:claude-md-games",
+   "kind": "loads",
+   "label": "domain file wins"
+  },
+  {
+   "from": "doc:claude-md-root",
+   "to": "doc:claude-md-apps",
+   "kind": "loads",
+   "label": "domain file wins"
+  },
+  {
+   "from": "doc:claude-md-root",
+   "to": "doc:harness-evolution-archive",
+   "kind": "reads",
+   "label": "cites incidents"
+  },
+  {
+   "from": "phase:spec",
+   "to": "phase:plan",
+   "kind": "next-phase",
+   "label": "user approves spec"
+  },
+  {
+   "from": "phase:plan",
+   "to": "phase:worktree",
+   "kind": "next-phase",
+   "label": "user approves plan"
+  },
+  {
+   "from": "phase:worktree",
+   "to": "phase:execute-dispatch",
+   "kind": "next-phase"
+  },
+  {
+   "from": "phase:execute-dispatch",
+   "to": "phase:qa",
+   "kind": "next-phase"
+  },
+  {
+   "from": "phase:qa",
+   "to": "phase:land-pr",
+   "kind": "next-phase",
+   "label": "gates green"
+  },
+  {
+   "from": "phase:land-pr",
+   "to": "phase:reflect",
+   "kind": "next-phase",
+   "label": "wave ends"
+  },
+  {
+   "from": "phase:reflect",
+   "to": "phase:cleanup-continuation",
+   "kind": "next-phase"
+  },
+  {
+   "from": "skill:plan",
+   "to": "phase:spec",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:plan",
+   "to": "phase:plan",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:plan",
+   "to": "script:checklist",
+   "kind": "invokes",
+   "label": "checklist.mjs new"
+  },
+  {
+   "from": "skill:plan",
+   "to": "store:docs-repo",
+   "kind": "writes",
+   "label": "specs, checklists"
+  },
+  {
+   "from": "skill:worktree",
+   "to": "phase:worktree",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:worktree",
+   "to": "script:worktree",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "phase:execute-dispatch",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "doc:routing",
+   "kind": "reads",
+   "label": "picks the model"
+  },
+  {
+   "from": "skill:new-component",
+   "to": "phase:execute-dispatch",
+   "kind": "drives",
+   "label": "web domain"
+  },
+  {
+   "from": "skill:new-repo",
+   "to": "phase:execute-dispatch",
+   "kind": "drives",
+   "label": "new repos"
+  },
+  {
+   "from": "skill:visual-asset-gates",
+   "to": "phase:qa",
+   "kind": "drives",
+   "label": "preview gate"
+  },
+  {
+   "from": "skill:yak-voice",
+   "to": "phase:execute-dispatch",
+   "kind": "drives",
+   "label": "channel copy"
+  },
+  {
+   "from": "skill:qa",
+   "to": "phase:qa",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:qa",
+   "to": "script:qa",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:release",
+   "to": "phase:land-pr",
+   "kind": "drives",
+   "label": "npm release"
+  },
+  {
+   "from": "skill:git-ops",
+   "to": "phase:land-pr",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:git-ops",
+   "to": "script:land",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:git-ops",
+   "to": "store:docs-repo",
+   "kind": "writes",
+   "label": "direct to master"
+  },
+  {
+   "from": "skill:reflect",
+   "to": "phase:reflect",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:reflect",
+   "to": "script:reflect-gather",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:reflect",
+   "to": "doc:harness-evolution-archive",
+   "kind": "writes",
+   "label": "rule history"
+  },
+  {
+   "from": "skill:cleanup",
+   "to": "phase:cleanup-continuation",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:cleanup",
+   "to": "script:cleanup",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:continuation",
+   "to": "phase:cleanup-continuation",
+   "kind": "drives"
+  },
+  {
+   "from": "skill:continuation",
+   "to": "script:session-state",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:harness-editing",
+   "to": "doc:claude-md-root",
+   "kind": "reads",
+   "label": "edits the chain"
+  },
+  {
+   "from": "skill:harness-editing",
+   "to": "store:settings-json",
+   "kind": "reads",
+   "label": "hook wiring"
+  },
+  {
+   "from": "skill:harness-editing",
+   "to": "script:verify-frontmatter",
+   "kind": "invokes"
+  },
+  {
+   "from": "skill:harness-editing",
+   "to": "script:land",
+   "kind": "invokes",
+   "label": "commits via land"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:manager",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:implementer",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:reviewer",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:recon",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:web-recon",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:docs-agent",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:Explore",
+   "kind": "dispatches"
+  },
+  {
+   "from": "agent:manager",
+   "to": "agent:implementer",
+   "kind": "dispatches"
+  },
+  {
+   "from": "agent:manager",
+   "to": "agent:reviewer",
+   "kind": "dispatches"
+  },
+  {
+   "from": "agent:manager",
+   "to": "agent:recon",
+   "kind": "dispatches"
+  },
+  {
+   "from": "agent:manager",
+   "to": "agent:docs-agent",
+   "kind": "dispatches"
+  },
+  {
+   "from": "doc:routing",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "default lane"
+  },
+  {
+   "from": "doc:routing",
+   "to": "model:opus",
+   "kind": "routes-to",
+   "label": "integration, high stakes"
+  },
+  {
+   "from": "doc:routing",
+   "to": "model:fable",
+   "kind": "routes-to",
+   "label": "long-horizon, diagnostics"
+  },
+  {
+   "from": "doc:routing",
+   "to": "model:haiku",
+   "kind": "excludes",
+   "label": "not routed"
+  },
+  {
+   "from": "agent:manager",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "frontmatter"
+  },
+  {
+   "from": "agent:implementer",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "frontmatter, medium"
+  },
+  {
+   "from": "agent:implementer",
+   "to": "model:opus",
+   "kind": "routes-to",
+   "label": "override for 3+ files"
+  },
+  {
+   "from": "agent:reviewer",
+   "to": "model:opus",
+   "kind": "routes-to",
+   "label": "frontmatter, high"
+  },
+  {
+   "from": "agent:recon",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "frontmatter, low"
+  },
+  {
+   "from": "agent:recon",
+   "to": "model:fable",
+   "kind": "routes-to",
+   "label": "diagnostic lane"
+  },
+  {
+   "from": "agent:web-recon",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "frontmatter, low"
+  },
+  {
+   "from": "agent:docs-agent",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "frontmatter"
+  },
+  {
+   "from": "agent:Explore",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "pinned, low"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "model:opus",
+   "kind": "loads",
+   "label": "session default"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:bash-guard",
+   "kind": "loads",
+   "label": "wires every hook"
+  },
+  {
+   "from": "hook:fable-clearance-grant",
+   "to": "store:clearance",
+   "kind": "writes",
+   "label": "on typed FABLE OK"
+  },
+  {
+   "from": "hook:agent-model-guard",
+   "to": "model:fable",
+   "kind": "gates",
+   "label": "PreToolUse:Agent"
+  },
+  {
+   "from": "hook:pre-model-switch",
+   "to": "model:fable",
+   "kind": "gates",
+   "label": "PreModelSwitch"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "model:fable",
+   "kind": "gates",
+   "label": "rule 7: shell launch"
+  },
+  {
+   "from": "hook:agent-model-guard",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "shared clearance check"
+  },
+  {
+   "from": "hook:pre-model-switch",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "shared clearance check"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "shared clearance check"
+  },
+  {
+   "from": "hook:_hooklib",
+   "to": "store:clearance",
+   "kind": "writes",
+   "label": "spends (deletes) marker"
+  },
+  {
+   "from": "hook:_hooklib",
+   "to": "store:dispatch-log",
+   "kind": "writes",
+   "label": "ALLOW / BLOCK"
+  },
+  {
+   "from": "hook:agent-model-guard",
+   "to": "store:current-model-json",
+   "kind": "reads",
+   "label": "fork's real model"
+  },
+  {
+   "from": "hook:post-model-switch",
+   "to": "store:current-model-json",
+   "kind": "writes"
+  },
+  {
+   "from": "hook:agent-model-guard",
+   "to": "phase:execute-dispatch",
+   "kind": "gates",
+   "label": "explicit model required"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "phase:execute-dispatch",
+   "kind": "gates",
+   "label": "PreToolUse:Bash|PowerShell"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "phase:land-pr",
+   "kind": "gates",
+   "label": "no add -A, no commit on main"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "script:land",
+   "kind": "gates",
+   "label": "forces the land lane"
+  },
+  {
+   "from": "hook:stop-reflect-gate",
+   "to": "phase:reflect",
+   "kind": "gates",
+   "label": "Stop: reminds"
+  },
+  {
+   "from": "hook:context-gauge",
+   "to": "phase:cleanup-continuation",
+   "kind": "gates",
+   "label": "checkpoint before compact"
+  },
+  {
+   "from": "hook:session-start",
+   "to": "store:docs-repo",
+   "kind": "reads",
+   "label": "active checklists"
+  },
+  {
+   "from": "hook:session-start",
+   "to": "phase:execute-dispatch",
+   "kind": "feeds",
+   "label": "resume at first unchecked"
+  },
+  {
+   "from": "hook:precompact-archive",
+   "to": "store:compact-archives",
+   "kind": "writes"
+  },
+  {
+   "from": "hook:subagentstop-log",
+   "to": "phase:execute-dispatch",
+   "kind": "observes",
+   "label": "SubagentStop log"
+  },
+  {
+   "from": "hook:permission-denied",
+   "to": "phase:execute-dispatch",
+   "kind": "observes",
+   "label": "denial log"
+  },
+  {
+   "from": "script:checklist",
+   "to": "store:docs-repo",
+   "kind": "writes",
+   "label": "checklists"
+  },
+  {
+   "from": "script:reflect-gather",
+   "to": "store:docs-repo",
+   "kind": "reads"
+  },
+  {
+   "from": "script:session-state",
+   "to": "store:docs-repo",
+   "kind": "reads"
+  },
+  {
+   "from": "script:land",
+   "to": "script:lib",
+   "kind": "reads"
+  },
+  {
+   "from": "script:worktree",
+   "to": "script:lib",
+   "kind": "reads"
+  },
+  {
+   "from": "script:qa",
+   "to": "script:lib",
+   "kind": "reads"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:notification-toast",
+   "kind": "loads",
+   "label": "Notification"
+  },
+  {
+   "from": "skill:harness-editing",
+   "to": "script:harness-map",
+   "kind": "invokes",
+   "label": "keep the map current"
+  },
+  {
+   "from": "script:harness-map",
+   "to": "script:verify-frontmatter",
+   "kind": "feeds",
+   "label": "CI, alongside"
+  },
+  {
+   "from": "script:import-harness",
+   "to": "script:export-harness",
+   "kind": "reads",
+   "label": "restores its zip"
+  },
+  {
+   "from": "hook:otel-receiver-spawn",
+   "to": "store:settings-json",
+   "kind": "reads",
+   "label": "OTel env"
+  },
+  {
+   "from": "script:harness-map",
+   "to": "store:harness-map-json",
+   "kind": "reads",
+   "label": "check / render"
+  },
+  {
+   "from": "skill:harness-editing",
+   "to": "store:harness-map-json",
+   "kind": "reads",
+   "label": "read first"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:recon",
+   "kind": "dispatches",
+   "label": "report shape: NOT CHECKED first"
+  }
+ ]
+}

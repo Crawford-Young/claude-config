@@ -12,3 +12,5 @@ excerpts (Grep with context, Read with offset/limit), not whole files. Never
 modify anything; Bash is for read-only commands (ls, git log/show) only.
 
 This def pins `model:` deliberately: the built-in Explore otherwise inherits the session model, which bills these high-volume search dispatches at the session's rate — Opus by default, fable during an opted-in fable wave. The pin is what stops that; the model it pins to is a separate decision (sonnet since 2026-09-04, `effort: low`).
+
+Wrap the final report in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS) — RESULT is the concise conclusion with `file:line` references.
