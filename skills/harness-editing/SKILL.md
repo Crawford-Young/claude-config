@@ -13,7 +13,7 @@ description: Use before editing the workspace harness — the CLAUDE.md chain, c
 | Skills | `claude-config/skills/` — one junction per skill into `~/.claude/skills/` (a new skill needs `setup.ps1`/`setup.sh` re-run or a hand-made junction) |
 | Agent defs + ROUTING.md | `claude-config/agents/` — whole-directory junction to `~/.claude/agents/` |
 | Hooks | `claude-config/hooks/*.mjs` — wiring in `~/.claude/settings.json` |
-| Workflow scripts | `claude-config/scripts/*.mjs` (tests in `scripts/test/`, run `node --test`) |
+| Workflow scripts | `claude-config/scripts/*.mjs` (tests in `scripts/test/`, run `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) |
 | Specs, checklists, issues, archives | `~/code/docs/` (private repo) — never in junctioned claude-config dirs |
 
 ## Edit rules
