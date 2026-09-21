@@ -27,6 +27,8 @@ Rank findings **Critical / Major / Minor**. A Critical means merging would ship 
 
 ## Output
 
+Wrap findings in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS) — RESULT is the verdict block below.
+
 Final text = raw findings for your spawner, no preamble:
 
 ```

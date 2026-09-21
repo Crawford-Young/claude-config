@@ -45,7 +45,7 @@ These held across every dispatch, so they live here instead of being restated in
 
 Quality gates first: run the gate list from your domain's `CLAUDE.md` Definition of Done — never a remembered one. Universal minimum: tests green at the repo's coverage threshold, the language's type/lint check clean, no dead code or debug logging left behind.
 
-Final text = raw report to your spawner: what changed (file list), test results (paste the summary line, not the full output), deviations from the dispatch, and any ISSUE/NEEDS_CONTEXT lines.
+Final text = raw report to your spawner: what changed (file list), test results (paste the summary line, not the full output), deviations from the dispatch, and any ISSUE/NEEDS_CONTEXT lines. Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS).
 
 ## Reporting issues
 

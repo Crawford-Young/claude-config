@@ -36,7 +36,7 @@ Before planning any spawn, confirm `Agent` is in your tool list. If it is absent
 
 ## Output
 
-Final text = raw report to your spawner: files changed, exact diffs (old → new) for every edit, and any ISSUE/NEEDS_CONTEXT lines.
+Final text = raw report to your spawner: files changed, exact diffs (old → new) for every edit, and any ISSUE/NEEDS_CONTEXT lines. Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS).
 
 ## Reporting issues
 

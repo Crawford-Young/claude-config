@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,6 +82,131 @@ test('start lands a file whose last line is blank (patch ends in a lone-space co
   // blank line survived rather than being eaten with the patch's last line.
   assert.equal(readFileSync(join(wt, 'doc.md'), 'utf8').replace(/\r\n/g, '\n'), 'intro changed\n\n## Your job\n\n');
 });
+
+// --- finish: worktree + branch cleanup after a merged (or not-yet-merged) PR --
+//
+// PRs merge via "Rebase and merge", so a merged branch's commits are never
+// ancestors of origin/main — only patch-equivalent to a commit main now has.
+// `git cherry origin/main <branch>` is what tells the two apart from `merge
+// --is-ancestor`. CLAUDE_LAND_NO_GH forces the cherry fallback so these tests
+// never depend on the real `gh` CLI or a real PR existing.
+
+function initOrigin(root) {
+  const origin = join(root, 'origin.git');
+  mkdirSync(origin);
+  sh(root, 'git', ['init', '--bare', origin]);
+  const cfg = join(root, 'claude-config');
+  sh(root, 'git', ['clone', origin, cfg]);
+  sh(cfg, 'git', ['config', 'user.email', 't@t']);
+  sh(cfg, 'git', ['config', 'user.name', 't']);
+  writeFileSync(join(cfg, 'a.md'), 'x\n');
+  sh(cfg, 'git', ['add', 'a.md']);
+  sh(cfg, 'git', ['commit', '-m', 'init']);
+  sh(cfg, 'git', ['branch', '-M', 'main']);
+  sh(cfg, 'git', ['push', '-u', 'origin', 'main']);
+  return { origin, cfg };
+}
+
+test('finish deletes a rebase-merged branch locally and on the remote', () => {
+  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const { origin, cfg } = initOrigin(root);
+  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+
+  appendFileSync(join(cfg, 'a.md'), 'my change\n');
+  execFileSync(process.execPath, [script, 'start', 'demo', '-m', 'chore: my change', '--', 'a.md'], {
+    encoding: 'utf8',
+    env,
+  });
+  const wt = join(root, '.worktrees', 'claude-config-demo');
+  sh(wt, 'git', ['push', '-u', 'origin', 'chore/demo']);
+
+  // Simulate GitHub's "Rebase and merge": land the SAME patch on main as a
+  // brand-new commit, from a throwaway clone — never through chore/demo itself.
+  const up = mkdtempSync(join(root, 'up-'));
+  sh(root, 'git', ['clone', '--branch', 'main', origin, up]);
+  sh(up, 'git', ['config', 'user.email', 't@t']);
+  sh(up, 'git', ['config', 'user.name', 't']);
+  sh(up, 'git', ['fetch', 'origin', 'chore/demo']);
+  sh(up, 'git', ['cherry-pick', 'FETCH_HEAD']);
+  sh(up, 'git', ['push', 'origin', 'HEAD:main']);
+
+  const out = execFileSync(process.execPath, [script, 'finish', 'demo'], { encoding: 'utf8', env });
+  assert.ok(!existsSync(wt), 'worktree removed');
+  assert.match(out, /deleted local branch chore\/demo/);
+  assert.match(out, /deleted remote branch origin\/chore\/demo/);
+
+  assert.equal(git_showref(cfg, 'refs/heads/chore/demo'), false, 'local branch gone');
+  sh(cfg, 'git', ['fetch', 'origin']);
+  assert.equal(
+    sh(cfg, 'git', ['ls-remote', '--heads', 'origin', 'chore/demo']).trim(),
+    '',
+    'remote branch gone',
+  );
+});
+
+test('finish keeps an unmerged branch, locally and on the remote, and says so', () => {
+  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const { cfg } = initOrigin(root);
+  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+
+  appendFileSync(join(cfg, 'a.md'), 'unmerged change\n');
+  execFileSync(process.execPath, [script, 'start', 'unmerged', '-m', 'chore: unmerged', '--', 'a.md'], {
+    encoding: 'utf8',
+    env,
+  });
+  const wt = join(root, '.worktrees', 'claude-config-unmerged');
+  sh(wt, 'git', ['push', '-u', 'origin', 'chore/unmerged']);
+
+  const out = execFileSync(process.execPath, [script, 'finish', 'unmerged'], { encoding: 'utf8', env });
+  assert.ok(!existsSync(wt), 'worktree still removed regardless of branch merge state');
+  assert.match(out, /kept local branch chore\/unmerged/);
+  assert.match(out, /kept remote branch origin\/chore\/unmerged/);
+
+  assert.equal(git_showref(cfg, 'refs/heads/chore/unmerged'), true, 'local branch kept');
+  sh(cfg, 'git', ['fetch', 'origin']);
+  assert.notEqual(
+    sh(cfg, 'git', ['ls-remote', '--heads', 'origin', 'chore/unmerged']).trim(),
+    '',
+    'remote branch kept',
+  );
+});
+
+test('finish removes a leftover worktree directory that got unregistered without being deleted', () => {
+  // Reproduces PR #50: `git worktree remove` (or a manual prune) can drop the
+  // registration in .git/worktrees/<name> while the directory on disk survives.
+  // finish must clean that up rather than refuse.
+  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const { cfg } = initOrigin(root);
+  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+
+  appendFileSync(join(cfg, 'a.md'), 'leftover dir change\n');
+  execFileSync(process.execPath, [script, 'start', 'leftover', '-m', 'chore: leftover', '--', 'a.md'], {
+    encoding: 'utf8',
+    env,
+  });
+  const wt = join(root, '.worktrees', 'claude-config-leftover');
+  assert.ok(existsSync(wt));
+
+  // Unregister without touching the directory: what a stale/incomplete prior
+  // `worktree remove` leaves behind.
+  rmSync(join(cfg, '.git', 'worktrees', 'claude-config-leftover'), { recursive: true, force: true });
+  sh(cfg, 'git', ['worktree', 'prune']);
+  assert.doesNotMatch(sh(cfg, 'git', ['worktree', 'list']), /claude-config-leftover/);
+  assert.ok(existsSync(wt), 'directory survives the unregister, per the bug being reproduced');
+
+  const out = execFileSync(process.execPath, [script, 'finish', 'leftover'], { encoding: 'utf8', env });
+  assert.ok(!existsSync(wt), 'leftover directory removed rather than refused');
+  assert.match(out, /leftover|removed/i);
+});
+
+function git_showref(repo, ref) {
+  try {
+    execFileSync('git', ['-C', repo, 'show-ref', '--verify', '--quiet', ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 test('start refuses when the main checkout is off main', () => {
   const root = mkdtempSync(join(tmpdir(), 'land-'));

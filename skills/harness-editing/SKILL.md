@@ -16,6 +16,8 @@ description: Use before editing the workspace harness — the CLAUDE.md chain, c
 | Workflow scripts | `claude-config/scripts/*.mjs` (tests in `scripts/test/`, run `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) |
 | Specs, checklists, issues, archives | `~/code/docs/` (private repo) — never in junctioned claude-config dirs |
 
+**Wiring map:** `claude-config/harness-map.json` names every part and what it calls, gates or feeds — read it before sweeping files. Adding, removing or rewiring a skill, hook, agent or script means updating its node and edges in the same change, or CI (`scripts/harness-map.mjs check`) fails.
+
 ## Edit rules
 
 - **Junctions load the MAIN checkout only.** Live edits land on its disk (Edit tool needs the real `claude-config/...` path — it refuses symlinks); commits go through `git-ops` (`land.mjs` — ephemeral worktree from `origin/main`, path-scoped diff). Never commit on the main checkout (hook-enforced).

@@ -17,7 +17,7 @@
 //        restore tracked copies and fast-forward the main checkout.
 
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   currentBranch,
@@ -168,14 +168,109 @@ function cmdSync() {
   log('main checkout synced to origin/main.');
 }
 
-function cmdFinish() {
-  const slug = args._[1];
-  if (!slug) die('usage: land.mjs finish <slug>');
-  const wt = join(worktreesDir(), `claude-config-${slug}`);
-  if (!existsSync(wt)) die(`no worktree at ${wt}`);
+// True if `wt` is a path git currently has registered as a worktree. A path
+// can exist on disk without being registered — a prior `worktree remove` (or
+// a manual prune of .git/worktrees/<name>) can drop the registration while
+// leaving the directory behind (PR #50). In that state `git worktree remove`
+// refuses it outright, so callers must branch on this first.
+function isRegisteredWorktree(wt) {
+  const list = git(cfg, ['worktree', 'list', '--porcelain']).out;
+  const target = resolve(wt).replace(/\\/g, '/').toLowerCase();
+  return list.split(/\n{2,}/).some((block) => {
+    const m = block.match(/^worktree (.+)$/m);
+    return m && resolve(m[1]).replace(/\\/g, '/').toLowerCase() === target;
+  });
+}
+
+function removeFinishedWorktree(wt) {
+  if (!existsSync(wt)) {
+    log(`no worktree at ${wt} (already removed)`);
+    return;
+  }
+  if (!isRegisteredWorktree(wt)) {
+    // git no longer knows about this path — plain filesystem cleanup is safe
+    // and correct, not a workaround for a registered worktree.
+    rmSync(wt, { recursive: true, force: true });
+    log(`removed leftover worktree directory ${wt} (was already unregistered)`);
+    return;
+  }
   let r = git(cfg, ['worktree', 'remove', wt]);
   if (r.code !== 0) r = git(cfg, ['worktree', 'remove', '--force', wt]);
   if (r.code !== 0) die(`worktree remove failed: ${r.err}\nRemove before deleting the remote branch — a checked-out branch can't be deleted.`);
+  log(`removed worktree ${wt}`);
+}
+
+// Merged-status check for a branch that PRs land via "Rebase and merge" — the
+// branch's commits are never ancestors of origin/main, only patch-equivalent
+// to a commit main now has. `git cherry` decides — it detects patch-equivalence
+// directly, so every commit on the branch must already be on main. `gh pr view`
+// (skipped with CLAUDE_LAND_NO_GH=1 or without gh) can only veto, when the PR
+// is open or closed unmerged.
+function isBranchMerged(branch, cherryRef) {
+  if (!process.env.CLAUDE_LAND_NO_GH) {
+    const gh = spawnSync('gh', ['pr', 'view', branch, '--json', 'state'], { cwd: cfg, encoding: 'utf8' });
+    if (!gh.error && gh.status === 0 && gh.stdout) {
+      try {
+        // gh can only veto: a MERGED PR says nothing about commits made on the
+        // branch after the merge, so the cherry check below still has to pass.
+        const state = JSON.parse(gh.stdout).state;
+        if (state && state !== 'MERGED') return false;
+      } catch {
+        // unparseable gh output — fall through to the cherry check
+      }
+    }
+  }
+  const cherry = git(cfg, ['cherry', 'origin/main', cherryRef]);
+  if (cherry.code !== 0) return false; // can't tell — never force-delete unmerged work
+  return cherry.out
+    .split('\n')
+    .filter(Boolean)
+    .every((line) => !line.startsWith('+'));
+}
+
+function cmdFinish() {
+  const slug = args._[1];
+  if (!slug) die('usage: land.mjs finish <slug>');
+  const branch = `chore/${slug}`;
+  const wt = join(worktreesDir(), `claude-config-${slug}`);
+
+  removeFinishedWorktree(wt);
   gitOrDie(cfg, ['worktree', 'prune']);
-  log(`removed ${wt}`);
+
+  gitOrDie(cfg, ['fetch', 'origin']);
+  const localExists = git(cfg, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).code === 0;
+  const remoteExists = git(cfg, ['ls-remote', '--exit-code', '--heads', 'origin', branch]).code === 0;
+
+  if (!localExists && !remoteExists) {
+    log(`no branch ${branch} to clean up (already removed)`);
+    return;
+  }
+
+  const merged = isBranchMerged(branch, localExists ? branch : `origin/${branch}`);
+
+  if (localExists) {
+    if (merged) {
+      let del = git(cfg, ['branch', '-d', branch]);
+      // -d's ancestor check can still refuse a rebase-merged branch even
+      // though `git cherry` independently confirmed it's patch-equivalent —
+      // -D is safe here because merged status was already verified above.
+      if (del.code !== 0) del = git(cfg, ['branch', '-D', branch]);
+      if (del.code !== 0) die(`local branch delete failed for ${branch}: ${del.err}`);
+      log(`deleted local branch ${branch}`);
+    } else {
+      log(`kept local branch ${branch} — not merged into origin/main`);
+    }
+  }
+
+  if (remoteExists) {
+    if (merged) {
+      const del = git(cfg, ['push', 'origin', '--delete', branch]);
+      if (del.code !== 0 && !/remote ref does not exist/i.test(del.err)) {
+        die(`remote branch delete failed for ${branch}: ${del.err}`);
+      }
+      log(`deleted remote branch origin/${branch}`);
+    } else {
+      log(`kept remote branch origin/${branch} — not merged into origin/main`);
+    }
+  }
 }

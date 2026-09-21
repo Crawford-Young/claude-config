@@ -1,0 +1,203 @@
+<title>Harness Wiring Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Martian+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#EEF1EC; --panel:#F8FAF6; --ink:#1B2420; --muted:#5E6B64; --rule:#CBD3CC; --edge:#9AA69E;
+  --phase:#2F6B57; --skill:#345CA8; --hook:#B0452A; --agent:#7B4FA0; --model:#9A741A;
+  --script:#4B6973; --config:#6A5D48; --doc:#6B7359; --store:#6B7359;
+  --focus:#E0A11B;
+  --sans:"Archivo",ui-sans-serif,system-ui,sans-serif; --mono:"Martian Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#121714; --panel:#19201C; --ink:#E4EAE5; --muted:#94A39A; --rule:#2C3631; --edge:#4A5751;
+  --phase:#5FB394; --skill:#7C9BE0; --hook:#E07A5C; --agent:#B88DDB; --model:#D6AE4E;
+  --script:#86A9B4; --config:#B9A585; --doc:#A6AF8E; --store:#A6AF8E; --focus:#F2C04B;
+}}
+:root[data-theme="dark"]{
+  --ground:#121714; --panel:#19201C; --ink:#E4EAE5; --muted:#94A39A; --rule:#2C3631; --edge:#4A5751;
+  --phase:#5FB394; --skill:#7C9BE0; --hook:#E07A5C; --agent:#B88DDB; --model:#D6AE4E;
+  --script:#86A9B4; --config:#B9A585; --doc:#A6AF8E; --store:#A6AF8E; --focus:#F2C04B;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;padding-inline:16px;padding-block:20px 40px}
+.wrap{max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header h1{font-size:30px;font-weight:800;font-stretch:78%;letter-spacing:.01em;margin:0;text-wrap:balance}
+header p{margin:4px 0 0;color:var(--muted);max-width:70ch}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.bar input{font:inherit;padding:7px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--panel);color:var(--ink);min-width:0;width:220px}
+.chip{font:600 12px var(--sans);letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;border-radius:999px;border:1.5px solid var(--c);color:var(--c);background:transparent;cursor:pointer}
+.chip[aria-pressed="false"]{opacity:.35}
+.chip:focus-visible,.node:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:1fr}}
+.canvas{overflow:auto;border:1px solid var(--rule);border-radius:8px;background:var(--panel);max-height:78vh}
+svg{display:block}
+.colhead{font:700 11px var(--sans);letter-spacing:.12em;text-transform:uppercase;fill:var(--muted)}
+.node rect{fill:var(--panel);stroke:var(--c);stroke-width:1.5}
+.node text{font:500 12px var(--sans);fill:var(--ink)}
+.node.phase rect{fill:var(--c)} .node.phase text{fill:var(--panel);font-weight:700}
+.node{cursor:pointer}
+.node.dim{opacity:.18} .edge.dim{opacity:.05}
+.node.sel rect{stroke:var(--focus);stroke-width:3}
+.edge{fill:none;stroke:var(--edge);stroke-width:1;opacity:.45}
+.edge.hot{stroke:var(--c);opacity:.95;stroke-width:1.8}
+.edge.gates{stroke-dasharray:4 3}
+aside{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:16px;position:sticky;top:env(safe-area-inset-top,0px);display:flex;flex-direction:column;gap:10px;max-height:78vh;overflow:auto}
+aside .kind{font:700 11px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--c)}
+aside h2{margin:0;font-size:22px;font-weight:800;font-stretch:80%}
+aside .file{font:400 11px var(--mono);color:var(--muted);word-break:break-all}
+aside ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+aside h3{margin:6px 0 0;font:700 11px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.link{background:none;border:0;padding:0;font:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:3px;cursor:pointer;text-align:left}
+.ek{font:400 11px var(--mono);color:var(--muted)}
+.stale{border-top:1px solid var(--rule);padding-top:14px}
+.stale h2{font-size:18px;font-weight:800;font-stretch:80%;margin:0 0 8px}
+.stale li{margin-bottom:6px;max-width:100ch}
+.legend{display:flex;flex-wrap:wrap;gap:14px;color:var(--muted);font-size:12px}
+.legend span::before{content:"";display:inline-block;width:22px;height:0;border-top:1.5px solid var(--edge);vertical-align:middle;margin-right:6px}
+.legend .g::before{border-top-style:dashed}
+@media (prefers-reduced-motion:no-preference){.node,.edge{transition:opacity .15s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Harness Wiring Map</h1>
+    <p id="sub">Every skill, hook, agent, script and store in <code>claude-config</code> and <code>docs</code>, wired by what calls, gates, or feeds what. Click a part to trace its connections.</p>
+  </header>
+  <div class="bar">
+    <input id="q" type="search" placeholder="Find a part…" aria-label="Find a part">
+    <div class="bar" id="chips"></div>
+  </div>
+  <div class="legend"><span>calls / reads / writes</span><span class="g">gates (hook)</span></div>
+  <div class="main">
+    <div class="canvas"><svg id="g" role="img" aria-label="Harness graph"></svg></div>
+    <aside id="info" style="--c:var(--phase)">
+      <div class="kind">Start here</div>
+      <h2>Pick a part</h2>
+      <p>The middle column is the feature lifecycle. Everything else hangs off it. Click any box, or search above.</p>
+    </aside>
+  </div>
+  <section class="stale" id="stale"></section>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(() => {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const COLS = ['config','skill','phase','hook','agent','model','script','store'];
+  const NAMES = {config:'Rules',skill:'Skills',phase:'Lifecycle',hook:'Hooks',agent:'Agents',model:'Models',script:'Scripts',store:'Docs & state'};
+  const colOf = k => k === 'doc' ? 'store' : (COLS.includes(k) ? k : 'store');
+  const nodes = D.nodes.map(n => ({...n, col: colOf(n.kind)}));
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  const edges = D.edges.filter(e => byId[e.from] && byId[e.to]);
+  const nbr = {}; nodes.forEach(n => nbr[n.id] = []);
+  edges.forEach((e,i) => { nbr[e.from].push(i); nbr[e.to].push(i); });
+
+  // Order within columns: phases keep source order; others by mean neighbour row (two passes).
+  const cols = COLS.map(c => nodes.filter(n => n.col === c));
+  cols.forEach(list => list.forEach((n,i) => n.row = i));
+  for (let pass = 0; pass < 3; pass++) {
+    cols.forEach((list, ci) => {
+      if (COLS[ci] === 'phase') return;
+      list.forEach(n => {
+        const rs = nbr[n.id].map(i => { const e = edges[i]; const o = byId[e.from === n.id ? e.to : e.from]; return o.col === n.col ? null : o.row; }).filter(r => r != null);
+        n.bary = rs.length ? rs.reduce((a,b) => a+b,0)/rs.length : n.row;
+      });
+      list.sort((a,b) => a.bary - b.bary).forEach((n,i) => n.row = i);
+    });
+  }
+  const maxRows = Math.max(...cols.map(c => c.length));
+  const CW = 190, BW = 150, BH = 26, GAP = 10, TOP = 44;
+  const colH = list => list.length * (BH + GAP);
+  const H = TOP + maxRows * (BH + GAP) + 20, W = COLS.length * CW + 20;
+  cols.forEach((list, ci) => {
+    const off = (maxRows * (BH + GAP) - colH(list)) / 2; // centre short columns
+    list.forEach(n => { n.x = 20 + ci * CW; n.y = TOP + off + n.row * (BH + GAP); });
+  });
+
+  const svg = document.getElementById('g'), NS = 'http://www.w3.org/2000/svg';
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  const el = (t, a, p = svg) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); p.appendChild(e); return e; };
+  COLS.forEach((c, ci) => { if (cols[ci].length) el('text', {x: 20 + ci*CW, y: 24, class: 'colhead'}).textContent = NAMES[c]; });
+  const eg = el('g', {}), ng = el('g', {});
+  const eEls = edges.map(e => {
+    const a = byId[e.from], b = byId[e.to];
+    const [l, r] = a.x <= b.x ? [a, b] : [b, a];
+    const x1 = l.x + (l === r ? BW : BW), y1 = l.y + BH/2, x2 = l.col === r.col ? r.x + BW : r.x, y2 = r.y + BH/2;
+    const dx = l.col === r.col ? 40 : Math.max(30, (x2 - x1) / 2);
+    const d = l.col === r.col ? `M${x1},${y1} C${x1+dx},${y1} ${x2+dx},${y2} ${x2},${y2}` : `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`;
+    const p = el('path', {d, class: 'edge' + (e.kind === 'gates' ? ' gates' : '')}, eg);
+    p.style.setProperty('--c', `var(--${byId[e.from].col})`);
+    return p;
+  });
+  const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+  const nEls = {};
+  nodes.forEach(n => {
+    const g = el('g', {class: `node ${n.col}`, transform: `translate(${n.x},${n.y})`, tabindex: 0, role: 'button', 'aria-label': `${n.label} (${n.kind})`}, ng);
+    g.style.setProperty('--c', `var(--${n.col})`);
+    el('rect', {width: BW, height: BH, rx: n.col === 'phase' ? 13 : 4}, g);
+    el('text', {x: 10, y: 17}, g).textContent = clip(n.label, 22);
+    el('title', {}, g).textContent = n.label;
+    g.addEventListener('click', () => select(n.id));
+    g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(n.id); } });
+    nEls[n.id] = g;
+  });
+
+  const hidden = new Set();
+  let current = null;
+  function paint() {
+    const on = current ? new Set([current, ...nbr[current].flatMap(i => [edges[i].from, edges[i].to])]) : null;
+    nodes.forEach(n => {
+      const g = nEls[n.id];
+      g.style.display = hidden.has(n.col) ? 'none' : '';
+      g.classList.toggle('dim', !!on && !on.has(n.id));
+      g.classList.toggle('sel', n.id === current);
+    });
+    edges.forEach((e, i) => {
+      const p = eEls[i], vis = !hidden.has(byId[e.from].col) && !hidden.has(byId[e.to].col);
+      p.style.display = vis ? '' : 'none';
+      const hot = !!current && (e.from === current || e.to === current);
+      p.classList.toggle('hot', hot); p.classList.toggle('dim', !!current && !hot);
+    });
+  }
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function select(id) {
+    current = current === id ? null : id; paint();
+    const info = document.getElementById('info');
+    if (!current) return;
+    const n = byId[id];
+    info.style.setProperty('--c', `var(--${n.col})`);
+    const out = nbr[id].map(i => edges[i]).filter(e => e.from === id), inn = nbr[id].map(i => edges[i]).filter(e => e.to === id);
+    const li = (e, other) => `<li><button class="link" data-id="${esc(other)}">${esc(byId[other].label)}</button> <span class="ek">${esc(e.kind)}${e.label ? ' · ' + esc(e.label) : ''}</span></li>`;
+    info.innerHTML = `<div class="kind">${esc(n.kind)}</div><h2>${esc(n.label)}</h2>` +
+      (n.file ? `<div class="file">${esc(n.file)}</div>` : '') +
+      (n.summary ? `<p>${esc(n.summary)}</p>` : '') +
+      (n.rules?.length ? `<h3>Key rules</h3><ul>${n.rules.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : '') +
+      (out.length ? `<h3>Points to</h3><ul>${out.map(e => li(e, e.to)).join('')}</ul>` : '') +
+      (inn.length ? `<h3>Pointed at by</h3><ul>${inn.map(e => li(e, e.from)).join('')}</ul>` : '');
+    info.querySelectorAll('.link').forEach(b => b.addEventListener('click', () => { select(b.dataset.id); nEls[b.dataset.id].scrollIntoView({block: 'center', inline: 'center', behavior: 'smooth'}); }));
+  }
+
+  const chips = document.getElementById('chips');
+  COLS.forEach((c, ci) => {
+    if (!cols[ci].length) return;
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = `${NAMES[c]} ${cols[ci].length}`; b.setAttribute('aria-pressed', 'true');
+    b.style.setProperty('--c', `var(--${c})`);
+    b.addEventListener('click', () => { hidden.has(c) ? hidden.delete(c) : hidden.add(c); b.setAttribute('aria-pressed', String(!hidden.has(c))); paint(); });
+    chips.appendChild(b);
+  });
+  document.getElementById('q').addEventListener('input', ev => {
+    const q = ev.target.value.trim().toLowerCase(); if (!q) return;
+    const hit = nodes.find(n => n.label.toLowerCase().includes(q)) || nodes.find(n => (n.summary || '').toLowerCase().includes(q));
+    if (hit && hit.id !== current) { select(hit.id); nEls[hit.id].scrollIntoView({block: 'center', inline: 'center'}); }
+  });
+
+  const st = document.getElementById('stale');
+  if (D.stale?.length) st.innerHTML = `<h2>Contradictions found while mapping</h2><ul>${D.stale.map(s => `<li>${esc(s)}</li>`).join('')}</ul>`;
+  else st.hidden = true;
+  if (D.generated) document.getElementById('sub').insertAdjacentText('beforeend', ` Mapped ${D.generated}.`);
+  paint();
+})();
+</script>

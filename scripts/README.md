@@ -14,6 +14,7 @@ with `node --test scripts/test/*.test.mjs`.
 | `reflect-gather.mjs` | One-pass reflect payload: checklist, issue logs, per-repo git activity |
 | `session-state.mjs` | Mechanical half of a continuation prompt: active checklists + repo states |
 | `lib.mjs` | Shared helpers (workspace root, git, checklist discovery, argv) |
+| `harness-map.mjs` | `check` (CI): `harness-map.json` has a node for every skill, hook, agent, script and CLAUDE.md, and nothing dangles. `render <out>` builds the diagram page from `harness-map.template.html` |
 | `verify-frontmatter.mjs` | CI gate — every SKILL.md publishes a usable name + description (the unquoted `: ` YAML trap silently unpublishes a skill) |
 | `export-harness.ps1` / `import-harness.ps1` | Move harness config between machines |
 | `open-admin-shells.ps1` | Elevated shells for junction work |

@@ -7,7 +7,7 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 | Path | What | Linked to |
 |---|---|---|
 | `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops`, `reflect`, `continuation`, `cleanup`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
-| `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state`, `verify-frontmatter` — all `.mjs`, tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
+| `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state`, `verify-frontmatter`, `harness-map` — all `.mjs`, tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
 | `hooks/` | Node hooks (guards, gates, logs — see `hooks/README.md` for the settings.json wiring) | `~/.claude/settings.json` `hooks` block |
 | `agents/` | Subagent defs (`implementer`, `reviewer`, `recon`, `web-recon`, `docs-agent`, `Explore`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
 | `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
@@ -43,5 +43,6 @@ Both are idempotent and dynamic — a new skill directory or workspace doc links
 ## Conventions
 
 - The main checkout is the live junction surface: it never leaves `main` and never commits. Live edits land here; commits go through `node scripts/land.mjs` (ephemeral worktree, path-scoped diff). Both rules are hook-enforced.
-- Gates: `node --test scripts/test/*.test.mjs` and `node scripts/verify-frontmatter.mjs` (CI).
+- Gates: `node --test scripts/test/*.test.mjs`, `node scripts/verify-frontmatter.mjs` and `node scripts/harness-map.mjs check` (CI).
+- `harness-map.json` is the wiring map: every part, what it calls, gates or feeds. Read it before opening files one by one.
 - New rules are one imperative line; incident stories go to `docs/harness-evolution/archive/rule-history.md`. A rule that must hold every time becomes a hook, then its prose is deleted.
