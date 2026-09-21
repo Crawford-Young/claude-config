@@ -7,6 +7,18 @@ description: Use when executing a multi-task plan or checklist, deciding whether
 
 Orchestration for multi-task work. Trust the models: dispatch when it helps, keep briefs short and pointed, judge results by gates.
 
+## Choosing a lane
+
+The deciding question: who holds the plan? (Source: https://code.claude.com/docs/en/agents.md, lane comparison.)
+
+| Lane | Who holds the plan | Shape | Status |
+|---|---|---|---|
+| subagent | Claude, turn by turn | results return to the caller | GA |
+| teammate | the lead, turn by turn | shared task list plus direct teammate messaging | experimental, now on |
+| Workflow | the script | results live in script variables; dozens to hundreds of agents | user opt-in |
+| agent view (`claude agents`) | you | independent background sessions | research preview, on by default |
+| cloud session / routine | you, or a schedule | unattended session on Anthropic infra (`claude --cloud`, `/schedule`) | research preview |
+
 ## Spawn posture
 
 - **Orchestrator (main session):** dispatch readily — but sweep effort on the current model first (raise your own effort/thinking level before reaching for a child). Dispatch pays off when (a) the pieces are independent, ideally more than one context window each, or (b) there's a long cost tail on routine work. Parallel-safe clusters, cross-repo work, and gate-heavy tasks are cheaper in a child than in your own context. Small docs/config tasks (≤2 files) run inline.
@@ -15,10 +27,22 @@ Orchestration for multi-task work. Trust the models: dispatch when it helps, kee
 - **Depth limit:** the default subagent spawn depth is 3 — a depth-3 wall, where the terminal layer at that depth loses the `Agent` tool outright, except for a `fork`, which skips the tool filters ordinary subagents get and always inherits the parent's exact tool pool. Depth is about nesting, not foreground vs background, and an agent cannot observe its own current depth from inside itself. Before planning any spawn, confirm `Agent` is in your tool list. If it is absent, report `NEEDS_CONTEXT: no Agent tool in this dispatch` — do not plan around it. If present, spawn only when the situation genuinely calls for it (missing tools, context blowout, real parallelism).
 - **No self-verification:** a reviewer (or any agent) must not judge or validate its own prior output — that's a fresh-context subagent's job. Objective gates the orchestrator can run itself (tests, lint, typecheck — read by exit line) are unaffected.
 - **Worktree isolation** (`isolation: "worktree"`) when parallel children mutate files — disjoint file sets required.
+- **`isolation: "remote"`** appears in the Agent tool schema but is undocumented (https://code.claude.com/docs/en/sub-agents.md documents only `worktree`) — don't use it in a brief or agent definition until it's documented.
 - **Workflow tool** for enumeration-shaped fan-outs (consumer sweeps, adversarial verify rounds, migrations over a file list). User opt-in: propose it in one line (agent count, rough cost), wait for the go.
-- **`ultracode`** is an automatic Workflow-planning lane set via Claude Code's `ultracode` effort setting (a setting, not a prompt keyword), distinct from manually proposing Workflow — it carries the same user-opt-in rule as Workflow, a stronger gate to respect since it's session-wide rather than per-proposal.
+- **`ultracode`** diverts a task into the Workflow tool around the factory's dispatch path two ways: (a) a typed prompt keyword — including the word in a prompt opts that turn into Workflow, governed by the `workflowKeywordTriggerEnabled` setting (default true); (b) the session setting `ultracode` / `/effort ultracode` — xhigh effort plus standing workflow orchestration. Both carry the same user-opt-in rule as manually proposing Workflow, a stronger gate to respect since either is session/prompt-wide rather than per-proposal.
 - **Workflow limits:** 1,000-agent hard cap on a single run. If an agent mid-run fails, resuming reruns every agent started after the failed one, including ones that already finished successfully — resume is not free.
 - **Workflow-lane settings** `workflowSizeGuideline` and `subagentPromptCacheTtl` exist as knobs — no decided value yet; set them when a Workflow run is actually proposed.
+
+### Agent teams
+
+Agent teams went on globally 2026-09-21 (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `~/.claude/settings.json`).
+
+- An Agent call with a `name` launches a teammate instead of a subagent, unless it's a `fork` or passes `isolation` — unnamed Agent calls stay plain subagents, so naming is the deliberate act that changes the lane.
+- One team per session, lead fixed, no nested teams; in-process teammates can't be resumed by `/resume` or `/rewind` — don't plan a teammate dispatch across a session boundary.
+- Teammates are NOT worktree-isolated — partition work by file, never by ticket, to avoid concurrent-write collisions.
+- Teammate permission prompts surface in the lead's session — expect to answer them yourself, not the teammate.
+- Name an agent (make it a teammate) only when workers must exchange results mid-task via shared task list or direct messaging — independent work stays an unnamed subagent, cheaper and simpler.
+- Fable clearance is hook-enforced for both teammates and subagents, since both go through the Agent tool (`agent-model-guard.mjs`) and for `/model` switches (`pre-model-switch.mjs`) — but a SESSION launched from a shell via `claude -p`/`--bg`/`agents --model fable` bypasses every hook. Never launch one that way: a shell launch consumes no clearance marker and writes no dispatch-log line, so a convention there can't be audited (a bash-guard rule is the real fix, tracked as a follow-up).
 
 ## Model routing
 
