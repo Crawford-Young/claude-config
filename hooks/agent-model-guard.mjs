@@ -18,6 +18,13 @@
 // Fails CLOSED on script errors (H21/A2): this guard is the only thing between
 // an unclearanced dispatch and a usage-billed run, and a guard that crashed has
 // checked nothing. A silent allow there is invisible; a block is not.
+//
+// Coverage (2026-09-21, probed by piping payloads into the hooks, C3): this
+// guard sees ONLY Agent tool calls (plus pre-model-switch.mjs on /model). A
+// billed session launched from a shell — `claude -p|--bg|agents --model fable`
+// via the Bash or PowerShell tool — reaches bash-guard.mjs, which has no claude
+// rule and allows it (exit 0), with no dispatch-log line. "Fable rules bind
+// every seat" is hook-enforced for Agent dispatches and /model only.
 
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
