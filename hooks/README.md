@@ -16,12 +16,12 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 |---|---|---|
 | `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout. |
 
-**Text matcher, not intent matcher** — the static rules (1–4) match command
-*text*, so they block a command that merely mentions a banned pattern as data
-(a `node -e` script carrying `git add .` in a test-fixture array), not just as
-an action. Working as designed. Workaround: Write the content to a file, then
-run the file, instead of passing it through a shell command line. The branch
-rules (5–6) read parsed git calls instead, so quoted text never trips them.
+**Commands, not text** — the git rules (1, 2, 5, 6) and the cmdlet rule (4)
+read parsed commands, so quoted text never trips them: `grep -rn "git add -A"`
+and `grep -n "Set-Content"` pass, while `bash -c "git add -A"` still blocks.
+The gate-pipe rule (3) and the billed-launch rule (7) still match raw text, so
+a command that only *mentions* those patterns can be blocked. Workaround:
+Write the content to a file, then run the file.
 
 **Guard scoping** — three rules about *what a rule is allowed to read*, each one a
 fixed false verdict; change them only with a test:
