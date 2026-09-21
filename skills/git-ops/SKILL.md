@@ -11,6 +11,7 @@ description: Use for workspace git conventions — landing claude-config changes
 - No commit or push without user approval. Conventional Commits (commitlint enforces).
 - Explicit paths always — `git add <paths>` then `git commit --only <paths>` in shared repos (the bash-guard hook blocks `add -A` and env files).
 - Docs repo (`~/code/docs`) commits directly to `master`; code repos branch via the `worktree` skill.
+- Auto-fix (`/autofix-pr` on the PR branch, or the toggle at claude.ai/code; needs the Claude GitHub App on the repo) is the unattended lane for "watch checks until green" when a session will end first — the user turning it on is push approval for that one PR only, because it pushes fixes without asking. It gets no webhook for a base-branch conflict, so zero check runs still means check mergeability yourself.
 
 ## claude-config commit lane
 
