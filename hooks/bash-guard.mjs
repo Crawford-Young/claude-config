@@ -9,8 +9,9 @@
 //   3. gate commands piped to tail/head (the pipe's exit code masks the gate's)
 //   4. PowerShell Set-Content/Out-File/Add-Content (mojibake + BOM on UTF-8)
 //   5. git commit on main/master in a code repo (worktree-always; docs repo exempt)
-//   6. git checkout/switch off a branch on the claude-config MAIN checkout
-//      (it is the live junction surface — commits land via land.mjs worktrees)
+//   6. git checkout/switch off a branch, or a file restore (checkout -- <path>,
+//      checkout ., restore), on the claude-config MAIN checkout — it is the live
+//      junction surface and carries other sessions' uncommitted edits
 //   7. a shell-launched `claude` on a usage-billed model (--model fable|mythos,
 //      --model=…, or a *MODEL env var set anywhere in the command) without a
 //      live FABLE OK marker — the same single-use clearance the Agent and
@@ -190,7 +191,12 @@ export function branchRules(raw, cwd) {
   const cmd = scrub(raw);
   const isCommit = /\bgit\b[^\n;|&]*\bcommit\b/.test(cmd);
   const isSwitch = /\bgit\b[^\n;|&]*\b(checkout|switch)\b/.test(cmd) && !/\s--\s/.test(cmd) && !/\bcheckout\b[^\n;|&]*\s--\s/.test(cmd);
-  if (!isCommit && !isSwitch) return null;
+  // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
+  // worktree) — `restore --staged` alone only unstages and is left alone.
+  const isRestore =
+    /\bgit\b[^\n;|&]*\bcheckout\b[^\n;|&]*(\s--\s|\s\.(?:\s|$))/.test(cmd) ||
+    (/\bgit\b[^\n;|&]*\brestore\b/.test(cmd) && !(/\s(--staged|-S)\b/.test(cmd) && !/\s(--worktree|-W)\b/.test(cmd)));
+  if (!isCommit && !isSwitch && !isRestore) return null;
 
   const repo = gitTargetRepo(cmd, cwd);
   if (!repo) return null;
@@ -201,8 +207,11 @@ export function branchRules(raw, cwd) {
   const cfgMain = process.env.CLAUDE_CONFIG_REPO || join(workspaceRoot(), 'claude-config');
 
   // 6. claude-config main checkout never switches branches
-  if (isSwitch && resolve(repo) === resolve(cfgMain) && !/[/\\]\.worktrees[/\\]/.test(resolve(repo))) {
-    if (/\bgit\b[^\n;|&]*\bcheckout\b[^\n;|&]*\.(?:\s|$)/.test(cmd)) return null; // `git checkout .` = file restore
+  const onCfgMain = resolve(repo) === resolve(cfgMain) && !/[/\\]\.worktrees[/\\]/.test(resolve(repo));
+  if (isRestore && onCfgMain) {
+    return `No file restores on the claude-config main checkout: it holds other sessions' uncommitted live edits, and a restore discards theirs along with yours. Undo your own change with the Edit tool; after a merge, scripts/land.mjs sync does the restore safely.`;
+  }
+  if (isSwitch && !isRestore && onCfgMain) {
     return `The claude-config main checkout is the live junction surface — it never leaves main. Use scripts/land.mjs (ephemeral worktree) to commit, or work in a worktree.`;
   }
 
