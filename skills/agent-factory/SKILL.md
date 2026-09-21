@@ -31,7 +31,7 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 - **Workflow tool** for enumeration-shaped fan-outs (consumer sweeps, adversarial verify rounds, migrations over a file list). User opt-in: propose it in one line (agent count, rough cost), wait for the go.
 - **`ultracode`** diverts a task into the Workflow tool around the factory's dispatch path two ways: (a) a typed prompt keyword — including the word in a prompt opts that turn into Workflow, governed by the `workflowKeywordTriggerEnabled` setting (default true); (b) the session setting `ultracode` / `/effort ultracode` — xhigh effort plus standing workflow orchestration. Both carry the same user-opt-in rule as manually proposing Workflow, a stronger gate to respect since either is session/prompt-wide rather than per-proposal.
 - **Workflow limits:** 1,000-agent hard cap on a single run. If an agent mid-run fails, resuming reruns every agent started after the failed one, including ones that already finished successfully — resume is not free.
-- **Workflow-lane settings** `workflowSizeGuideline` and `subagentPromptCacheTtl` exist as knobs — no decided value yet; set them when a Workflow run is actually proposed.
+- **Workflow-lane settings:** `workflowSizeGuideline` is `medium` (<10 agents, platform default — user decision 2026-09-21, keeps runs inside the Max plan with no extra usage); `subagentPromptCacheTtl` stays unset until a Workflow run is actually proposed.
 
 ### Agent teams
 
@@ -41,6 +41,7 @@ Agent teams went on globally 2026-09-21 (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 - One team per session, lead fixed, no nested teams; in-process teammates can't be resumed by `/resume` or `/rewind` — don't plan a teammate dispatch across a session boundary.
 - Teammates are NOT worktree-isolated — partition work by file, never by ticket, to avoid concurrent-write collisions.
 - Teammate permission prompts surface in the lead's session — expect to answer them yourself, not the teammate.
+- A named def keeps its `tools:`, `model:` and body but drops `effort:` — teammates inherit the lead's effort, so a named `recon`/`Explore`/`web-recon` runs at the lead's level, not `low`; teammates also spawn foreground subagents only. Final text still reaches the lead, in the idle notification.
 - Name an agent (make it a teammate) only when workers must exchange results mid-task via shared task list or direct messaging — independent work stays an unnamed subagent, cheaper and simpler.
 - Fable clearance is hook-enforced on every lane — teammates and subagents (Agent tool, `agent-model-guard.mjs`), `/model` switches (`pre-model-switch.mjs`), and shell-launched sessions (`claude -p`/`--bg`/`agents --model fable`, `bash-guard.mjs`) — all spending the same single-use marker and writing the same dispatch log.
 

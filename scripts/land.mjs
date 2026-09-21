@@ -195,8 +195,22 @@ function removeFinishedWorktree(wt) {
     return;
   }
   let r = git(cfg, ['worktree', 'remove', wt]);
-  if (r.code !== 0) r = git(cfg, ['worktree', 'remove', '--force', wt]);
-  if (r.code !== 0) die(`worktree remove failed: ${r.err}\nRemove before deleting the remote branch — a checked-out branch can't be deleted.`);
+  if (r.code !== 0 && isRegisteredWorktree(wt)) r = git(cfg, ['worktree', 'remove', '--force', wt]);
+  if (r.code !== 0) {
+    // A Windows lock (a process with its cwd inside) makes the remove fail
+    // AFTER git unregistered the worktree. The branch is then no longer
+    // checked out, so the branch steps are safe; only the dir is left.
+    if (isRegisteredWorktree(wt)) die(`worktree remove failed: ${r.err}\nRemove before deleting the remote branch — a checked-out branch can't be deleted.`);
+    try {
+      rmSync(wt, { recursive: true, force: true });
+    } catch {
+      // still locked — fall through to the existsSync check
+    }
+    if (existsSync(wt)) {
+      log(`warning: unregistered worktree ${wt} but the directory is still locked — delete it once nothing holds it (is a shell's cwd inside?)`);
+      return;
+    }
+  }
   log(`removed worktree ${wt}`);
 }
 

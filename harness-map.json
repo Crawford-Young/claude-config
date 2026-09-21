@@ -391,17 +391,6 @@
    "summary": "SessionStart — lazily spawns the local OTel usage receiver on :4318."
   },
   {
-   "id": "agent:manager",
-   "kind": "agent",
-   "label": "manager",
-   "file": "agents/manager.md",
-   "summary": "Runs one workstream checklist by dispatching the other agents.",
-   "rules": [
-    "Never edits, commits, or dispatches fable",
-    "Teams-mode role under review (A3)"
-   ]
-  },
-  {
    "id": "agent:implementer",
    "kind": "agent",
    "label": "implementer",
@@ -508,7 +497,8 @@
    "file": "scripts/land.mjs",
    "summary": "claude-config commit lane: ephemeral worktree from origin/main, path-scoped diff.",
    "rules": [
-    "finish leaves merged branches behind (known bug)"
+    "finish deletes a branch only when git cherry shows it merged",
+    "finish survives a locked worktree dir: warns and carries on"
    ]
   },
   {
@@ -868,11 +858,6 @@
   },
   {
    "from": "skill:agent-factory",
-   "to": "agent:manager",
-   "kind": "dispatches"
-  },
-  {
-   "from": "skill:agent-factory",
    "to": "agent:implementer",
    "kind": "dispatches"
   },
@@ -902,26 +887,6 @@
    "kind": "dispatches"
   },
   {
-   "from": "agent:manager",
-   "to": "agent:implementer",
-   "kind": "dispatches"
-  },
-  {
-   "from": "agent:manager",
-   "to": "agent:reviewer",
-   "kind": "dispatches"
-  },
-  {
-   "from": "agent:manager",
-   "to": "agent:recon",
-   "kind": "dispatches"
-  },
-  {
-   "from": "agent:manager",
-   "to": "agent:docs-agent",
-   "kind": "dispatches"
-  },
-  {
    "from": "doc:routing",
    "to": "model:sonnet",
    "kind": "routes-to",
@@ -944,12 +909,6 @@
    "to": "model:haiku",
    "kind": "excludes",
    "label": "not routed"
-  },
-  {
-   "from": "agent:manager",
-   "to": "model:sonnet",
-   "kind": "routes-to",
-   "label": "frontmatter"
   },
   {
    "from": "agent:implementer",

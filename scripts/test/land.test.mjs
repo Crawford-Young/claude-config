@@ -2,7 +2,7 @@
 // against a temp repo standing in for the main checkout.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -197,6 +197,40 @@ test('finish removes a leftover worktree directory that got unregistered without
   const out = execFileSync(process.execPath, [script, 'finish', 'leftover'], { encoding: 'utf8', env });
   assert.ok(!existsSync(wt), 'leftover directory removed rather than refused');
   assert.match(out, /leftover|removed/i);
+});
+
+test('finish carries on to the branch steps when a locked worktree dir survives the remove', async () => {
+  // Reproduces the agent-qol follow-up: on Windows, a process whose cwd is
+  // inside the worktree locks the directory. `git worktree remove` unregisters
+  // it and then fails deleting it, so the --force retry dies with "not a
+  // working tree". finish must re-check registration and carry on. Off
+  // Windows, cwd does not lock and this exercises the normal remove.
+  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const { cfg } = initOrigin(root);
+  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+
+  appendFileSync(join(cfg, 'a.md'), 'locked dir change\n');
+  execFileSync(process.execPath, [script, 'start', 'locked', '-m', 'chore: locked', '--', 'a.md'], {
+    encoding: 'utf8',
+    env,
+  });
+  const wt = join(root, '.worktrees', 'claude-config-locked');
+
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: wt, stdio: 'ignore' });
+  await new Promise((r) => holder.once('spawn', r));
+  let res;
+  try {
+    res = spawnSync(process.execPath, [script, 'finish', 'locked'], { encoding: 'utf8', env });
+  } finally {
+    holder.kill();
+    await new Promise((r) => holder.once('exit', r));
+  }
+
+  assert.equal(res.status, 0, `finish must not die partway:\n${res.stderr}`);
+  assert.match(res.stdout, /kept local branch chore\/locked/, 'reached the branch steps');
+  assert.doesNotMatch(sh(cfg, 'git', ['worktree', 'list']), /claude-config-locked/);
+  if (existsSync(wt)) assert.match(res.stdout + res.stderr, /still locked/i, 'says the dir survived');
+  rmSync(wt, { recursive: true, force: true });
 });
 
 function git_showref(repo, ref) {
