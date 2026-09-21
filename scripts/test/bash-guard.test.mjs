@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { staticCheck, gitTargetRepo, effectiveCwd, clauses, stripMessages, stripHeredocs, billedLaunch } from '../../hooks/bash-guard.mjs';
+import { staticCheck, gitCalls, clauses, stripMessages, stripHeredocs, billedLaunch } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
   assert.ok(staticCheck('git add -A'));
@@ -65,10 +65,10 @@ test('blocks PowerShell content cmdlets', () => {
   assert.equal(staticCheck('Get-Content a.md'), null);
 });
 
-test('gitTargetRepo resolves -C paths and falls back to cwd', () => {
-  assert.equal(gitTargetRepo('git -C /repo commit -m x', '/cwd'), '/repo');
-  assert.equal(gitTargetRepo('git -C "/re po" commit -m x', '/cwd'), '/re po');
-  assert.equal(gitTargetRepo('git commit -m x', '/cwd'), '/cwd');
+test('gitCalls resolves -C paths and falls back to cwd', () => {
+  assert.equal(gitCalls('git -C /repo commit -m x', '/cwd')[0].repo, '/repo');
+  assert.equal(gitCalls('git -C "/re po" commit -m x', '/cwd')[0].repo, '/re po');
+  assert.equal(gitCalls('git commit -m x', '/cwd')[0].repo, '/cwd');
 });
 
 // --- scoping: a flag in one clause is not a flag in another ------------------
@@ -76,6 +76,13 @@ test('gitTargetRepo resolves -C paths and falls back to cwd', () => {
 test('clauses splits on every shell separator', () => {
   assert.deepEqual(clauses('a && b'), ['a', 'b']);
   assert.deepEqual(clauses('a || b ; c | d & e'), ['a', 'b', 'c', 'd', 'e']);
+});
+
+test('clauses keeps separators inside quotes', () => {
+  assert.deepEqual(clauses('echo "a; git commit && b" > f; ls'), ['echo "a; git commit && b" > f', 'ls']);
+  assert.deepEqual(clauses("printf '%s|%s' x y && ls"), ["printf '%s|%s' x y", 'ls']);
+  // Unbalanced quotes fall back to the plain split rather than swallowing the rest.
+  assert.deepEqual(clauses('echo "a; b'), ['echo "a', 'b']);
 });
 
 test('the -A rule is scoped to the git add clause', () => {
@@ -115,22 +122,47 @@ test('commit-message prose does not trip content rules', () => {
 
 // --- scoping: the shell cd's before git runs ---------------------------------
 
-test('effectiveCwd walks leading cd segments', () => {
-  assert.equal(effectiveCwd('git commit -m x', '/cwd'), '/cwd');
-  assert.equal(effectiveCwd('cd /repo && git commit -m x', '/cwd'), '/repo');
-  assert.equal(effectiveCwd('cd "/re po" && git commit -m x', '/cwd'), '/re po');
-  assert.equal(effectiveCwd('cd ~/code/web/site && git commit -m x', '/cwd'), join(homedir(), 'code/web/site'));
+const repoOf = (cmd, cwd) => gitCalls(cmd, cwd)[0]?.repo;
+
+test('gitCalls walks the cd segments before each git call', () => {
+  assert.equal(repoOf('git commit -m x', '/cwd'), '/cwd');
+  assert.equal(repoOf('cd /repo && git commit -m x', '/cwd'), '/repo');
+  assert.equal(repoOf('cd "/re po" && git commit -m x', '/cwd'), '/re po');
+  assert.equal(repoOf('cd ~/code/web/site && git commit -m x', '/cwd'), join(homedir(), 'code/web/site'));
   // Relative cd resolves against the payload cwd; chained cds compose.
-  assert.equal(effectiveCwd('cd web && cd site && git commit -m x', resolve('/code')), resolve('/code/web/site'));
+  assert.equal(repoOf('cd web && cd site && git commit -m x', resolve('/code')), resolve('/code/web/site'));
   // A cd AFTER the git call does not move it.
-  assert.equal(effectiveCwd('git commit -m x && cd /elsewhere', '/cwd'), '/cwd');
+  assert.equal(repoOf('git commit -m x && cd /elsewhere', '/cwd'), '/cwd');
   // No cwd and no absolute cd — stay null so the caller fails open.
-  assert.equal(effectiveCwd('git commit -m x', null), null);
+  assert.equal(repoOf('git commit -m x', null), null);
 });
 
-test('gitTargetRepo honours the cd, and -C still wins over it', () => {
-  assert.equal(gitTargetRepo('cd /repo && git commit -m x', '/cwd'), '/repo');
-  assert.equal(gitTargetRepo('cd /repo && git -C /other commit -m x', '/cwd'), '/other');
+test('each git call gets the cwd of its own segment, not the first git call', () => {
+  const calls = gitCalls('cd /cfg; git status; cd /docs && git commit -m x', '/cwd');
+  assert.deepEqual(calls.map((c) => [c.sub, c.repo]), [['status', '/cfg'], ['commit', '/docs']]);
+  // PowerShell's Set-Location / pushd move the shell too.
+  assert.equal(repoOf('Set-Location -Path /repo; git commit -m x', '/cwd'), '/repo');
+  assert.equal(repoOf('pushd /repo && git commit -m x', '/cwd'), '/repo');
+});
+
+test('-C wins over the cd, and composes with it when relative', () => {
+  assert.equal(repoOf('cd /repo && git -C /other commit -m x', '/cwd'), '/other');
+  assert.equal(repoOf('cd /code && git -C web commit -m x', '/cwd'), resolve('/code/web'));
+});
+
+test('git words in quoted text or as arguments are not git calls', () => {
+  assert.deepEqual(gitCalls('echo "git commit -m x" >> notes.md', '/cwd'), []);
+  assert.deepEqual(gitCalls("grep -rn 'git commit' hooks", '/cwd'), []);
+  assert.deepEqual(gitCalls('echo "cd /x; git commit" > f', '/cwd'), []);
+  assert.deepEqual(gitCalls("$msg = @'\ngit commit -m x\n'@", '/cwd'), []);
+  // The subcommand is the first non-option word: log --grep commit is a log.
+  assert.equal(gitCalls('git log --grep commit', '/cwd')[0].sub, 'log');
+  assert.equal(gitCalls('git -c core.x=y -C /r commit -m x', '/cwd')[0].sub, 'commit');
+});
+
+test('a quoted command handed to a shell is still a git call', () => {
+  assert.equal(repoOf('cd /repo && bash -c "git commit -m x"', '/cwd'), '/repo');
+  assert.equal(repoOf("pwsh -Command 'cd /repo; git commit -m x'", '/cwd'), '/repo');
 });
 
 // --- scoping: a heredoc body written to a file is data, not commands ---------
@@ -239,4 +271,34 @@ test('file restores are blocked on the claude-config main checkout, not elsewher
   // Any other repo keeps its restores.
   assert.equal(guardRun(`cd ${other} && git checkout -- a.mjs`, h, env), 0);
   assert.equal(guardRun(`cd ${other} && git restore a.mjs`, h, env), 0);
+});
+
+// --- rule 5: commit-on-main judges the repo each commit really runs in -----
+
+test('commit-on-main follows the cd to the segment holding the commit', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  const docs = join(h, 'docs');
+  for (const r of [app, docs]) {
+    mkdirSync(r);
+    execFileSync('git', ['init', '-q', '-b', 'main', r]);
+  }
+  // Starts in a code repo, commits in docs — the docs lane is allowed.
+  assert.equal(guardRun(`cd ${app}; git status; cd ${docs} && git commit -m x`, h), 0);
+  // Starts in docs, commits in a code repo on main — blocked.
+  assert.equal(guardRun(`cd ${docs} && git log; cd ${app} && git commit -m x`, h), 2);
+  assert.equal(guardRun(`cd ${app} && git commit -m x`, h), 2);
+});
+
+test('commit words in quoted or heredoc text never trip commit-on-main', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && echo "then git commit -m x" >> notes.md`, h), 0);
+  assert.equal(guardRun(`cd ${app} && grep -rn "git commit" .`, h), 0);
+  assert.equal(guardRun(`cd ${app} && cat > n.md <<'EOF'\ngit commit -m x\nEOF`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git log --grep commit`, h), 0);
+  // ...but a quoted command a shell will run is still judged.
+  assert.equal(guardRun(`cd ${app} && bash -c "git commit -m x"`, h), 2);
 });

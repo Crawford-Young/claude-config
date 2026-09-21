@@ -19,11 +19,14 @@
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
-// line, flag rules are scanned per clause, and the
-// repo a git command targets is the payload cwd walked through any leading
-// `cd` — the workspace root is not a repo, so `cd <repo> && git commit` is the
-// shape branch rules must see.
-//
+// line, and clauses split only on unquoted separators. The branch rules read
+// git calls, not git words: a call is a clause whose command word is git, its
+// subcommand the first non-option word, and its repo the payload cwd walked
+// through every cd/Set-Location/pushd clause before THAT call (`git -C` on
+// top) — so `cd a; git status; cd docs && git commit` commits in docs, and
+// `echo "git commit" >> notes` is an echo. A quoted command handed to a
+// shell (`bash -c`, `pwsh -Command`, `eval`) is parsed as the command it is.
+
 // Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
 // errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
 // checked nothing, and a silent allow is invisible — a loud block is not.
@@ -38,13 +41,49 @@ const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(),
 
 // ---- pure rules (exported for tests) ----------------------------------------
 
-/** Split a compound command into its individual clauses, so a flag in one
- *  clause can't be attributed to a command in another. */
+/** Split a compound command into its individual clauses on unquoted
+ *  separators, so a flag in one clause can't be attributed to a command in
+ *  another and quoted text stays with the command that owns it. Unbalanced
+ *  quotes fall back to the plain split — never swallow the rest of the line. */
 export function clauses(cmd) {
-  return cmd
-    .split(/\|\||&&|[;&|\n]/)
-    .map((c) => c.trim())
-    .filter(Boolean);
+  const out = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (quote) {
+      cur += ch;
+      if (ch === '\\' && quote === '"' && i + 1 < cmd.length) cur += cmd[++i];
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+    } else if (/[;&|\n]/.test(ch)) {
+      if ((ch === '&' || ch === '|') && cmd[i + 1] === ch) i++;
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  if (quote) return cmd.split(/\|\||&&|[;&|\n]/).map((c) => c.trim()).filter(Boolean);
+  out.push(cur);
+  return out.map((c) => c.trim()).filter(Boolean);
+}
+
+/** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
+ *  word. Unbalanced quotes: plain whitespace split. */
+function words(clause) {
+  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s"']+)|(["'])/g;
+  const out = [];
+  let prev = -1;
+  let m;
+  while ((m = re.exec(clause)) !== null) {
+    if (m[4]) return clause.split(/\s+/).filter(Boolean);
+    const w = m[1] ?? m[2] ?? m[3];
+    if (m.index === prev && out.length) out[out.length - 1] += w;
+    else out.push(w);
+    prev = re.lastIndex;
+  }
+  return out;
 }
 
 /** Replace quoted `-m`/`--message` payloads with a placeholder. Commit-message
@@ -89,23 +128,6 @@ function expandHome(p) {
   if (p === '~') return homedir();
   if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2));
   return p;
-}
-
-/** The directory git actually runs in. A compound `cd <path> && git …` moves the
- *  shell first, and the payload's cwd is the session cwd, not the shell's — the
- *  dominant shape here, since the workspace root is not itself a repo. */
-export function effectiveCwd(cmd, cwd) {
-  const gitAt = cmd.search(/\bgit\b/);
-  const head = gitAt === -1 ? cmd : cmd.slice(0, gitAt);
-  let dir = cwd || null;
-  const re = /(?:^|[;&|]\s*)cd\s+("([^"]+)"|'([^']+)'|([^\s;&|]+))/g;
-  let m;
-  while ((m = re.exec(head)) !== null) {
-    const p = expandHome(m[2] || m[3] || m[4]);
-    if (isAbsolute(p)) dir = p;
-    else if (dir) dir = resolve(dir, p);
-  }
-  return dir;
 }
 
 export function staticCheck(raw) {
@@ -170,14 +192,52 @@ export function billedLaunch(raw) {
   return hit.toLowerCase().match(/[^\s"'=]*(?:fable|mythos)[^\s"']*/)[0];
 }
 
-/** Extract the repo a git command targets: `git -C <path>` wins, else the
- *  effective cwd (payload cwd walked through any leading `cd`). */
-export function gitTargetRepo(cmd, cwd) {
-  const base = effectiveCwd(cmd, cwd);
-  const m = cmd.match(/\bgit\s+(?:[^-\s][^\s]*\s+)?-C\s+("([^"]+)"|'([^']+)'|(\S+))/);
-  const p = m ? expandHome(m[2] || m[3] || m[4]) : null;
-  if (p) return isAbsolute(p) ? p : resolve(base || '.', p);
-  return base || null;
+/** Words that only wrap the real command (subshell/group openers, env
+ *  assignments, shell keywords). */
+const WRAPPER = /^(?:[({!]+|\w+=.*|\$env:\w+=.*|sudo|command|builtin|time|exec|nohup|then|do|else|elif|if|while|until)$/i;
+const CD = /^(?:cd|chdir|pushd|set-location|push-location|sl)$/i;
+const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval)(?:\.exe)?$/i;
+const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
+
+const toDir = (dir, p) => {
+  const e = expandHome(p);
+  if (isAbsolute(e)) return e;
+  return dir ? resolve(dir, e) : null;
+};
+
+/** Every git call in a command, each with its subcommand, args, and the repo it
+ *  runs in: the payload cwd walked through the cd clauses before it, then any
+ *  `-C` on the call. A null repo means unknown — callers fail open. */
+export function gitCalls(raw, cwd) {
+  const out = [];
+  let dir = cwd || null;
+  for (const c of clauses(raw)) {
+    const w = words(c);
+    while (w.length && WRAPPER.test(w[0])) w.shift();
+    if (w.length && /^[({]/.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
+    if (!w.length) continue;
+    const cmd = w[0].split(/[/\\]/).pop();
+    if (CD.test(cmd)) {
+      const arg = w.slice(1).find((a) => !/^-/.test(a) || a === '-');
+      if (arg === undefined) dir = /^cd$/i.test(cmd) ? homedir() : dir;
+      else if (arg !== '-') dir = toDir(dir, arg.replace(/\)+$/, ''));
+      continue;
+    }
+    if (SHELL_C.test(cmd)) {
+      const at = /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
+      if (at !== -1 && w[at + 1] !== undefined) out.push(...gitCalls(w.slice(at + 1).join(' '), dir));
+      continue;
+    }
+    if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
+    let repo = dir;
+    let i = 1;
+    for (; i < w.length && w[i].startsWith('-'); i++) {
+      if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i]);
+      else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
+    }
+    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo });
+  }
+  return out;
 }
 
 // ---- stateful rules ---------------------------------------------------------
@@ -188,18 +248,25 @@ function currentBranch(repo) {
 }
 
 export function branchRules(raw, cwd) {
-  const cmd = scrub(raw);
-  const isCommit = /\bgit\b[^\n;|&]*\bcommit\b/.test(cmd);
-  const isSwitch = /\bgit\b[^\n;|&]*\b(checkout|switch)\b/.test(cmd) && !/\s--\s/.test(cmd) && !/\bcheckout\b[^\n;|&]*\s--\s/.test(cmd);
+  for (const g of gitCalls(scrub(raw), cwd)) {
+    const reason = callRule(g);
+    if (reason) return reason;
+  }
+  return null;
+}
+
+function callRule({ sub, args, repo }) {
+  const isCommit = sub === 'commit';
   // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
   // worktree) — `restore --staged` alone only unstages and is left alone.
+  const has = (...f) => args.some((a) => f.includes(a));
   const isRestore =
-    /\bgit\b[^\n;|&]*\bcheckout\b[^\n;|&]*(\s--\s|\s\.(?:\s|$))/.test(cmd) ||
-    (/\bgit\b[^\n;|&]*\brestore\b/.test(cmd) && !(/\s(--staged|-S)\b/.test(cmd) && !/\s(--worktree|-W)\b/.test(cmd)));
+    (sub === 'checkout' && has('--', '.')) ||
+    (sub === 'restore' && !(has('--staged', '-S') && !has('--worktree', '-W')));
+  const isSwitch = (sub === 'checkout' || sub === 'switch') && !isRestore;
   if (!isCommit && !isSwitch && !isRestore) return null;
-
-  const repo = gitTargetRepo(cmd, cwd);
   if (!repo) return null;
+
   const branch = currentBranch(repo);
   if (branch === null) return null; // not a repo / git unavailable — fail open
 
@@ -211,7 +278,7 @@ export function branchRules(raw, cwd) {
   if (isRestore && onCfgMain) {
     return `No file restores on the claude-config main checkout: it holds other sessions' uncommitted live edits, and a restore discards theirs along with yours. Undo your own change with the Edit tool; after a merge, scripts/land.mjs sync does the restore safely.`;
   }
-  if (isSwitch && !isRestore && onCfgMain) {
+  if (isSwitch && onCfgMain) {
     return `The claude-config main checkout is the live junction surface — it never leaves main. Use scripts/land.mjs (ephemeral worktree) to commit, or work in a worktree.`;
   }
 
