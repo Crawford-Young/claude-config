@@ -32,4 +32,5 @@ description: Use before editing the workspace harness — the CLAUDE.md chain, c
 
 - Routing/behavior claims are verified by **probe** (a fresh session, an uncontaminated prompt, a near negative control), not by inspection — and audited by tool trace, not the announce line. A session cannot probe its own routing.
 - Known-broken description routing: `docs/web/TESTING-TRAPS.md` and games diagnostics are hand-loaded via domain CLAUDE.md pointer lines — don't re-attempt description rewrites for them.
+- The `claude` CLI is `~/.local/bin/claude.exe`, which is not on Git Bash's PATH, and subagent shells lack it too. CLI probes (`--help`, `plugin eval`) call it by path from the orchestrator.
 - Hooks are fail-open: errors go to `~/.claude/hook-errors.log` — check it first when a hook seems silent. Unit-test hooks by piping JSON to stdin.

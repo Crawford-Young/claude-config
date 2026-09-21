@@ -17,10 +17,11 @@ Produce a **copy-paste prompt** the user pastes after `/clear`. No handoff file 
    ```
    (active checklists with next task, repos that are dirty or off-main)
 2. Reconcile: if checklist boxes don't match reality, tick them now — never hand off a checklist that lies.
-3. Emit the prompt, fenced, self-contained:
+3. Emit the prompt, fenced, self-contained, first and last lines the literal markers below — the terminal renders fences invisibly, so the markers are the only visible copy boundary:
 
 ````markdown
 ```
+===== CONTINUATION START =====
 <One line: what the next session is for.>
 
 Read first:
@@ -31,6 +32,7 @@ Read first:
 Unresolved: <decisions the next session must make, with the trade-off>
 Traps: <what will silently go wrong — especially anything that passes gates while wrong>
 Blockers first: <uncommitted work, unmerged branch, unrun migration>
+===== CONTINUATION END =====
 ```
 ````
 
