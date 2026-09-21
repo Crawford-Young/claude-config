@@ -19,29 +19,17 @@
 // an unclearanced dispatch and a usage-billed run, and a guard that crashed has
 // checked nothing. A silent allow there is invisible; a block is not.
 //
-// Coverage (2026-09-21, probed by piping payloads into the hooks, C3): this
-// guard sees ONLY Agent tool calls (plus pre-model-switch.mjs on /model). A
-// billed session launched from a shell — `claude -p|--bg|agents --model fable`
-// via the Bash or PowerShell tool — reaches bash-guard.mjs, which has no claude
-// rule and allows it (exit 0), with no dispatch-log line. "Fable rules bind
-// every seat" is hook-enforced for Agent dispatches and /model only.
+// Coverage: this guard sees ONLY Agent tool calls. /model is gated by
+// pre-model-switch.mjs and a shell-launched `claude --model fable` by
+// bash-guard.mjs; all three spend the same marker via _hooklib.mjs.
 
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { appendTrimmed, block, claudeDir, run } from './_hooklib.mjs';
+import { BILLED_MODEL, block, claudeDir, consumeClearance, logBilled, run } from './_hooklib.mjs';
 
-const markerFile = join(claudeDir, 'fable-clearance.json');
-const dispatchLog = join(claudeDir, 'fable-dispatch.log');
 const modelFile = join(claudeDir, 'current-model.json');
 const settingsFile = join(claudeDir, 'settings.json');
-const CLEARANCE_MS = 30 * 60 * 1000;
-
-// H55: fable and mythos are the usage-billed families. Kept in step with
-// pre-model-switch.mjs by hand — neither hook may import the other (each runs
-// on import). Naming a family before it is reachable here is free; the cost of
-// adding it late is one unclearanced billed run on the day it ships.
-const BILLED_MODEL = /fable|mythos/;
 
 function typeHasFrontmatterModel(type) {
   if (!type || type.includes(':')) return false; // plugin-namespaced or unknown
@@ -55,11 +43,7 @@ function typeHasFrontmatterModel(type) {
 }
 
 function logLine(verdict, type, model) {
-  try {
-    appendTrimmed(dispatchLog, `${new Date().toISOString()} ${verdict} type=${type || '?'} model=${model || '(omitted)'}`);
-  } catch {
-    // audit trail is best-effort — logging never throws into the guard
-  }
+  logBilled(`${verdict} type=${type || '?'} model=${model || '(omitted)'}`);
 }
 
 /**
@@ -117,16 +101,7 @@ run(
     }
 
     if (BILLED_MODEL.test(model)) {
-      let ok = false;
-      try {
-        if (existsSync(markerFile)) {
-          const marker = JSON.parse(readFileSync(markerFile, 'utf8'));
-          ok = Date.now() - Date.parse(marker.granted) < CLEARANCE_MS;
-          unlinkSync(markerFile); // single use, consumed either way
-        }
-      } catch {
-        ok = false;
-      }
+      const ok = consumeClearance();
       logLine(ok ? 'ALLOW' : 'BLOCK', type, model);
       if (!ok) {
         const what = isFork

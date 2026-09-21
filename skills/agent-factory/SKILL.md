@@ -42,7 +42,7 @@ Agent teams went on globally 2026-09-21 (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 - Teammates are NOT worktree-isolated — partition work by file, never by ticket, to avoid concurrent-write collisions.
 - Teammate permission prompts surface in the lead's session — expect to answer them yourself, not the teammate.
 - Name an agent (make it a teammate) only when workers must exchange results mid-task via shared task list or direct messaging — independent work stays an unnamed subagent, cheaper and simpler.
-- Fable clearance is hook-enforced for both teammates and subagents, since both go through the Agent tool (`agent-model-guard.mjs`) and for `/model` switches (`pre-model-switch.mjs`) — but a SESSION launched from a shell via `claude -p`/`--bg`/`agents --model fable` bypasses every hook. Never launch one that way: a shell launch consumes no clearance marker and writes no dispatch-log line, so a convention there can't be audited (a bash-guard rule is the real fix, tracked as a follow-up).
+- Fable clearance is hook-enforced on every lane — teammates and subagents (Agent tool, `agent-model-guard.mjs`), `/model` switches (`pre-model-switch.mjs`), and shell-launched sessions (`claude -p`/`--bg`/`agents --model fable`, `bash-guard.mjs`) — all spending the same single-use marker and writing the same dispatch log.
 
 ## Model routing
 

@@ -1,9 +1,12 @@
 // node --test scripts/test/bash-guard.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { staticCheck, gitTargetRepo, effectiveCwd, clauses, stripMessages } from '../../hooks/bash-guard.mjs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { staticCheck, gitTargetRepo, effectiveCwd, clauses, stripMessages, billedLaunch } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
   assert.ok(staticCheck('git add -A'));
@@ -128,4 +131,66 @@ test('effectiveCwd walks leading cd segments', () => {
 test('gitTargetRepo honours the cd, and -C still wins over it', () => {
   assert.equal(gitTargetRepo('cd /repo && git commit -m x', '/cwd'), '/repo');
   assert.equal(gitTargetRepo('cd /repo && git -C /other commit -m x', '/cwd'), '/other');
+});
+
+// --- rule 7: shell-launched claude on a billed model -------------------------
+
+test('billedLaunch catches --model, --model= and env-set billed models', () => {
+  assert.equal(billedLaunch('claude -p "hi" --model fable'), 'fable');
+  assert.equal(billedLaunch('claude --bg --model=claude-fable-5-1'), 'claude-fable-5-1');
+  assert.equal(billedLaunch('claude agents --model "mythos"'), 'mythos');
+  assert.equal(billedLaunch('ANTHROPIC_MODEL=fable claude -p x'), 'fable');
+  assert.equal(billedLaunch("$env:ANTHROPIC_MODEL = 'claude-fable-5-1'; claude -p x"), 'claude-fable-5-1');
+  assert.equal(billedLaunch('& "C:\\bin\\claude.exe" --model fable'), 'fable');
+  assert.equal(billedLaunch('npx claude --model FABLE'), 'fable');
+});
+
+test('billedLaunch ignores non-billed models and non-claude commands', () => {
+  assert.equal(billedLaunch('claude -p x --model opus'), null);
+  assert.equal(billedLaunch('claude -p x'), null);
+  assert.equal(billedLaunch('grep -rn fable claude-config/hooks'), null);
+  assert.equal(billedLaunch('cat ~/.claude/fable-dispatch.log'), null);
+  assert.equal(billedLaunch('node scripts/run.mjs --model fable'), null);
+  assert.equal(billedLaunch('git commit -m "gate claude --model fable"'), null);
+});
+
+const hookPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'bash-guard.mjs');
+
+/** A throwaway HOME so the marker and dispatch log are never the real ones. */
+function tmpHome() {
+  const h = mkdtempSync(join(tmpdir(), 'bg-'));
+  mkdirSync(join(h, '.claude'), { recursive: true });
+  return h;
+}
+
+function guardRun(command, h) {
+  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code') };
+  try {
+    execFileSync(process.execPath, [hookPath], { input: JSON.stringify({ tool_input: { command }, cwd: h }), env, encoding: 'utf8' });
+    return 0;
+  } catch (e) {
+    return e.status;
+  }
+}
+
+test('a billed shell launch spends the single-use marker and logs it', () => {
+  const h = tmpHome();
+  const marker = join(h, '.claude', 'fable-clearance.json');
+  assert.equal(guardRun('claude -p x --model fable', h), 2); // no marker
+  writeFileSync(marker, JSON.stringify({ granted: new Date().toISOString() }));
+  assert.equal(guardRun('claude -p x --model fable', h), 0);
+  assert.equal(existsSync(marker), false);
+  assert.equal(guardRun('claude -p x --model fable', h), 2); // spent
+  const log = readFileSync(join(h, '.claude', 'fable-dispatch.log'), 'utf8');
+  assert.match(log, /BLOCK shell model=fable[\s\S]*ALLOW shell model=fable[\s\S]*BLOCK shell/);
+});
+
+test('an expired marker blocks, and a non-billed launch never spends one', () => {
+  const h = tmpHome();
+  const marker = join(h, '.claude', 'fable-clearance.json');
+  writeFileSync(marker, JSON.stringify({ granted: new Date(Date.now() - 31 * 60 * 1000).toISOString() }));
+  assert.equal(guardRun('claude --model fable', h), 2);
+  writeFileSync(marker, JSON.stringify({ granted: new Date().toISOString() }));
+  assert.equal(guardRun('claude -p x --model opus', h), 0);
+  assert.equal(existsSync(marker), true);
 });

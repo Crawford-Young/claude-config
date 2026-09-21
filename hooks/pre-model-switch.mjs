@@ -16,25 +16,10 @@
 // false positive is a blocked `/model` with the reason on stderr; the cost of
 // the false negative is an unclearanced usage-billed session.
 
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { appendTrimmed, block, claudeDir, run } from './_hooklib.mjs';
-
-const markerFile = join(claudeDir, 'fable-clearance.json');
-const dispatchLog = join(claudeDir, 'fable-dispatch.log');
-const CLEARANCE_MS = 30 * 60 * 1000;
-
-// Kept in step with agent-model-guard.mjs by hand: the two gates must agree on
-// what "usage-billed" means, and neither may import the other (each is a hook
-// entry point that runs on import).
-const BILLED_MODEL = /fable|mythos/;
+import { BILLED_MODEL, block, consumeClearance, logBilled, run } from './_hooklib.mjs';
 
 function logLine(verdict, from, to) {
-  try {
-    appendTrimmed(dispatchLog, `${new Date().toISOString()} ${verdict} switch from=${from || '?'} to=${to || '(omitted)'}`);
-  } catch {
-    // audit trail is best-effort — logging never throws into the gate
-  }
+  logBilled(`${verdict} switch from=${from || '?'} to=${to || '(omitted)'}`);
 }
 
 run(
@@ -54,17 +39,7 @@ run(
 
     if (!BILLED_MODEL.test(to.toLowerCase())) return;
 
-    let ok = false;
-    try {
-      if (existsSync(markerFile)) {
-        const marker = JSON.parse(readFileSync(markerFile, 'utf8'));
-        ok = Date.now() - Date.parse(marker.granted) < CLEARANCE_MS;
-        unlinkSync(markerFile); // single use, consumed either way
-      }
-    } catch {
-      ok = false;
-    }
-
+    const ok = consumeClearance();
     logLine(ok ? 'ALLOW' : 'BLOCK', from, to);
     if (!ok) {
       block(
