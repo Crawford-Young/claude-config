@@ -102,6 +102,26 @@ test('the commit -a rule is scoped to the git commit clause', () => {
   assert.ok(staticCheck('grep -a foo log.txt && git commit -a'));
 });
 
+// --- scoping: quoted text is data, not a command --------------------------
+
+test('git/cmdlet words in quoted text never trip the static rules', () => {
+  assert.equal(staticCheck('grep -rn "git add -A" docs'), null);
+  assert.equal(staticCheck("rg 'git add .' hooks"), null);
+  assert.equal(staticCheck("echo 'git commit -a' >> notes.md"), null);
+  assert.equal(staticCheck('echo "git add .env" > notes.md'), null);
+  assert.equal(staticCheck('grep -n "Set-Content" hooks/README.md'), null);
+  assert.equal(staticCheck('git add a.ts && cat .env.local'), null); // reading an env file is not staging it
+});
+
+test('the static rules still fire on real calls, incl. ones handed to a shell', () => {
+  assert.ok(staticCheck('bash -c "git add -A"'));
+  assert.ok(staticCheck("pwsh -Command 'git commit -am wip'"));
+  assert.ok(staticCheck('cd repo && git add -- .'));
+  assert.ok(staticCheck('git add "src/.env.production"'));
+  assert.ok(staticCheck("$t = 'x'; $t | Set-Content a.md"));
+  assert.ok(staticCheck("pwsh -Command 'Out-File -FilePath a.md -InputObject x'"));
+});
+
 // --- scoping: a commit message is prose, not a command -----------------------
 
 test('stripMessages replaces quoted -m payloads only', () => {

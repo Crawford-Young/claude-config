@@ -19,8 +19,8 @@
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
-// line, and clauses split only on unquoted separators. The branch rules read
-// git calls, not git words: a call is a clause whose command word is git, its
+// line, and clauses split only on unquoted separators. Rules 1, 2, 4, 5 and 6
+// read commands, not words: a git call is a clause whose command word is git, its
 // subcommand the first non-option word, and its repo the payload cwd walked
 // through every cd/Set-Location/pushd clause before THAT call (`git -C` on
 // top) — so `cd a; git status; cd docs && git commit` commits in docs, and
@@ -135,32 +135,27 @@ export function staticCheck(raw) {
   const cmd = scrub(raw);
 
   // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination —
-  //    scanned per clause, so an unrelated `-A` (grep -A 3, tar -A) or `-a`
-  //    (grep -a) elsewhere in the line is not a hit. The bare-`.` check
-  //    requires `.` (optionally `./`) as its own token, so `.env` and
-  //    `.github/workflows/ci.yml` — which merely *begin* with a dot — never
-  //    match; `./src/file.ts` is a specific path, not the whole tree, and is
-  //    also left alone.
-  for (const c of clauses(cmd)) {
-    if (/\bgit\b[^\n]*\badd\b/.test(c)) {
-      if (/(\s--all\b|\s-[a-zA-Z]*A[a-zA-Z]*\b)/.test(c)) {
-        return 'git add -A/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
-      }
-      if (/(^|\s)\.\/?(?:\s|$)/.test(c)) {
-        return 'git add . is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
-      }
+  //    read off parsed git calls, so an `-A` on another command (grep -A 3,
+  //    tar -A) or inside quoted text is not a hit. The bare-`.` check wants
+  //    `.` (or `./`) as a whole argument: `.env`, `.github/…` and `./src/x.ts`
+  //    are specific paths, not the whole tree.
+  const calls = gitCalls(cmd, null);
+  for (const { sub, args } of calls) {
+    if (sub === 'add' && args.some((a) => a === '--all' || /^-[a-zA-Z]*A[a-zA-Z]*$/.test(a))) {
+      return 'git add -A/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
     }
-    if (/\bgit\b[^\n]*\bcommit\b/.test(c) && /(\s--all\b|\s-[a-zA-Z]*a[a-zA-Z]*\b)/.test(c)) {
+    if (sub === 'add' && args.some((a) => a === '.' || a === './')) {
+      return 'git add . is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
+    }
+    if (sub === 'commit' && args.some((a) => a === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(a))) {
       return 'git commit -a/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths, then commit.';
     }
   }
 
-  // 2. env files into git
-  if (/\bgit\b[^\n;|&]*\b(add|commit)\b/.test(cmd)) {
-    const envHit = cmd.match(/(^|[\s"'=/\\])(\.env(\.[\w-]+)*)/g);
-    if (envHit && envHit.some((h) => !/\.env\.(example|sample|template)/.test(h))) {
-      return 'Refusing to stage/commit a .env file (secrets). Only .env.example belongs in git.';
-    }
+  // 2. env files into git — an argument of a git add/commit call, not a mention
+  const isEnv = (a) => /(?:^|[/\\=])\.env(?:\.[\w-]+)*$/.test(a) && !/\.env\.(?:example|sample|template)$/.test(a);
+  if (calls.some(({ sub, args }) => (sub === 'add' || sub === 'commit') && args.some(isEnv))) {
+    return 'Refusing to stage/commit a .env file (secrets). Only .env.example belongs in git.';
   }
 
   // 3. gate output piped to tail/head
@@ -169,8 +164,9 @@ export function staticCheck(raw) {
     return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use scripts/qa.mjs for compact output).';
   }
 
-  // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM)
-  if (/\b(Set-Content|Out-File|Add-Content)\b/i.test(cmd)) {
+  // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
+  //    not as a word someone greps for
+  if (commands(cmd, null).some(({ cmd: c }) => /^(?:Set-Content|Out-File|Add-Content)$/i.test(c))) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
@@ -205,10 +201,11 @@ const toDir = (dir, p) => {
   return dir ? resolve(dir, e) : null;
 };
 
-/** Every git call in a command, each with its subcommand, args, and the repo it
- *  runs in: the payload cwd walked through the cd clauses before it, then any
- *  `-C` on the call. A null repo means unknown — callers fail open. */
-export function gitCalls(raw, cwd) {
+/** Every command a line runs, as { cmd, words, dir }: `cmd` is the command
+ *  word's basename, `dir` the payload cwd walked through the cd clauses before
+ *  it. cd clauses are consumed; a quoted command handed to a shell is expanded
+ *  in place. Quoted text elsewhere is an argument, never a command. */
+function commands(raw, cwd) {
   const out = [];
   let dir = cwd || null;
   for (const c of clauses(raw)) {
@@ -225,9 +222,20 @@ export function gitCalls(raw, cwd) {
     }
     if (SHELL_C.test(cmd)) {
       const at = /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
-      if (at !== -1 && w[at + 1] !== undefined) out.push(...gitCalls(w.slice(at + 1).join(' '), dir));
+      if (at !== -1 && w[at + 1] !== undefined) out.push(...commands(w.slice(at + 1).join(' '), dir));
       continue;
     }
+    out.push({ cmd, words: w, dir });
+  }
+  return out;
+}
+
+/** Every git call in a command, each with its subcommand, args, and the repo it
+ *  runs in: the command's dir, then any `-C` on the call. A null repo means
+ *  unknown — callers fail open. */
+export function gitCalls(raw, cwd) {
+  const out = [];
+  for (const { cmd, words: w, dir } of commands(raw, cwd)) {
     if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
