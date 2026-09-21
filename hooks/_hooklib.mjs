@@ -8,12 +8,45 @@
 // silent allow there is invisible, where a block is not. H21 is the case in
 // point: a BOM on stdin disarmed bash-guard and nothing said so.
 
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 export const claudeDir = join(homedir(), '.claude');
 export const errorLog = join(claudeDir, 'hook-errors.log');
+
+// ---- billed-model clearance (shared by every gate on a usage-billed act) ----
+// agent-model-guard (Agent dispatch), pre-model-switch (/model) and bash-guard
+// (shell-launched `claude`) must agree on what "billed" means and spend the same
+// single-use marker — one "FABLE OK" authorises one billed act, whichever gate
+// it passes through. Naming a family before it is reachable is free; adding it
+// late costs one unclearanced billed run on the day it ships (H55).
+export const BILLED_MODEL = /fable|mythos/;
+export const clearanceFile = join(claudeDir, 'fable-clearance.json');
+export const dispatchLog = join(claudeDir, 'fable-dispatch.log');
+const CLEARANCE_MS = 30 * 60 * 1000;
+
+/** Spend the user's clearance marker. True when it existed and was granted
+ *  within the window; the marker is deleted either way (single use). */
+export function consumeClearance() {
+  try {
+    if (!existsSync(clearanceFile)) return false;
+    const marker = JSON.parse(readFileSync(clearanceFile, 'utf8'));
+    unlinkSync(clearanceFile);
+    return Date.now() - Date.parse(marker.granted) < CLEARANCE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/** One audit line per billed-act decision. Best-effort — never throws. */
+export function logBilled(line) {
+  try {
+    appendTrimmed(dispatchLog, `${new Date().toISOString()} ${line}`);
+  } catch {
+    // audit trail is best-effort — logging never throws into a gate
+  }
+}
 
 export function readPayload() {
   // A UTF-8 BOM is legal on the wire and fatal to JSON.parse — strip it before

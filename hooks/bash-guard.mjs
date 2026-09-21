@@ -11,6 +11,10 @@
 //   5. git commit on main/master in a code repo (worktree-always; docs repo exempt)
 //   6. git checkout/switch off a branch on the claude-config MAIN checkout
 //      (it is the live junction surface — commits land via land.mjs worktrees)
+//   7. a shell-launched `claude` on a usage-billed model (--model fable|mythos,
+//      --model=…, or a *MODEL env var set anywhere in the command) without a
+//      live FABLE OK marker — the same single-use clearance the Agent and
+//      /model gates spend (_hooklib.mjs), logged to the same dispatch log
 //
 // Scoping (matters as much as the rules): commit-message payloads are stripped
 // before any rule reads the line, flag rules are scanned per clause, and the
@@ -26,7 +30,7 @@ import { spawnSync } from 'node:child_process';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { block, run } from './_hooklib.mjs';
+import { BILLED_MODEL, block, consumeClearance, logBilled, run } from './_hooklib.mjs';
 
 const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code');
 
@@ -120,6 +124,21 @@ export function staticCheck(raw) {
   return null;
 }
 
+/** 7. The billed model a shell-launched `claude` would run on, or null. `claude`
+ *  must be its own token (so `claude-config`, `~/.claude/`, `claude.ai` never
+ *  match); the model can come from the flag or from an env var set in any
+ *  clause (`$env:ANTHROPIC_MODEL = 'fable'; claude -p …` splits across two). */
+export function billedLaunch(raw) {
+  if (!raw) return null;
+  const cmd = stripMessages(raw);
+  if (!/(?:^|[\s"'&;|(/\\])claude(?:\.exe|\.cmd)?(?=[\s"')]|$)/i.test(cmd)) return null;
+  const flag = cmd.match(/--model(?:=|\s+)["']?([^\s"';|&]+)/gi) || [];
+  const env = cmd.match(/[A-Z_]*MODEL\s*=\s*["']?([^\s"';|&]+)/gi) || [];
+  const hit = [...flag, ...env].find((m) => BILLED_MODEL.test(m.toLowerCase()));
+  if (!hit) return null;
+  return hit.toLowerCase().match(/[^\s"'=]*(?:fable|mythos)[^\s"']*/)[0];
+}
+
 /** Extract the repo a git command targets: `git -C <path>` wins, else the
  *  effective cwd (payload cwd walked through any leading `cd`). */
 export function gitTargetRepo(cmd, cwd) {
@@ -177,6 +196,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
       const reason = staticCheck(cmd) || branchRules(cmd, cwd);
       if (reason) block(reason);
+      // Last, so a command another rule blocks never spends the clearance.
+      const billed = billedLaunch(cmd);
+      if (billed) {
+        const ok = consumeClearance();
+        logBilled(`${ok ? 'ALLOW' : 'BLOCK'} shell model=${billed}`);
+        if (!ok) {
+          block(
+            `A shell-launched claude on "${billed}" is usage-billed and needs per-run user clearance: ask the user to reply with "FABLE OK" (grants one billed act for 30 minutes), then re-run.`,
+          );
+        }
+      }
     },
     { failClosed: true },
   );
