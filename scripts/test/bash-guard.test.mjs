@@ -188,8 +188,8 @@ function tmpHome() {
   return h;
 }
 
-function guardRun(command, h) {
-  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code') };
+function guardRun(command, h, extraEnv = {}) {
+  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code'), ...extraEnv };
   try {
     execFileSync(process.execPath, [hookPath], { input: JSON.stringify({ tool_input: { command }, cwd: h }), env, encoding: 'utf8' });
     return 0;
@@ -218,4 +218,25 @@ test('an expired marker blocks, and a non-billed launch never spends one', () =>
   writeFileSync(marker, JSON.stringify({ granted: new Date().toISOString() }));
   assert.equal(guardRun('claude -p x --model opus', h), 0);
   assert.equal(existsSync(marker), true);
+});
+
+// --- rule 6: the claude-config main checkout never restores files ------------
+
+test('file restores are blocked on the claude-config main checkout, not elsewhere', () => {
+  const h = tmpHome();
+  const cfg = join(h, 'cfg');
+  const other = join(h, 'other');
+  for (const r of [cfg, other]) {
+    mkdirSync(r);
+    execFileSync('git', ['init', '-q', '-b', 'main', r]);
+  }
+  const env = { CLAUDE_CONFIG_REPO: cfg };
+  for (const c of ['git checkout -- scripts/land.mjs', 'git checkout .', 'git restore hooks/a.mjs', 'git restore --staged --worktree a']) {
+    assert.equal(guardRun(`cd ${cfg} && ${c}`, h, env), 2, c);
+  }
+  // Unstaging only touches the index — allowed.
+  assert.equal(guardRun(`cd ${cfg} && git restore --staged a.mjs`, h, env), 0);
+  // Any other repo keeps its restores.
+  assert.equal(guardRun(`cd ${other} && git checkout -- a.mjs`, h, env), 0);
+  assert.equal(guardRun(`cd ${other} && git restore a.mjs`, h, env), 0);
 });

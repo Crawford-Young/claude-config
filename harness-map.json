@@ -311,7 +311,7 @@
     "No gate piped to tail/head",
     "No Set-Content/Out-File",
     "No commit on main in code repos",
-    "claude-config main never switches branch",
+    "claude-config main never switches branch or restores files",
     "claude --model fable needs FABLE OK"
    ]
   },
