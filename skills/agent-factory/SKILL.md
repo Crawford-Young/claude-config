@@ -69,7 +69,7 @@ Constraints:    <task-specific only — omit if none>
 
 - Never restate brief contents in dispatch prose — point at the brief.
 - No commit steps in implementer briefs — the orchestrator owns git.
-- Verify any reviewer finding you act on against source first; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
+- Verify any agent report you act on — reviewer finding or teammate status — against source first, because a teammate's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
 - Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch.
 
 ## Checklist execution
