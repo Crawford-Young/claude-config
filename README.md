@@ -36,7 +36,7 @@ git clone https://github.com/Crawford-Young/claude-config
 cd claude-config && bash setup.sh
 ```
 
-Both are idempotent and dynamic — a new skill directory or workspace doc links on the next run. Hook wiring is manual: copy the block from `hooks/README.md` into `~/.claude/settings.json`. Migrating from the pre-2026-08 harness: `docs/MIGRATION-2026-08.md`. `settings.json`'s `"model"` key is set to `"opus"` — Opus 5 is the standing default; Fable is opted into per wave via `/model` at a `/clear` boundary.
+Both are idempotent and dynamic — a new skill directory or workspace doc links on the next run. Hook wiring is manual: copy the block from `hooks/README.md` into `~/.claude/settings.json`. Migrating from the pre-2026-08 harness: `docs/MIGRATION-2026-08.md`. `settings.json`'s `"model"` key is set to `"opus"` — the alias is deliberate, and it resolves to Opus 5.5 as of CLI v2.1.280 (2026-09-22), Opus 5 before that. Because 5.5 defaults to `medium` effort where Opus 5 defaulted to `high`, `modelSettings.claude-opus-5-5.effortLevel` pins it back to `high`; a future Opus needs its own entry or it starts at the model's default. Picking the `(default)` row in `/model` **deletes** the `"model"` key; put it back, because the account default isn't controlled by the harness, and if it ever became Fable, sessions would start on a billed model without the `FABLE OK` gate firing. Fable is opted into per wave via `/model` at a `/clear` boundary.
 
 > **Windows:** file symlinks need Developer Mode or an elevated shell; directory junctions need neither.
 

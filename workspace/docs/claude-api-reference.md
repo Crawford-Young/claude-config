@@ -18,9 +18,9 @@ Not the same thing, and routinely conflated. `strict: true` is a top-level field
 Use strict when a tool's arguments must be schema-valid; use structured outputs when the reply itself must be. No beta header for either.
 https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use
 
-## Forced tool use is removed on Claude Fable 5.1 and Mythos 5.1
+## Forced tool use is removed on Claude Opus 5.5, Fable 5.1 and Mythos 5.1
 
-A hard incompatibility, not a degradation. `tool_choice: {type: "any"}` and `{type: "tool", name: ...}` return a **400** on Claude Fable 5.1 and Claude Mythos 5.1 — on `count_tokens` and the Batch API too, not just `messages.create`. `{type: "none"}` is unaffected, and `disable_parallel_tool_use` still works alongside `auto` (at most one call).
+A hard incompatibility, not a degradation. `tool_choice: {type: "any"}` and `{type: "tool", name: ...}` return a **400** on Claude Opus 5.5, Claude Fable 5.1 and Claude Mythos 5.1 — on `count_tokens` and the Batch API too, not just `messages.create`. `{type: "none"}` is unaffected, and `disable_parallel_tool_use` still works alongside `auto` (at most one call). Opus 5.5 brings this to the default Opus tier (added 2026-09-22): code that forced a tool on `claude-opus-5` and gets moved to `claude-opus-5-5` breaks on the first call, so this is a migration check, not a Fable-only footnote.
 Porting code that forces a tool: use `auto` plus an explicit instruction naming the tool, add `strict: true` to keep arguments schema-valid, or switch to structured outputs when the forced call only existed to get JSON back.
 https://platform.claude.com/docs/en/about-claude/models/migrating-to-claude-fable-5-1
 
@@ -48,7 +48,7 @@ https://platform.claude.com/docs/en/about-claude/pricing
 Three different things that get confused. All three are **driven by your side**, so hosting is not the distinction — the distinction is what Claude manipulates and who is watching.
 
 - **Browser use** (`browser_toolset_20260801`) — an Anthropic-defined *client* toolset for structured browser control: accessibility trees, page text, console and network entries, not raw pixels. One entry gives 27 member tools (`navigate`, `read_page`, `left_click`, `screenshot`, tab management…) plus four opt-in (`javascript_exec`, `file_upload`, `read_console`, `read_network`). "Your application runs every call against its own browser automation; nothing runs on Anthropic's side." Reach for it when the target is a *web page* and you want semantic access. Declaring it with default members adds ~6,600 input tokens per request. Claude API and Google Cloud only — not Claude Platform on AWS, Bedrock, or Foundry, and not in Managed Agents.
-- **Computer use** (`computer_toolset_20260801`; older `computer_20251124`, `computer_20250124`) — 17 member tools driving a whole desktop by screenshots and mouse/keyboard. "Your application runs every call in an environment you control." Reach for it when the target is an *application or OS*, not a page — it is the heavier, lower-level option.
+- **Computer use** (`computer_toolset_20260801`; older `computer_20251124`, `computer_20250124`) — 17 member tools driving a whole desktop by screenshots and mouse/keyboard. On Claude Opus 5.5 the newer toolset is mandatory: `computer_20251124` returns a **400** on the Claude API and Google Cloud, while Amazon Bedrock still accepts it (2026-09-22) — so the same request can be valid on one platform and rejected on another. "Your application runs every call in an environment you control." Reach for it when the target is an *application or OS*, not a page — it is the heavier, lower-level option.
 - **Claude in Chrome** — **not an API tool at all.** A Chrome extension a person installs, which "reads the page you're signed in to, then clicks, types, and fills forms while you decide what happens next", usable interactively or connected to Claude Code development workflows. Permissions Mode grants access one site at a time; it stops before sensitive actions such as purchases. Available on all paid plans. Reach for it when a *human* wants Claude acting in their own signed-in browser — it is a product, not something you call from app code.
 
 **Status is not documented.** The Compatibility blocks for both API toolsets state ZDR eligibility, supported models and platforms, but carry no GA/beta/preview label and no beta-header string. Absence of a beta tag is not a GA claim — check before depending on stability.
@@ -104,7 +104,9 @@ https://platform.claude.com/docs/en/build-with-claude/context-editing
 
 Per-call reasoning-depth control (`output_config.effort`, inside `output_config` — not top-level) with the model adapting how long it thinks; replaces manual thinking-token budgets, and `budget_tokens` is rejected with a 400 on current models.
 Use to tier cost/latency per feature: low effort for classification/autocomplete, high or xhigh for planning and agentic endpoints. Effort is the first quality-trading lever after caching — measure per route before raising a default.
+**The unset default is per-model, not a constant.** Claude Opus 5.5 defaults to `medium`; Opus 5, Sonnet 5 and Fable 5.1 default to `high`. Omitting `effort` therefore *lowers* reasoning depth when a call moves to Opus 5.5 — silently, since nothing in the response flags it. Set `effort` explicitly on any route where depth matters rather than relying on the default. Opus 5.5 also removes the thinking off-switch: `thinking: {"type": "disabled"}` returns a 400 (Opus 5 accepted it at effort `high` and below), so low effort is the only way down.
 https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+https://platform.claude.com/docs/en/release-notes/api (Opus 5.5 defaults, 2026-09-22)
 
 ## Tool Runner
 
