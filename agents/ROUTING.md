@@ -16,7 +16,7 @@ dispatch surprises; keep this file short.
 | Doc/MD restructure with verbatim-preserve constraints | **sonnet** | default |
 | Long-horizon sessions; multistep research; finished-artifact analysis; or Opus at `xhigh`/`max` still falling short | **fable** — per-run user clearance (`FABLE OK`), hook-enforced | default |
 
-Levels: `low` / `medium` / `high` / `xhigh` / `max`; default when unset is `high`. Effort names are not comparable across models — `high` on one model is not `high` on another.
+Levels: `low` / `medium` / `high` / `xhigh` / `max`; the unset default is the *model's* own, not a constant — `high` on most, but `medium` on Opus 5.5 and `xhigh` on Opus 4.7. Effort names are not comparable across models — `high` on one model is not `high` on another.
 
 Rules that survived the profile system:
 
@@ -29,5 +29,6 @@ Rules that survived the profile system:
 - Gate-checkable work (a test suite, a typecheck — not prose or judgment) dispatches at lower effort first, re-running failures at default; only worth it for short tasks, where the re-run costs less than the effort saved.
 - Escalation: sonnet fails with integration/architecture signals → opus immediately; no signals → one sonnet retry first. Opus fails → one read-only fable diagnostic (classify plan defect vs wrong assumption vs environment), then surface to the user — never a third implementation attempt.
 - Fable's effort tuning is stale on 5.1 (2026-09-14) — effort names do not carry across models, so Fable 5's sweep does not transfer. Start at the `high` default; `medium` and `low` are both plausible cost rungs (`low` is documented as competitive with Opus/Sonnet on cost per task) but unmeasured here, so do not route to them on the doc's word alone. Fixed facts: 5.1 has no Priority Tier (Fable 5 did), and it shares Fable 5's rate-limit pool, so recorded headroom still holds.
+- Opus 5.5 released 2026-09-22 and the `opus` alias moved to it at CLI v2.1.280, so every **opus** row above now means 5.5 — the rows were carried over, not re-derived, so a 5.5 dispatch that surprises is new evidence, not a table error. Its unset effort default is `medium`, pinned back to `high` for the session by `modelSettings.claude-opus-5-5.effortLevel` (user decision 2026-09-22: hold the known-good baseline so the model is the only variable); per-dispatch frontmatter `effort:` still wins. Medium and xhigh are plausible cost/quality rungs but unmeasured here — same standing as Fable 5.1 above, so do not route to them on the doc's word alone.
 - Warm redo beats cold re-dispatch for fixable same-model failures — message the same agent with the findings. Escalations are always fresh dispatches.
 - Zero-output death with a session-limit message is infra, not failure — re-dispatch once after the limit resets.
