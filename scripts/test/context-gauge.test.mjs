@@ -32,7 +32,7 @@ const usage = (input, cacheRead, cacheCreate = 0) => ({
   output_tokens: 500,
 });
 
-// A usage-history record, in the shape statusline/usage-statusline.ps1 writes.
+// A usage-history record, in the shape statusline/statusline.mjs writes.
 const sample = (session_id, context_window_size, extra = {}) =>
   JSON.stringify({ ts: new Date().toISOString(), session_id, context_window_size, context_pct: 12, ...extra });
 

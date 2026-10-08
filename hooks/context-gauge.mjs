@@ -19,7 +19,7 @@
 //   2. `contextGaugeWindow` in ~/.claude/settings.json
 //   3. `context_window_size` in ~/.claude/usage-history/<YYYY-MM>.jsonl —
 //      the CLI's own statusline figure, written there by
-//      statusline/usage-statusline.ps1 on every render (live value: 1000000)
+//      statusline/statusline.mjs, at most once a minute per session (live 1000000)
 //   4. nothing: the gauge stays silent. It never invents a window.
 // Absolute overrides per band stay available (CLAUDE_CTX_NUDGE / _WARN / _BLOCK).
 //
@@ -82,7 +82,7 @@ function settingsWindow(dir) {
 
 /**
  * Newest `context_window_size` in the usage-history log the statusline writes
- * (`statusline/usage-statusline.ps1`, `context_window_size` field — the CLI's
+ * (`statusline/statusline.mjs`, `context_window_size` field — the CLI's
  * own statusline payload figure). The session's own most recent record wins
  * when there is one; otherwise the newest record of any session, since a
  * session that has not rendered a statusline yet still shares the window.
