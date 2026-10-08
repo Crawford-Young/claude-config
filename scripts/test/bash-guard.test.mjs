@@ -15,6 +15,7 @@ import {
   billedLaunch,
   gatedVerb,
   gatedVerbs,
+  isDeletePush,
   pushGateReason,
   browserCommand,
   substitutions,
@@ -621,6 +622,33 @@ test('#92 end-to-end through the real hook: substitution forms block without app
   assert.equal(guardRunT('node -e "x = `gh pr merge 5 --rebase`"', h, missing), 2);
   assert.equal(guardRunT('echo $(gh pr merge 5 --rebase)', h, missing), 2);
   assert.equal(guardRunT("echo '$(gh pr merge 5 --rebase)'", h, missing), 0);
+});
+
+// --- #88: remote branch deletes accept "delete" wording ------------------------
+
+test('isDeletePush sees --delete, -d and :branch refspecs only', () => {
+  assert.ok(isDeletePush('git push origin --delete feat/a feat/b', '/repo'));
+  assert.ok(isDeletePush('git push -d origin feat/a', '/repo'));
+  assert.ok(isDeletePush('git push origin :feat/a :feat/b', '/repo'));
+  assert.equal(isDeletePush('git push origin :feat/a feat/b', '/repo'), false); // also pushes feat/b
+  assert.equal(isDeletePush('git push -u origin feat/a', '/repo'), false);
+  assert.equal(isDeletePush('git push origin --delete x --dry-run', '/repo'), false);
+});
+
+test('#88: a branch delete passes on "delete" wording; a plain push does not', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Delete the 3 merged remote branches?': 'Delete all 3' });
+  assert.equal(pushGateReason('git push origin --delete feat/a feat/b feat/c', '/repo', t, stateFile), null);
+  const { stateFile: s2 } = pushGateTmp();
+  assert.equal(pushGateReason('git push origin :feat/a', '/repo', t, s2), null);
+  const { stateFile: s3 } = pushGateTmp();
+  assert.ok(pushGateReason('git push -u origin feat/x', '/repo', t, s3));
+});
+
+test('#88: "delete" wording is still subject to the deny words', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Delete the merged branches?': "No, don't delete them yet" });
+  assert.ok(pushGateReason('git push origin --delete feat/a', '/repo', t, stateFile));
 });
 
 test('#92: the other rules read substitution bodies too', () => {

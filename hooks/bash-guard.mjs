@@ -25,6 +25,8 @@
 //      one approving answer covers push → pr create → pr merge once each.
 //      A command holding more than one gated verb is blocked outright (one
 //      gated verb per Bash call), so a compound never spends one approval twice.
+//      A remote branch delete (`push --delete`, `push origin :b`) also accepts
+//      "delete" wording (#88).
 //   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
 //      codegen, show-report, show-trace, open — need the user's browser consent
 //      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
@@ -406,13 +408,26 @@ export function gatedVerb(raw, cwd) {
   return gatedVerbs(raw, cwd)[0] || null;
 }
 
+/** Is this command's push a remote branch delete — `--delete`/`-d`, or every
+ *  refspec of the form `:branch`? A delete is still a push (#88). */
+export function isDeletePush(raw, cwd) {
+  return gitCalls(scrub(raw), cwd).some(({ sub, args }) => {
+    if (sub !== 'push' || args.includes('--dry-run')) return false;
+    if (args.includes('--delete') || args.includes('-d')) return true;
+    const refspecs = args.filter((a) => !a.startsWith('-')).slice(1);
+    return refspecs.length > 0 && refspecs.every((r) => /^:[^:]/.test(r));
+  });
+}
+
 const APPROVE_RE = /\b(commit|push|pr|pull request|merge|ship|land)\b/i;
+const DELETE_RE = /\bdelet(?:e|es|ed|ing)\b/i;
 
 /** Does some answer value read as approving (mentions the act) without also
  *  reading as a refusal? Only the record's own answers are considered — the
- *  caller already picked the single most recent record. */
-export function isApproving(answers) {
-  return Object.values(answers).some((v) => APPROVE_RE.test(v) && !DENY_RE.test(v));
+ *  caller already picked the single most recent record. A remote branch delete
+ *  also accepts "delete" wording ("Delete all 3"). */
+export function isApproving(answers, { deletes = false } = {}) {
+  return Object.values(answers).some((v) => (APPROVE_RE.test(v) || (deletes && DELETE_RE.test(v))) && !DENY_RE.test(v));
 }
 
 export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
@@ -431,7 +446,7 @@ function spend(uuid, verb, file) {
 }
 
 const askRemedy = (verb) =>
-  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry.`;
+  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", or "delete" for a remote branch delete, without "hold"/"wait"/"no") — then retry.`;
 
 /** 8. git push / gh pr create / gh pr merge need an approving answer in the
  *  transcript, spent once per verb. `transcriptPath` is read lazily — a
@@ -459,7 +474,7 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
     return `${verb} needs explicit user approval and no AskUserQuestion answer was found in the transcript. ${askRemedy(verb)}`;
   }
 
-  if (!isApproving(record.answers)) {
+  if (!isApproving(record.answers, { deletes: verb === 'git push' && isDeletePush(raw, cwd) })) {
     return `${verb} needs explicit user approval; the most recent AskUserQuestion answer does not approve it. ${askRemedy(verb)}`;
   }
 
