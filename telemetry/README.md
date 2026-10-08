@@ -53,6 +53,8 @@ and it identifies the *parent turn*, not the subagent: the probe's single turn f
 out to two agent types and both `subagent_completed` rows carry the same `prompt.id`.
 Verified on the wire, not inferred.
 
+**Per-agent cost now comes from transcripts:** `scripts/audit.mjs` prices each subagent's own transcript (`subagents/agent-<id>.jsonl` + `.meta.json` `agentType`), so it doesn't need this join (#62).
+
 So the report's **Per-agent table is run-shaped** — runs / tokens / tool uses /
 duration / models, with no cost column. Subagent rows that produced no
 `subagent_completed` event raise a gap warning rather than a silent `custom` bucket.
@@ -86,6 +88,8 @@ reproducible record of the telemetry env vars it carries:
 ```
 
 Env edits are inert mid-session (G8) — a fresh session is required for changes to bind.
+
+The same file sets `"cleanupPeriodDays": 365` (2026-10-08, #62). The default of 30 deletes the transcripts that `scripts/audit.mjs` replays.
 
 ## Receiver lifecycle
 

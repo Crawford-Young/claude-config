@@ -13,6 +13,7 @@ with `node --test scripts/test/*.test.mjs`.
 | `cleanup.mjs` | End-of-wave sweep — dirty repos, worktrees, active checklists; `--kill-port`, `--remove-worktree` |
 | `reflect-gather.mjs` | One-pass reflect payload: checklist, issue logs, per-repo git activity |
 | `session-state.mjs` | Mechanical half of a continuation prompt: active checklists + repo states |
+| `audit.mjs` (+ `audit-lib.mjs`, `prices.json`) | Transcript-replay audit over `~/.claude/projects`: $ and context depth per day/session, per-agent-type cost, skill/slash/doc invocation counts, hook blocks and timings, cross-checked against Claude Code's own `cost-state`. Re-verify `prices.json` when it warns |
 | `lib.mjs` | Shared helpers (workspace root, git, checklist discovery, argv) |
 | `harness-map.mjs` | `check` (CI): `harness-map.json` has a node for every skill, hook, agent, script and CLAUDE.md, and nothing dangles. `render <out>` builds the diagram page from `harness-map.template.html` |
 | `verify-frontmatter.mjs` | CI gate — every SKILL.md publishes a usable name + description (the unquoted `: ` YAML trap silently unpublishes a skill) |
