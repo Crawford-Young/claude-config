@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // reflect-gather.mjs — a unit's reflect evidence in one pass (#67).
 //
-//   node reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>]
+//   node reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]
 //
 // Prints one markdown payload: the transcript audit of every window renamed
-// <session-name> (audit.mjs --session), then per-repo git log + diffstat since
-// the unit's first window.
+// <session-name> (audit.mjs --session) with its cost and time (#97), then
+// per-repo git log + diffstat since the unit's first window.
 
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -19,12 +19,14 @@ export function auditFailure(r) {
   return { text: r.stderr || `${r.error?.message || 'audit.mjs failed'}\n`, code: r.status || 1 };
 }
 
+const minutes = (ms) => `${Math.round(ms / 60e3)} min`;
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const name = args._[0];
-  if (!name) die('usage: reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>]');
+  if (!name) die('usage: reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]');
 
   const repos = [];
   for (let i = 0; i < process.argv.length; i++) {
@@ -33,6 +35,7 @@ function main() {
 
   const auditArgs = [join(dirname(fileURLToPath(import.meta.url)), 'audit.mjs'), '--session', name, '--json'];
   if (args.root) auditArgs.push('--root', args.root);
+  if (args['idle-gap']) auditArgs.push('--idle-gap', args['idle-gap']);
   const audit = spawnSync(process.execPath, auditArgs, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (audit.status !== 0) {
     const { text, code } = auditFailure(audit);
@@ -41,8 +44,9 @@ function main() {
   }
   const report = JSON.parse(audit.stdout);
   const unit = report.names.find((g) => g.name === name);
+  const time = report.time?.names.find((g) => g.name === name);
   if (unit) {
-    log(`## Audit — ${unit.windows} window(s) named ${name}, ${report.files} transcripts\n`);
+    log(`## Audit — ${unit.windows} window(s) named ${name}, ${report.files} transcripts${time ? ` · $${unit.usd.toFixed(2)} over ${minutes(time.activeMs)} active of ${minutes(time.wallMs)} wall` : ''}\n`);
     log(renderMarkdown(report));
   } else log(`## Audit — no priced requests in windows named ${name}, ${report.files} transcripts`);
 
