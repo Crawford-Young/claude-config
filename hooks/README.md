@@ -14,7 +14,7 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer in the transcript (`git push --dry-run` exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer in the transcript (`git push --dry-run` exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). |
 | `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | A model-omitted dispatch on a frontmatter-less type gets `model: sonnet` via `updatedInput` (with `permissionDecision: allow`, which is the only documented pairing; ledger line `FILL`) when the session model is known and not billed. Otherwise it blocks (#74). Also blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
@@ -27,12 +27,22 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 
 ## bash-guard details
 
-**Commands, not text** — the git rules (1, 2, 5, 6) and the cmdlet rule (4)
-read parsed commands, so quoted text never trips them: `grep -rn "git add -A"`
-and `grep -n "Set-Content"` pass, while `bash -c "git add -A"` still blocks.
-The gate-pipe rule (3) and the billed-launch rule (7) still match raw text, so
-a command that only *mentions* those patterns can be blocked. Workaround:
-Write the content to a file, then run the file.
+**Commands, not text** — the git rules (1, 2, 5, 6), the gate-pipe rule (3),
+the cmdlet rule (4) and the push gate (8) read parsed commands, so quoted text
+never trips them: `grep -rn "git add -A"`, `grep -n "Set-Content"` and
+`npm view vitest | tail` pass, while `bash -c "git add -A"` still blocks. Rule 3
+blocks a gate (`pnpm test`, `node --test`, `just check`, `cargo clippy` …) with
+any command after it in its pipeline — grep and tee mask the exit code too.
+The billed-launch rule (7) still matches raw text, so a command that only
+*mentions* it can be blocked. Workaround: Write the content to a file, then
+run the file.
+
+**Substitutions are commands (#92)** — every body the shell runs is parsed as
+a command: `` `…` ``, `$(…)`, `<(…)`, bare or inside double quotes, a
+double-quoted `-m` payload, or an unquoted-delimiter heredoc (`<<EOF`). So
+`node -e "x = \`gh pr merge 5\`"` is a gated merge. Single-quoted text,
+escaped backticks and `<<'EOF'` bodies stay literal. A heredoc fed to
+node/python/deno/bun is that language's code, not shell, and is read as data.
 
 **Guard scoping** — three rules about *what a rule is allowed to read*, each one a
 fixed false verdict; change them only with a test:
@@ -53,8 +63,13 @@ fixed false verdict; change them only with a test:
   the hook walks `transcript_path`'s JSONL backward for the most recent user
   record carrying `toolUseResult.answers` (an AskUserQuestion answer — the
   model cannot forge it). It approves when some answer value matches
-  `/\b(commit|push|pr|pull request|merge|ship|land)\b/i` and not
-  `/\b(hold|review first|don'?t|do not|not yet|wait|no)\b/i`. Only the latest
+  `/\b(commit|push|pr|pull request|merge|ship|land)\b/i` (a remote branch
+  delete — `push --delete`, `push origin :b` — also accepts "delete", #88) and
+  `denies()` in `_hooklib.mjs` doesn't refuse it: a hold word (hold, wait,
+  not yet, review first) anywhere, an answer opening with "no", or a negator
+  (no/not/never/don't) with an act word within the next four words. So
+  "push and pr but dont know if…" approves and "don't push yet" refuses
+  (#96). The browser gate uses the same `denies()`. Only the latest
   record counts. Each approval (keyed by its record `uuid`) is single-use per
   verb — spent from `~/.claude/push-gate-approvals.json`
   (`CLAUDE_PUSH_GATE_STATE` overrides) — so one approving answer covers
