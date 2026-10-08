@@ -81,6 +81,7 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 
 - Never restate brief contents in dispatch prose — point at the brief.
 - No commit steps in implementer briefs — the orchestrator owns git.
+- Any brief that reads, edits or republishes an Artifact names a scratch folder (the session scratchpad, or a `<scratchpad>/<artifact-slug>/` subfolder) for working copies — nothing lands in a repo or `~/code` (strate v1 mockup work, 2026-10-08).
 - Verify any agent report you act on — reviewer finding or teammate status — against source first, because a teammate's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
 - Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch.
 
