@@ -527,7 +527,11 @@
    "kind": "script",
    "label": "verify-frontmatter.mjs",
    "file": "scripts/verify-frontmatter.mjs",
-   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter."
+   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (descriptions + CLAUDE.md files) stay within CAPS (issue #63).",
+   "rules": [
+    "Caps live in one CAPS const at the top of the script",
+    "Bytes measured as UTF-8 with CRLF normalized to LF"
+   ]
   },
   {
    "id": "script:lib",

@@ -37,6 +37,21 @@ function skillsRootWith(name, contents) {
   return root;
 }
 
+/** Build a throwaway skills root holding several `<name>/SKILL.md` files at once. */
+function multiSkillsRootWith(files) {
+  const root = mkdtempSync(join(tmpdir(), 'skills-'));
+  for (const [name, contents] of Object.entries(files)) {
+    mkdirSync(join(root, name));
+    writeFileSync(join(root, name, 'SKILL.md'), contents, 'utf8');
+  }
+  return root;
+}
+
+/** A SKILL.md whose description is exactly `bytes` long (all 'a', so no colon trap). */
+function skillWithDescriptionBytes(bytes) {
+  return `---\nname: demo-skill\ndescription: ${'a'.repeat(bytes)}\n---\n\n# Demo Skill\n`;
+}
+
 /** Build a throwaway agents root holding flat `<name>.md` files (the real agents/ layout). */
 function agentsRootWith(files) {
   const root = mkdtempSync(join(tmpdir(), 'agents-'));
@@ -60,15 +75,48 @@ function validAgentsRoot() {
  * Run the checker against explicit skills and agents roots. Every call passes BOTH flags
  * explicitly — the checker falls back to the live repo's real skills/ or agents/ directory
  * for whichever flag is omitted, and a test result must never depend on that live content.
+ * An explicit `workspaceRoot` is also always passed by resident-cap tests, for the same
+ * reason — the checker falls back to the live repo's own workspace/CLAUDE.md files otherwise.
  * Returns { status, out }; never throws on non-zero exit.
  */
-function run(skillsRoot, agentsRoot) {
-  const r = spawnSync(
-    process.execPath,
-    [CHECK, '--skills', skillsRoot, '--agents', agentsRoot],
-    { encoding: 'utf8' },
-  );
+function run(skillsRoot, agentsRoot, workspaceRoot) {
+  const args = [CHECK, '--skills', skillsRoot, '--agents', agentsRoot];
+  if (workspaceRoot) args.push('--workspace', workspaceRoot);
+  const r = spawnSync(process.execPath, args, { encoding: 'utf8' });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
+}
+
+/** Build a throwaway workspace root with the four CLAUDE.md files the resident caps cover. */
+function workspaceRootWith(files) {
+  const root = mkdtempSync(join(tmpdir(), 'workspace-'));
+  for (const [rel, contents] of Object.entries(files)) {
+    const file = join(root, rel);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, contents, 'utf8');
+  }
+  return root;
+}
+
+/** A throwaway workspace root where all four CLAUDE.md files are well under every cap. */
+function validWorkspaceRoot() {
+  return workspaceRootWith({
+    'workspace/CLAUDE.md': 'root claude md\n',
+    'workspace/web/CLAUDE.md': 'web claude md\n',
+    'workspace/games/CLAUDE.md': 'games claude md\n',
+    'workspace/apps/CLAUDE.md': 'apps claude md\n',
+  });
+}
+
+/** Run with fixed valid skills + agents roots, varying only the workspace root under test. */
+function runWorkspaceCheck(workspaceRoot) {
+  const skillsRoot = validSkillsRoot();
+  const agentsRoot = validAgentsRoot();
+  try {
+    return run(skillsRoot, agentsRoot, workspaceRoot);
+  } finally {
+    rmSync(skillsRoot, { recursive: true, force: true });
+    rmSync(agentsRoot, { recursive: true, force: true });
+  }
 }
 
 /** Run with a fixed valid agents root, varying only the skills root under test. */
@@ -283,4 +331,134 @@ test('a skills root that yields zero checked files is a checker failure, not a c
 test('a missing agents root exits 2, not 0 and not 1', () => {
   const { status } = runAgentsCheck(resolve(tmpdir(), 'definitely-not-an-agents-root-4471'));
   assert.equal(status, 2);
+});
+
+// --- Resident-byte caps (issue #63) --------------------------------------------------------
+
+test('a description under the per-description cap passes', () => {
+  const root = skillsRootWith('demo-skill', skillWithDescriptionBytes(400));
+  try {
+    const { status } = runSkillsCheck(root);
+    assert.equal(status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a single description over the per-description cap fails, not silently truncated', () => {
+  const root = skillsRootWith('demo-skill', skillWithDescriptionBytes(600));
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /demo-skill\/SKILL\.md: description is 600 B, over the per-description cap of 512 B/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('descriptions each under the per-item cap can still blow the combined total cap', () => {
+  const files = {};
+  for (let i = 0; i < 12; i++) files[`skill-${i}`] = skillWithDescriptionBytes(500);
+  const root = multiSkillsRootWith(files);
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 1);
+    // 12 skill descriptions * 500 B + the fixed valid agent fixture's description, over the
+    // 5376 B total cap, with every individual description still under the 512 B per-item cap
+    // — this must be the ONLY class of failure.
+    assert.match(out, /all descriptions combined: \d+ B, over the total cap of 5376 B/);
+    assert.doesNotMatch(out, /over the per-description cap/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a CLAUDE.md under its cap passes', () => {
+  const root = validWorkspaceRoot();
+  try {
+    const { status, out } = runWorkspaceCheck(root);
+    assert.equal(status, 0);
+    assert.match(out, /workspace\/CLAUDE\.md: \d+ B \(cap 11520 B\)/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a CLAUDE.md over its cap fails', () => {
+  const root = workspaceRootWith({
+    'workspace/CLAUDE.md': `${'a'.repeat(11521)}\n`,
+    'workspace/web/CLAUDE.md': 'web claude md\n',
+    'workspace/games/CLAUDE.md': 'games claude md\n',
+    'workspace/apps/CLAUDE.md': 'apps claude md\n',
+  });
+  try {
+    const { status, out } = runWorkspaceCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /workspace\/CLAUDE\.md: 11522 B, over the cap of 11520 B/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CRLF line endings are normalized before measuring, so Windows and CI agree', () => {
+  // 11521 'a' + a trailing LF is one byte over cap (11522 B, see the test above). The same
+  // content saved with CRLF line endings must normalize back down to the same LF byte count,
+  // not get penalized an extra byte per line for how the file happens to be checked out.
+  const root = workspaceRootWith({
+    'workspace/CLAUDE.md': `${'a'.repeat(11521)}\r\n`,
+    'workspace/web/CLAUDE.md': 'web claude md\n',
+    'workspace/games/CLAUDE.md': 'games claude md\n',
+    'workspace/apps/CLAUDE.md': 'apps claude md\n',
+  });
+  try {
+    const { status, out } = runWorkspaceCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /workspace\/CLAUDE\.md: 11522 B, over the cap of 11520 B/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing CLAUDE.md file is a failure, not a silent skip', () => {
+  const root = workspaceRootWith({
+    'workspace/CLAUDE.md': 'root claude md\n',
+    'workspace/web/CLAUDE.md': 'web claude md\n',
+    'workspace/games/CLAUDE.md': 'games claude md\n',
+    // workspace/apps/CLAUDE.md intentionally absent
+  });
+  try {
+    const { status, out } = runWorkspaceCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /workspace\/apps\/CLAUDE\.md: expected at .*, but it does not exist/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a new workspace/<domain>/CLAUDE.md with no CAPS entry fails, not silently uncapped', () => {
+  const root = workspaceRootWith({
+    'workspace/CLAUDE.md': 'root claude md\n',
+    'workspace/web/CLAUDE.md': 'web claude md\n',
+    'workspace/games/CLAUDE.md': 'games claude md\n',
+    'workspace/apps/CLAUDE.md': 'apps claude md\n',
+    // A brand-new domain's CLAUDE.md, never added to CAPS.claudeMd — this must be caught the
+    // moment the file exists, not only once someone remembers to add a cap for it.
+    'workspace/robots/CLAUDE.md': 'robots claude md\n',
+  });
+  try {
+    const { status, out } = runWorkspaceCheck(root);
+    assert.equal(status, 1);
+    assert.match(
+      out,
+      /workspace\/robots\/CLAUDE\.md: found on disk with no cap in CAPS\.claudeMd — add a cap for workspace\/robots\/CLAUDE\.md/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the live repo itself passes every resident-byte cap with its real skills, agents and CLAUDE.md files', () => {
+  const r = spawnSync(process.execPath, [CHECK], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /resident bytes are within cap/);
 });
