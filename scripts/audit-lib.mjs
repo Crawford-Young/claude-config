@@ -9,6 +9,8 @@
 //   .meta.json carrying agentType; their records never appear in the parent file.
 // - Resumed/forked sessions replay earlier records into a new file: non-request
 //   records dedupe on uuid, tool calls on tool_use id.
+// - A user-set name (/rename) is a {type:'custom-title'} record; the last wins.
+//   ai-title and agent-name records carry auto names, not unit names (#73).
 
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
@@ -189,10 +191,11 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       d.sessions.add(ctx.sessionId);
       d.requests++;
       d.usd += cost;
-      const s = sessions.get(ctx.sessionId) || { sessionId: ctx.sessionId, requests: 0, usd: 0, subagentUsd: 0, peakDepth: 0, first: day };
+      const s = sessions.get(ctx.sessionId) || { sessionId: ctx.sessionId, requests: 0, usd: 0, subagentUsd: 0, peakDepth: 0, first: day, last: day };
       s.requests++;
       s.usd += cost;
       if (day && (!s.first || day < s.first)) s.first = day;
+      if (day > s.last) s.last = day;
       if (ctx.agent) {
         s.subagentUsd += cost;
         const a = (agents[ctx.agent.type] ||= { runs: 0, requests: 0, usd: 0, models: {} });
@@ -221,6 +224,19 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
     const timed = {};
     for (const [h, ms] of Object.entries(hookTimes)) timed[h] = { fires: ms.length, p50: pct(ms, 50), p95: pct(ms, 95) };
+    const names = new Map(); // custom-title -> one row over all its windows
+    for (const s of sessions.values()) {
+      const name = titles.get(s.sessionId)?.custom;
+      if (!name) continue;
+      const g = names.get(name) || { name, windows: 0, requests: 0, usd: 0, subagentUsd: 0, first: s.first, last: s.last };
+      g.windows++;
+      g.requests += s.requests;
+      g.usd += s.usd;
+      g.subagentUsd += s.subagentUsd;
+      if (s.first < g.first) g.first = s.first;
+      if (s.last > g.last) g.last = s.last;
+      names.set(name, g);
+    }
     const used = new Set([...Object.keys(skills), ...Object.keys(skillReads), ...Object.keys(slash)].map((s) => s.split(':').pop()));
 
     return {
@@ -232,6 +248,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       sessions: [...sessions.values()]
         .map((s) => ({ ...s, title: titles.get(s.sessionId)?.custom || titles.get(s.sessionId)?.ai || '' }))
         .sort((a, b) => b.usd - a.usd),
+      names: [...names.values()].sort((a, b) => b.usd - a.usd),
       agents,
       skills,
       skillReads,
@@ -268,6 +285,17 @@ export async function* walkTranscripts(root) {
   }
 }
 
+/** Maps sessionId -> its last custom-title over the main transcripts under root.
+ *  A pre-pass: /rename can land mid-file, after records it must still claim. */
+export async function sessionNames(root) {
+  const names = new Map();
+  for await (const { file, ctx } of walkTranscripts(root)) {
+    if (ctx.agent) continue;
+    for await (const rec of readJsonl(file)) if (rec?.type === 'custom-title' && rec.customTitle) names.set(ctx.sessionId, rec.customTitle);
+  }
+  return names;
+}
+
 /** Streams a JSONL file's records; malformed lines are skipped. */
 export async function* readJsonl(file) {
   const rl = createInterface({ input: createReadStream(file, 'utf8'), crlfDelay: Infinity });
@@ -300,6 +328,11 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   out.push('', `## Sessions (top ${top} by $)`);
   out.push(table(['first day', 'title', 'requests', '$', 'subagent $', 'peak depth'],
     r.sessions.slice(0, top).map((s) => [s.first, (s.title || s.sessionId.slice(0, 8)).replace(/\|/g, '/').slice(0, 50), s.requests, usd(s.usd), usd(s.subagentUsd), kt(s.peakDepth)])));
+  if (r.names?.length) {
+    out.push('', '## Per session name');
+    out.push(table(['name', 'windows', 'first day', 'last day', 'requests', '$', 'subagent $'],
+      r.names.slice(0, top).map((g) => [g.name.replace(/\|/g, '/'), g.windows, g.first, g.last, g.requests, usd(g.usd), usd(g.subagentUsd)])));
+  }
   out.push('', '## Per agent type');
   out.push(table(['type', 'runs', 'requests', '$', '$/run', 'models'],
     Object.entries(r.agents).sort((a, b) => b[1].usd - a[1].usd)

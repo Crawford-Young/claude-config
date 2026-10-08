@@ -1,43 +1,40 @@
 ---
 name: reflect
-description: Use when a development phase ends — branch merged, wave finished, milestone complete — to review what happened with the user and update the harness. Owned replacement for the old plugin reflect; gathers inputs via reflect-gather.mjs.
+description: Use when an issue's PR merges or a phase closes — review the unit's evidence with the user and land agreed harness edits in place. Gathers every session window of the unit via reflect-gather.mjs (audit joined on the /rename session name).
 disable-model-invocation: true
 ---
 
 # Reflect
 
-End-of-phase dialogue: self-reflect, hear the user, land agreed harness edits. Prompted at wave close (the stop gate reminds once per turn end until the line is ticked); the user can decline.
+Run when an issue's PR merges or a phase closes. The user can decline.
 
 ## 1. Gather
 
 ```
-node ~/code/claude-config/scripts/reflect-gather.mjs <project-docs-dir> --repo <path> [--repo <path>...]
+node ~/code/claude-config/scripts/reflect-gather.mjs <repo>-<issue> --repo <path> [--repo <path>...]
 ```
 
-One payload: the wave checklist, open issue logs, per-repo git activity. Skim the skills and agent defs the wave actually used only if something felt off with them.
+One payload: `audit.mjs --session <repo>-<issue>` over every window renamed to the unit's name (cost, depth, agents, skill reads, hook blocks), plus each repo's commits since the first window. A window never renamed is invisible to it: say so instead of guessing. Add the issue thread (`gh issue view N --comments`) for wrong assumptions logged mid-unit.
 
-## 2. Self-reflect
+## 2. Answer three questions
 
-A short freeform report — only sections with something genuine to say:
+1. **What cost us time?**
+2. **What nearly shipped wrong?**
+3. **What should become a rule?**
 
-- **Adherence** — where harness guidance was followed, deviated from, ambiguous, or missing.
-- **Friction** — what was slow, clunky, or needed unnecessary back-and-forth.
-- **Proposed changes** — each tied to an observation: which file, what edit, why (one line).
+**Evidence or delete:** every bullet cites a transcript (session id + what happened), an audit row, or a commit SHA. A bullet without one is dropped, not softened. An empty answer is fine.
 
 ## 3. Dialogue
 
-Present the report, then ask what the user noticed that you missed — corrections, frustrations, patterns worth codifying. Don't finalize until they've had a real chance to respond.
+Present the answers, then ask what the user saw that you missed. Don't finalize until they've had a real chance to respond.
 
-## 4. Update
+## 4. Edit the harness in place
 
-Apply agreed edits with the Edit tool, showing each diff. **Pruning bias — every addition names a deletion candidate.** The harness got bloated by accreting dated incident rules; the fix discipline:
+Apply agreed edits with the Edit tool, showing each diff. Place each per the `harness-editing` ladder. Every addition names a deletion candidate.
 
-- A new rule is one imperative line that names its reason (why, not when) — a rule stripped of its reason is the one the next audit prunes. The incident story goes to `docs/harness-evolution/archive/rule-history.md` (date + one line), not into the live file. **Caveat: where the reason is posture-, domain-, or version-dependent, the date was load-bearing** — carry the condition into the line or rest it on a condition-free reason, else compression turns a fact that was true *somewhere* into a false standing claim. Two variants: *temporal* (the dropped date is the flag) and *domain* (nothing flags it — spot-check against the root `CLAUDE.md` domain table).
-- A rule that must hold every time becomes a hook or deny rule, not prose (`hooks/bash-guard.mjs` is the pattern) — then the prose is deleted.
-- Recurrence despite a rule means the file is too long, not the rule too weak — prune or mechanize, never restate louder.
-- Model-routing observations (a dispatch that surprised, a misroute) go to `agents/ROUTING.md` as a one-liner with date.
-- claude-config edits land live on the main checkout, commit via `git-ops` (`land.mjs`).
+- A new rule is one imperative line naming its reason. Where the reason depends on posture, domain or version, carry that condition into the line, else it reads as a false standing claim. The incident goes to `docs/harness-evolution/archive/rule-history.md` (date + one line).
+- Recurrence despite a rule means prune or mechanize (a hook with a test), never restate louder.
+- Routing surprises go to `agents/ROUTING.md` as a dated one-liner.
+- claude-config edits land live on the main checkout and commit via `git-ops` (`land.mjs`).
 
-## 5. Close the boundary
-
-Wave done with more work ahead: Read `skills/continuation/SKILL.md` → verify checklist ticked and archived → suggest `/clear`. Project fully done: just suggest `/clear`.
+No ledger: the commits and the issue thread are the record. Then suggest `/clear`.

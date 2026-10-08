@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown } from '../audit-lib.mjs';
+import { createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, sessionNames } from '../audit-lib.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
 const PRICES = {
@@ -178,6 +178,39 @@ test('session titles come from custom-title over ai-title', () => {
   c.add({ type: 'custom-title', sessionId: 's1', customTitle: 'claude-config-62' }, MAIN);
   c.add({ type: 'ai-title', sessionId: 's1', aiTitle: 'auto later' }, MAIN);
   assert.equal(c.report().sessions[0].title, 'claude-config-62');
+});
+
+test('sessions group by their custom-title name across windows; unnamed sessions stay out of the grouping', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(asst('a1', usage({ input_tokens: 1e6 }), { ts: '2026-10-02T09:00:00Z' }), { sessionId: 'w1', agent: null });
+  c.add({ type: 'custom-title', sessionId: 'w1', customTitle: 'claude-config-67' }, { sessionId: 'w1', agent: null });
+  c.add(asst('a2', usage({ input_tokens: 2e6 }), { ts: '2026-10-04T09:00:00Z' }), { sessionId: 'w2', agent: null });
+  c.add({ type: 'custom-title', sessionId: 'w2', customTitle: 'claude-config-67' }, { sessionId: 'w2', agent: null });
+  c.add({ type: 'agent-name', sessionId: 'w3', agentName: 'auto-name' }, { sessionId: 'w3', agent: null });
+  c.add({ type: 'ai-title', sessionId: 'w3', aiTitle: 'Auto title' }, { sessionId: 'w3', agent: null });
+  c.add(asst('a3', usage({ input_tokens: 1e6 })), { sessionId: 'w3', agent: null });
+  const r = c.report();
+  assert.deepEqual(r.names, [{ name: 'claude-config-67', windows: 2, requests: 2, usd: 15, subagentUsd: 0, first: '2026-10-02', last: '2026-10-04' }]);
+  assert.match(renderMarkdown(r), /## Per session name[\s\S]*\| claude-config-67 \| 2 \| 2026-10-02 \| 2026-10-04 \| 2 \| \$15\.00 \|/);
+});
+
+test('sessionNames maps each session to its last custom-title (a /rename), ignoring auto titles', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'audit-'));
+  try {
+    const proj = join(root, 'C--proj');
+    mkdirSync(proj, { recursive: true });
+    const lines = (...r) => r.map((x) => JSON.stringify(x)).join('\n') + '\n';
+    writeFileSync(join(proj, 'a.jsonl'), lines(
+      { type: 'custom-title', sessionId: 'a', customTitle: 'first' },
+      asst('n1', usage()),
+      { type: 'custom-title', sessionId: 'a', customTitle: 'repo-12' },
+    ));
+    writeFileSync(join(proj, 'b.jsonl'), lines({ type: 'ai-title', sessionId: 'b', aiTitle: 'x' }, { type: 'agent-name', sessionId: 'b', agentName: 'y' }));
+    const names = await sessionNames(root);
+    assert.deepEqual([...names], [['a', 'repo-12']]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('walkTranscripts finds main sessions and subagents with their meta agentType', async () => {
