@@ -12,6 +12,7 @@
 // hand recovery.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -82,6 +83,55 @@ function cmdNew() {
     log('note:     no .worktreeinclude and no env files found — verify none are needed.');
   }
   log('note:     dev servers in a worktree need their own port; never reuse another session\'s.');
+
+  warnOnSessionName(repoName, slug, branch);
+}
+
+/** Directory of session-registry JSON files: ~/.claude/sessions, CLAUDE_SESSIONS_DIR overrides. */
+function sessionsDir() {
+  return process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
+}
+
+/** Leading issue number of a slug/branch-tail (`72-foo` -> '72'), or null. */
+function leadingIssueNumber(s) {
+  const m = /^(\d+)-/.exec(s || '');
+  return m ? m[1] : null;
+}
+
+/** Expected session name `<repo>-<issue>`, from the slug's leading number, else the branch's. */
+function expectedSessionName(repoName, slug, branch) {
+  const n = leadingIssueNumber(slug) || leadingIssueNumber((branch || '').replace(/^feat\//, ''));
+  return n ? `${repoName}-${n}` : null;
+}
+
+// Warn (never block) when the running session's name is auto-generated or
+// doesn't follow the convention spend and reflect join on: <repo>-<issue>,
+// human-typed via /rename since agents can't run slash commands. Silent on
+// non-Claude shells (no CLAUDE_PID / no registry file), and on a user-set name
+// when the slug carries no issue number to check it against.
+function warnOnSessionName(repoName, slug, branch) {
+  const expected = expectedSessionName(repoName, slug, branch);
+
+  const pid = process.env.CLAUDE_PID;
+  if (!pid) return;
+
+  const text = readIfExists(join(sessionsDir(), `${pid}.json`));
+  if (!text) return;
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return;
+  }
+
+  const { name, nameSource } = data;
+  const shown = name ? `session name '${name}'` : 'session has no name and';
+  let problem;
+  if (nameSource === 'auto') problem = `${shown} is auto-generated`;
+  else if (expected && name !== expected) problem = `${shown} doesn't follow <repo>-<issue>`;
+  else return;
+  log(`WARNING: ${problem} — spend and reflect join on <repo>-<issue>. Type:\n  /rename ${expected || `${repoName}-<issue>`}`);
 }
 
 function cmdRemove() {

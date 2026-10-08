@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+function writeSession(sessionsDir, pid, name, nameSource) {
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(join(sessionsDir, `${pid}.json`), JSON.stringify({ pid, name, nameSource }));
+}
+
 const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'worktree.mjs');
 
 function sh(cwd, cmd, cmdArgs) {
@@ -61,4 +66,136 @@ test('.worktreeinclude overrides the default env set', () => {
   const wt = join(root, '.worktrees', 'app-inc');
   assert.ok(existsSync(join(wt, '.env.local')));
   assert.ok(!existsSync(join(wt, '.env')), '.env excluded by .worktreeinclude');
+});
+
+test('new warns when the session name is auto-generated, even if it happens to match', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'app-72', 'auto');
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.match(out, /WARNING: session name 'app-72' is auto-generated/);
+  assert.doesNotMatch(out, /doesn't follow/);
+  assert.doesNotMatch(out, /statusline/);
+  assert.match(out, /\/rename app-72\b/);
+});
+
+test('new warns when the user-set session name does not match the convention', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'some-other-name', 'user');
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.match(out, /WARNING: session name 'some-other-name' doesn't follow <repo>-<issue>/);
+  assert.doesNotMatch(out, /statusline/);
+  assert.match(out, /\/rename app-72\b/);
+});
+
+test('new says nothing when the user-set session name already matches', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'app-72', 'user');
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.doesNotMatch(out, /WARNING: session name/);
+});
+
+test('new warns on an auto name even when the slug has no issue number, with the generic name', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'whatever', 'auto');
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, 'no-number-here'], { encoding: 'utf8', env });
+  assert.match(out, /WARNING: session name 'whatever' is auto-generated/);
+  assert.match(out, /\/rename app-<issue>/);
+  assert.doesNotMatch(out, /undefined|null/);
+});
+
+test('new says nothing for a user name when the slug has no issue number', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'whatever', 'user');
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, 'no-number-here'], { encoding: 'utf8', env });
+  assert.doesNotMatch(out, /WARNING: session name/);
+});
+
+test('an auto session with no name never prints undefined', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', undefined, 'auto');
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.match(out, /WARNING: session/);
+  assert.match(out, /\/rename app-72\b/);
+  assert.doesNotMatch(out, /undefined/);
+});
+
+test('new says nothing when CLAUDE_PID is unset (non-Claude shell)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'whatever', 'auto');
+  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir };
+  delete env.CLAUDE_PID;
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.doesNotMatch(out, /WARNING: session name/);
+});
+
+test('new says nothing when the session registry file is missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions'); // never written
+  const env = {
+    ...process.env,
+    CLAUDE_WORKSPACE_ROOT: root,
+    CLAUDE_SESSIONS_DIR: sessionsDir,
+    CLAUDE_PID: '4242',
+  };
+
+  const out = execFileSync(process.execPath, [script, 'new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.doesNotMatch(out, /WARNING: session name/);
 });
