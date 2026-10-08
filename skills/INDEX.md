@@ -1,15 +1,15 @@
 Skills: Read the path; skills are not Skill-tool invocable. Paths are under ~/code/claude-config/skills/
-- plan a feature/fix/refactor, spec, checklist → plan/SKILL.md
-- start branch work, worktree, session isolation → worktree/SKILL.md
-- multi-task plan, spawn/dispatch, model choice → agent-factory/SKILL.md
-- gates, tests, lint, typecheck, verify done → qa/SKILL.md
-- land claude-config, finish branch, git recovery → git-ops/SKILL.md
+- plan a feature/fix/refactor, issue spec, commit cadence → plan/SKILL.md
+- start branch work, worktree isolation → worktree/SKILL.md
+- multi-task plan, spawn, model choice → agent-factory/SKILL.md
+- direct parallel pasted sessions (batch) → agent-factory/directing-a-batch.md
+- gates, tests, lint, typecheck, verify → qa/SKILL.md
+- land claude-config, recovery, sweep → git-ops/SKILL.md
 - phase/wave end, review, harness updates → reflect/SKILL.md
 - work remains before /clear → continuation/SKILL.md
-- end-of-wave sweep → cleanup/SKILL.md
-- edit CLAUDE.md chain, hooks, skills, agents, settings → harness-editing/SKILL.md
+- edit CLAUDE.md chain, hooks, skills, agents → harness-editing/SKILL.md
 - new Radix+CVA library component → new-component/SKILL.md
 - scaffold a new repo → new-repo/SKILL.md
 - publish the npm library, changeset → release/SKILL.md
-- images, SVGs, palettes, themes, screenshots, preview gate → visual-asset-gates/SKILL.md
+- images, SVGs, palettes, screenshots, preview gate → visual-asset-gates/SKILL.md
 - CarsickYak titles, captions, channel copy → yak-voice/SKILL.md

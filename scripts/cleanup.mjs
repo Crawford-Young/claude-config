@@ -3,22 +3,19 @@
 //
 //   node cleanup.mjs [--kill-port <n>] [--remove-worktree <path>]
 //
-// Reports, in one pass: uncommitted changes in every workspace repo, linked
-// worktrees still registered, and stale checklists in active/. Optionally
-// kills a dev-server port holder and removes a finished worktree (via
-// worktree.mjs's safe sequence). Read-only unless a flag asks otherwise.
+// Reports, in one pass: uncommitted changes in every workspace repo and
+// linked worktrees still registered. Optionally kills a dev-server port
+// holder and removes a finished worktree (via worktree.mjs's safe
+// sequence). Read-only unless a flag asks otherwise.
 
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';
-import { die, discoverRepos, findActiveChecklists, git, listenerPidFromNetstat, log, parseArgs, workspaceRoot } from './lib.mjs';
+import { dirname, join } from 'node:path';
+import { die, discoverRepos, git, listenerPidFromNetstat, log, parseArgs } from './lib.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 const args = parseArgs(process.argv.slice(2));
-const root = workspaceRoot();
 
 if (args['kill-port']) killPort(Number(args['kill-port']));
 if (args['remove-worktree']) {
@@ -43,14 +40,6 @@ for (const repo of repos) {
   for (const w of wts.slice(1)) log(`  worktree: ${w}`);
 }
 
-const docs = join(root, 'docs');
-if (existsSync(docs)) {
-  const active = findActiveChecklists(docs);
-  if (active.length) {
-    log('# active checklists');
-    for (const f of active) log(`  ${f}`);
-  }
-}
 if (dirtyCount === 0) log('workspace clean: no uncommitted changes, no extra worktrees.');
 
 function killPort(port) {
