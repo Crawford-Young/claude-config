@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, sessionNames } from '../audit-lib.mjs';
+import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, sessionNames } from '../audit-lib.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
 const PRICES = {
@@ -242,4 +242,201 @@ test('renderMarkdown prints every section header', () => {
   c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
   const md = renderMarkdown(c.report());
   for (const h of ['## Totals', '## Per day', '## Sessions', '## Per agent type', '## Invocations', '## Hooks']) assert.ok(md.includes(h), h);
+});
+
+// ---- time dimension (#97) ------------------------------------------------------
+
+const BASE = Date.parse('2026-10-01T12:00:00Z');
+const at = (s) => new Date(BASE + s * 1000).toISOString();
+let tn = 0;
+const human = (s, text = 'go') => ({ type: 'user', uuid: `h${tn++}`, timestamp: at(s), origin: { kind: 'human' }, message: { content: text } });
+const say = (s, rid, content = [], stop = 'tool_use') => ({
+  type: 'assistant', uuid: `a${tn++}`, requestId: rid, timestamp: at(s),
+  message: { id: `m-${rid}`, model: 'claude-opus-5', stop_reason: stop, usage: usage({ output_tokens: 1 }), content },
+});
+const use = (id, name, input = {}) => ({ type: 'tool_use', id, name, input });
+const result = (s, id, text = 'ok', isError = false) => ({
+  type: 'user', uuid: `t${tn++}`, timestamp: at(s), message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] },
+});
+const feed = (c, ctx, ...recs) => recs.forEach((r) => c.add(r, ctx));
+const sec = (ms) => ms / 1000;
+
+test('time: a turn splits into model, tools and waiting on the user, summing to active time', () => {
+  const c = createCollector({ prices: PRICES });
+  feed(c, MAIN,
+    human(0),
+    say(2, 'r1'), say(3, 'r1', [use('b1', 'Bash', { command: 'git status' })]),
+    result(13, 'b1'),
+    say(15, 'r2', [{ type: 'text', text: 'done' }], 'end_turn'),
+    human(75));
+  const s = c.report().time.sessions[0];
+  assert.deepEqual([s.wallMs, s.activeMs, s.idleMs].map(sec), [75, 75, 0]);
+  // model: prompt→r1 end (0–3) + result→r2 end (13–15); tools 3–13; user 15–75
+  assert.deepEqual([s.modelMs, s.toolsMs, s.userMs, s.otherMs].map(sec), [5, 10, 60, 0]);
+});
+
+test('time: bookkeeping records between turn end and the prompt stay waiting on the user', () => {
+  const c = createCollector({ prices: PRICES });
+  feed(c, MAIN,
+    human(0), say(5, 'r1', [], 'end_turn'),
+    { type: 'system', subtype: 'away_summary', uuid: 'aw1', timestamp: at(185), content: 'recap' },
+    { type: 'queue-operation', timestamp: at(300) },
+    human(301));
+  const s = c.report().time.sessions[0];
+  assert.deepEqual([s.userMs, s.otherMs].map(sec), [296, 0]);
+});
+
+test('time: a task-notification wakes the session as other time, not as waiting on the user', () => {
+  const c = createCollector({ prices: PRICES });
+  feed(c, MAIN,
+    human(0), say(5, 'r1', [], 'end_turn'),
+    { type: 'user', uuid: 'tn1', timestamp: at(65), origin: { kind: 'task-notification' }, message: { content: '<task-notification>done</task-notification>' } },
+    say(70, 'r2', [], 'end_turn'));
+  const s = c.report().time.sessions[0];
+  assert.deepEqual([s.modelMs, s.userMs, s.otherMs].map(sec), [10, 0, 60]);
+});
+
+test('time: a gap over the idle threshold is removed from active time, never from wall time', () => {
+  const c = createCollector({ prices: PRICES }); // default threshold: 10 min
+  feed(c, MAIN,
+    human(0), say(5, 'r1', [], 'end_turn'),
+    human(5 + 9 * 60), say(5 + 9 * 60 + 5, 'r2', [], 'end_turn'), // 9 min think: active
+    human(5 + 9 * 60 + 5 + 30 * 60), say(5 + 9 * 60 + 5 + 30 * 60 + 5, 'r3', [], 'end_turn')); // 30 min away: idle
+  const r = c.report();
+  const s = r.time.sessions[0];
+  assert.equal(r.time.idleGapMin, 10);
+  assert.equal(sec(s.wallMs), 5 + 540 + 5 + 1800 + 5);
+  assert.equal(sec(s.idleMs), 1800);
+  assert.equal(sec(s.activeMs), 15 + 540);
+  assert.equal(sec(s.userMs), 540);
+  assert.equal(s.modelMs + s.toolsMs + s.userMs + s.otherMs, s.activeMs);
+});
+
+test('time: parallel subagents count once toward session time, each toward its own run', () => {
+  const c = createCollector({ prices: PRICES, idleGapMin: 0.5 }); // 30 s: main alone would idle out
+  feed(c, MAIN,
+    human(0),
+    say(2, 'r1', [use('g1', 'Agent', { subagent_type: 'recon' })]),
+    say(3, 'r1', [use('g2', 'Agent', { subagent_type: 'recon' })]),
+    result(63, 'g1'), result(93, 'g2'),
+    say(95, 'r2', [], 'end_turn'));
+  const sub = (id) => ({ sessionId: 's1', agent: { id, type: 'recon' } });
+  for (const s of [4, 24, 44, 62]) c.add(say(s, `p${s}`), sub('p1'));
+  for (const s of [4, 24, 44, 64, 84, 92]) c.add(say(s, `q${s}`), sub('p2'));
+  const t = c.report().time;
+  const s = t.sessions[0];
+  assert.equal(sec(s.idleMs), 0, 'subagent activity keeps the parent session active');
+  assert.equal(sec(s.wallMs), 95);
+  assert.equal(sec(s.toolsMs), 93 - 3, 'overlapping Agent calls are one span, not 60 s + 91 s');
+  assert.equal(sec(s.modelMs), 3 + 2);
+  assert.deepEqual(t.agentRuns.map((x) => [x.id, sec(x.wallMs)]).sort(), [['p1', 58], ['p2', 88]]);
+  assert.equal(sec(t.agents.recon.wallMs), 58 + 88);
+  assert.equal(t.agents.recon.runs, 2);
+});
+
+test('time: a hook block and a failed call are charged piecewise up to the successful retry', () => {
+  const c = createCollector({ prices: PRICES });
+  const blockText = 'PreToolUse:Bash hook error: [node "C:/h/bash-guard.mjs"]: A pipe after a gate reports the pipe\'s exit code.';
+  feed(c, MAIN,
+    human(0),
+    say(10, 'r1', [use('b1', 'Bash', { command: 'node --test x | tail' })]), result(10, 'b1', blockText, true),
+    say(40, 'r2', [use('b2', 'Bash', { command: 'node --test x' })]), result(41, 'b2', 'Exit code 1\nfail', true),
+    say(70, 'r3', [use('b3', 'Bash', { command: 'node --test x' })]), result(71, 'b3', 'ok'),
+    say(72, 'r4', [use('e1', 'Edit', { file_path: 'a' })]),
+    result(72, 'e1', 'PreToolUse:Edit hook error: [node "C:/h/main-guard.mjs"]: main checkout', true),
+    say(80, 'r5', [], 'end_turn'));
+  const { blocks, errors } = c.report().time.retry;
+  assert.deepEqual(blocks['bash-guard.mjs'], { count: 1, retried: 1, unresolved: 0, ms: 30000,
+    reasons: { "A pipe after a gate reports the pipe's exit code.": { count: 1, ms: 30000 } } });
+  assert.deepEqual(errors.Bash, { count: 1, retried: 1, unresolved: 0, ms: 30000, reasons: { 'Exit code 1': { count: 1, ms: 30000 } } });
+  assert.deepEqual(blocks['main-guard.mjs'], { count: 1, retried: 0, unresolved: 1, ms: 0, reasons: { 'main checkout': { count: 1, ms: 0 } } });
+});
+
+test('time: non-hook gates are blocks by gate name; a declined question is not a retry', () => {
+  const c = createCollector({ prices: PRICES });
+  feed(c, MAIN,
+    human(0),
+    say(1, 'r1', [use('q1', 'AskUserQuestion')]), result(5, 'q1', "The user doesn't want to proceed with this tool use.", true),
+    say(6, 'r2', [use('q2', 'AskUserQuestion')]), result(9, 'q2'),
+    say(10, 'r3', [use('b1', 'Bash', { command: 'git push' })]),
+    result(11, 'b1', 'Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Git Push]. If you have other tasks…', true),
+    say(12, 'r4', [use('b2', 'Bash', { command: 'cd x' })]),
+    result(12, 'b2', '<tool_use_error>This session is isolated in the worktree C:\\w, but this command is too complex to verify. Refusing.</tool_use_error>', true),
+    say(20, 'r5', [use('b3', 'Bash', { command: 'git status' })]), result(21, 'b3'),
+    say(22, 'r6', [], 'end_turn'));
+  const { blocks, errors } = c.report().time.retry;
+  assert.deepEqual(Object.keys(blocks).sort(), ['auto-mode classifier', 'worktree isolation']);
+  assert.equal(blocks['auto-mode classifier'].ms, 2000);
+  assert.deepEqual(Object.keys(blocks['auto-mode classifier'].reasons), ['[Git Push]']);
+  assert.deepEqual(Object.keys(blocks['worktree isolation'].reasons), ['this command is too complex to verify']);
+  assert.equal(blocks['worktree isolation'].ms, 8000);
+  assert.deepEqual(errors, {});
+});
+
+test('time: retry cost excludes an idle gap between the block and the retry', () => {
+  const c = createCollector({ prices: PRICES });
+  const blockText = 'PreToolUse:Bash hook error: [node "C:/h/bash-guard.mjs"]: nope';
+  feed(c, MAIN,
+    human(0),
+    say(10, 'r1', [use('b1', 'Bash', { command: 'x' })]), result(10, 'b1', blockText, true),
+    say(20, 'r2', [], 'end_turn'),
+    human(20 + 3600),
+    say(3630, 'r3', [use('b2', 'Bash', { command: 'y' })]), result(3631, 'b2'));
+  assert.equal(c.report().time.retry.blocks['bash-guard.mjs'].ms, (3630 - 10 - 3600) * 1000);
+});
+
+test('time: tool latency by tool and by command head; AskUserQuestion is user time, not tool latency', () => {
+  const c = createCollector({ prices: PRICES });
+  feed(c, MAIN,
+    human(0),
+    say(1, 'r1', [use('q1', 'AskUserQuestion')]), result(61, 'q1'),
+    say(62, 'r2', [use('b1', 'Bash', { command: 'cd /x && git -C repo status --short' })]), result(64, 'b1'),
+    say(65, 'r3', [use('b2', 'Bash', { command: 'git status' })]), result(69, 'b2'),
+    say(70, 'r4', [use('m1', 'mcp__claude-in-chrome__navigate')]), result(73, 'm1'),
+    say(74, 'r5', [], 'end_turn'));
+  const t = c.report().time;
+  assert.equal(t.tools.AskUserQuestion, undefined);
+  assert.deepEqual(t.tools.Bash, { calls: 2, p50: 2000, p95: 4000, totalMs: 6000 });
+  assert.deepEqual(t.commands['git status'], { calls: 2, p50: 2000, p95: 4000, totalMs: 6000 });
+  assert.equal(t.tools['mcp__claude-in-chrome__navigate'].p50, 3000);
+  assert.equal(sec(t.sessions[0].userMs), 60);
+});
+
+test('commandHead keeps the program and its subcommand, dropping cd prefixes, env and flags', () => {
+  assert.equal(commandHead('cd C:/x && git -C repo log --oneline'), 'git log');
+  assert.equal(commandHead('FOO=1 node "C:/a/scripts/audit.mjs" --json'), 'node audit.mjs');
+  assert.equal(commandHead('ls -la'), 'ls');
+  assert.equal(commandHead('Get-ChildItem -Recurse'), 'Get-ChildItem');
+  assert.equal(commandHead('export PATH=/x:$PATH; pnpm test'), 'pnpm test');
+  assert.equal(commandHead('cd ~/code\nnode --test a.mjs'), 'node a.mjs');
+  assert.equal(commandHead('check() {\n  rg foo\n}'), 'rg');
+  assert.equal(commandHead('check() {\n  out=$(nslookup -type=NS \\\n  x.com)\n}'), 'nslookup');
+  assert.equal(commandHead('# note\nls'), 'ls');
+  assert.equal(commandHead('cd x'), '?');
+  assert.equal(commandHead(''), '?');
+});
+
+test('time: replayed records in a resumed session\'s file are timed once', () => {
+  const c = createCollector({ prices: PRICES });
+  const recs = [human(0), say(5, 'r1', [], 'end_turn')];
+  feed(c, MAIN, ...recs);
+  feed(c, { sessionId: 's2', agent: null }, ...recs, human(100), say(110, 'r2', [], 'end_turn'));
+  const t = c.report().time;
+  assert.deepEqual(t.sessions.map((s) => [s.sessionId, sec(s.wallMs)]).sort(), [['s1', 5], ['s2', 10]]);
+});
+
+test('time: per-day and per-name rows split at UTC midnight and sum every window of the name', () => {
+  const c = createCollector({ prices: PRICES });
+  const w = (sessionId) => ({ sessionId, agent: null });
+  const mid = (Date.parse('2026-10-02T00:00:00Z') - BASE) / 1000;
+  feed(c, w('w1'), human(mid - 60), say(mid + 60, 'n1', [], 'end_turn'), { type: 'custom-title', sessionId: 'w1', customTitle: 'repo-5' });
+  feed(c, w('w2'), human(mid + 3600), say(mid + 3630, 'n2', [], 'end_turn'), { type: 'custom-title', sessionId: 'w2', customTitle: 'repo-5' });
+  const r = c.report();
+  const t = r.time;
+  assert.deepEqual(t.days.map((d) => [d.day, sec(d.activeMs)]), [['2026-10-01', 60], ['2026-10-02', 90]]);
+  assert.deepEqual(t.names.map((g) => [g.name, g.windows, sec(g.activeMs), sec(g.wallMs)]), [['repo-5', 2, 150, 150]]);
+  assert.equal(sec(t.totals.activeMs), 150);
+  const md = renderMarkdown(r);
+  for (const h of ['## Time', '**Per day**', '**Per session name**', '**Agent time**', '**Tool latency**', '**Retry and block cost**']) assert.ok(md.includes(h), h);
+  assert.match(md, /idle gaps over 10 min removed/);
 });

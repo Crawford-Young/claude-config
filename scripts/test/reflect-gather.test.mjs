@@ -44,6 +44,8 @@ test('gathers every window of the unit through the audit filter, with repo activ
     const r = spawnSync(process.execPath, [cli, 'repo-7', '--root', f.root, '--repo', f.repo], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /## Per session name[\s\S]*\| repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
+    assert.match(r.stdout, /## Audit — 2 window\(s\) named repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
+    assert.match(r.stdout, /## Time[\s\S]*\*\*Per session name\*\*[\s\S]*\| repo-7 \| 2 \|/);
     assert.doesNotMatch(r.stdout, /other-1/);
     assert.match(r.stdout, /## Repo activity since 2026-10-03/);
     assert.match(r.stdout, /feat: unit work/, 'a commit on the first window\'s own UTC day is in the window');

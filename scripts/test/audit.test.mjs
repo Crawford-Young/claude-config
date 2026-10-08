@@ -42,6 +42,32 @@ test('--session keeps only the windows renamed to that name, subagents included'
   }
 });
 
+test('--session --json carries the time dimension for the named windows; --idle-gap sets the threshold', () => {
+  const root = fixture();
+  try {
+    const proj = join(root, 'C--proj');
+    const at = (m) => `2026-10-05T10:${String(m).padStart(2, '0')}:00Z`;
+    const ask = (m, kind) => ({ type: 'user', uuid: `p${m}`, timestamp: at(m), sessionId: 'e', origin: { kind }, message: { content: 'go' } });
+    const say = (m) => ({ type: 'assistant', uuid: `s${m}`, requestId: `e${m}`, timestamp: at(m), sessionId: 'e',
+      message: { id: `m-e${m}`, model: 'claude-opus-5', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, content: [] } });
+    // prompts at :00 and :20 (a 19-min think), answers a minute later
+    writeFileSync(join(proj, 'e.jsonl'), lines(ask(0, 'human'), say(1), ask(20, 'human'), say(21), { type: 'custom-title', sessionId: 'e', customTitle: 'repo-8' }));
+    const run = (...extra) => JSON.parse(spawnSync(process.execPath, [cli, '--root', root, '--session', 'repo-8', '--json', ...extra], { encoding: 'utf8' }).stdout).time;
+    const dflt = run();
+    assert.equal(dflt.idleGapMin, 10);
+    assert.deepEqual([dflt.totals.wallMs, dflt.totals.activeMs, dflt.totals.modelMs], [21 * 60e3, 2 * 60e3, 2 * 60e3]);
+    assert.deepEqual(dflt.names.map((g) => [g.name, g.windows]), [['repo-8', 1]]);
+    for (const k of ['days', 'sessions', 'agents', 'agentRuns', 'tools', 'commands', 'retry']) assert.ok(k in dflt, k);
+    const lenient = run('--idle-gap', '30');
+    assert.deepEqual([lenient.idleGapMin, lenient.totals.activeMs, lenient.totals.userMs], [30, 21 * 60e3, 19 * 60e3]);
+    const bad = spawnSync(process.execPath, [cli, '--root', root, '--idle-gap', '0'], { encoding: 'utf8' });
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr, /--idle-gap wants minutes > 0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('--session with no matching window exits 1 and says so', () => {
   const root = fixture();
   try {

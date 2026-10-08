@@ -594,14 +594,14 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings; grouped by /rename session name, --session filters to one unit."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost); grouped by /rename session name, --session filters to one unit."
   },
   {
    "id": "script:audit-lib",
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state cross-check, custom-title session names."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state cross-check, custom-title session names, timestamp timelines for the time dimension."
   },
   {
    "id": "store:push-gate-approvals",

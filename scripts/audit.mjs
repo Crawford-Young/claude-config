@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // audit.mjs — transcript-replay audit (#62). Rebuilds cost, context depth,
 // per-agent-type cost, skill/doc invocation counts and hook activity from the
-// transcripts Claude Code keeps on disk, grouped by /rename session name (#73).
-// --session keeps only the windows renamed <name>. Accounting: audit-lib.mjs.
+// transcripts Claude Code keeps on disk, grouped by /rename session name (#73),
+// plus time (#97): wall vs active, the model/tools/user/other split, agent and tool
+// latency, retry cost. --session keeps only the windows renamed <name>.
+// --idle-gap <min> (default 10) is the silence that counts as away, not active.
+// Accounting: audit-lib.mjs.
 //
-//   node scripts/audit.mjs [--session <name>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
+//   node scripts/audit.mjs [--session <name>] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--idle-gap <min>]
 //                          [--root <projects dir>] [--docs <prefix,…>] [--top N] [--json]
 //
 // Window: only what's on disk. Claude Code deletes transcripts older than
@@ -23,10 +26,11 @@ function args(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') o.json = true;
-    else if (['--session', '--since', '--until', '--root', '--docs', '--top'].includes(a)) o[a.slice(2)] = argv[++i];
+    else if (['--session', '--since', '--until', '--root', '--docs', '--top', '--idle-gap'].includes(a)) o[a.slice(2)] = argv[++i];
     else throw new Error(`unknown argument: ${a}`);
   }
   for (const k of ['since', 'until']) if (o[k] && !/^\d{4}-\d{2}-\d{2}$/.test(o[k])) throw new Error(`--${k} wants YYYY-MM-DD`);
+  if (o['idle-gap'] !== undefined && !(+o['idle-gap'] > 0)) throw new Error('--idle-gap wants minutes > 0');
   return o;
 }
 
@@ -37,6 +41,7 @@ const c = createCollector({
   since: o.since,
   until: o.until,
   docPrefixes: o.docs.split(',').filter(Boolean),
+  ...(o['idle-gap'] && { idleGapMin: +o['idle-gap'] }),
   // a skill is a directory with a SKILL.md (skills/synced is the platform's sync cache)
   installedSkills: existsSync(skillsDir) ? readdirSync(skillsDir).filter((n) => existsSync(join(skillsDir, n, 'SKILL.md'))) : [],
 });
