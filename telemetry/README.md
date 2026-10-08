@@ -1,5 +1,9 @@
 # telemetry/ — Claude Code OTel usage capture
 
+**Retired 2026-10-08 (#76):** the receiver is no longer spawned and the OTel env is
+off. `scripts/audit.mjs` (transcript replay) is the cost source. Deleting this
+directory is a follow-up. Everything below describes the pipeline as it was.
+
 Local pipeline for token+cost attribution by time range (OTel wave 2026-08-07).
 Claude Code exports OTLP http/json to a minimal local receiver; the receiver writes
 flat NDJSON rows; the report CLI buckets those rows over a time range into
@@ -71,8 +75,8 @@ documented bound.
 
 ## Env config (reproducible record)
 
-`~/.claude/settings.json` is user-level and untracked — this block is the
-reproducible record of the telemetry env vars it carries:
+`~/.claude/settings.json` is user-level and untracked. This block records the
+telemetry env vars it carried until #76 removed them:
 
 ```json
 "env": {
@@ -93,8 +97,9 @@ The same file sets `"cleanupPeriodDays": 365` (2026-10-08, #62). The default of 
 
 ## Receiver lifecycle
 
-`otel-receiver.mjs` — spawned lazily by the SessionStart hook
-(`hooks/otel-receiver-spawn.ps1`, wired in settings.json). Binds `127.0.0.1:4318`
+`otel-receiver.mjs` is no longer spawned. Its SessionStart hook and the OTel env
+were retired on 2026-10-08 (#76): `scripts/audit.mjs` replaced OTel for cost, and
+nothing read the roughly 13 MB/month of rows. Run it by hand to capture again. It binds `127.0.0.1:4318`
 (override: `OTEL_RECEIVER_PORT`); a second instance exits 0 on EADDRINUSE — port
 bind IS the single-instance lock. Parse errors → 400 + error log; disk-write errors
 are logged once and swallowed — the exporter never sees a disk problem. Import-safe:

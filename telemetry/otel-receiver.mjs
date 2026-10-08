@@ -1,5 +1,5 @@
 // telemetry/otel-receiver.mjs — local OTLP http/json receiver for Claude Code usage capture.
-// Spawned by hooks/otel-receiver-spawn.ps1 (SessionStart). Single instance via port bind.
+// Not spawned since #76 (2026-10-08); run by hand. Single instance via port bind.
 // Data: ~/.claude/otel/YYYY-MM.ndjson (schema v1 — telemetry/README.md). Fail-open by design.
 import http from 'node:http';
 import zlib from 'node:zlib';

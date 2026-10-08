@@ -393,13 +393,6 @@
    "summary": "PermissionDenied — logs each denial; cannot block."
   },
   {
-   "id": "hook:otel-receiver-spawn",
-   "kind": "hook",
-   "label": "otel-receiver-spawn",
-   "file": "hooks/otel-receiver-spawn.mjs",
-   "summary": "SessionStart — lazily spawns the local OTel usage receiver on :4318."
-  },
-  {
    "id": "agent:implementer",
    "kind": "agent",
    "label": "implementer",
@@ -1133,12 +1126,6 @@
    "to": "script:export-harness",
    "kind": "reads",
    "label": "restores its zip"
-  },
-  {
-   "from": "hook:otel-receiver-spawn",
-   "to": "store:settings-json",
-   "kind": "reads",
-   "label": "OTel env"
   },
   {
    "from": "script:harness-map",
