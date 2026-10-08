@@ -451,7 +451,7 @@ test('a CLAUDE.md under its cap passes', () => {
   try {
     const { status, out } = runWorkspaceCheck(root);
     assert.equal(status, 0);
-    assert.match(out, /workspace\/CLAUDE\.md: \d+ B \(cap 7168 B\)/);
+    assert.match(out, /workspace\/CLAUDE\.md: \d+ B \(cap 7040 B\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -459,7 +459,7 @@ test('a CLAUDE.md under its cap passes', () => {
 
 test('a CLAUDE.md over its cap fails', () => {
   const root = workspaceRootWith({
-    'workspace/CLAUDE.md': `${'a'.repeat(7169)}\n`,
+    'workspace/CLAUDE.md': `${'a'.repeat(7041)}\n`,
     'workspace/web/CLAUDE.md': 'web claude md\n',
     'workspace/games/CLAUDE.md': 'games claude md\n',
     'workspace/apps/CLAUDE.md': 'apps claude md\n',
@@ -467,18 +467,18 @@ test('a CLAUDE.md over its cap fails', () => {
   try {
     const { status, out } = runWorkspaceCheck(root);
     assert.equal(status, 1);
-    assert.match(out, /workspace\/CLAUDE\.md: 7170 B, over the cap of 7168 B/);
+    assert.match(out, /workspace\/CLAUDE\.md: 7042 B, over the cap of 7040 B/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('CRLF line endings are normalized before measuring, so Windows and CI agree', () => {
-  // 7169 'a' + a trailing LF is two bytes over cap (7170 B, see the test above). The same
+  // 7041 'a' + a trailing LF is two bytes over cap (7042 B, see the test above). The same
   // content saved with CRLF line endings must normalize back down to the same LF byte count,
   // not get penalized an extra byte per line for how the file happens to be checked out.
   const root = workspaceRootWith({
-    'workspace/CLAUDE.md': `${'a'.repeat(7169)}\r\n`,
+    'workspace/CLAUDE.md': `${'a'.repeat(7041)}\r\n`,
     'workspace/web/CLAUDE.md': 'web claude md\n',
     'workspace/games/CLAUDE.md': 'games claude md\n',
     'workspace/apps/CLAUDE.md': 'apps claude md\n',
@@ -486,7 +486,7 @@ test('CRLF line endings are normalized before measuring, so Windows and CI agree
   try {
     const { status, out } = runWorkspaceCheck(root);
     assert.equal(status, 1);
-    assert.match(out, /workspace\/CLAUDE\.md: 7170 B, over the cap of 7168 B/);
+    assert.match(out, /workspace\/CLAUDE\.md: 7042 B, over the cap of 7040 B/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

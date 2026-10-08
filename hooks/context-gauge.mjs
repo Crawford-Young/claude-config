@@ -213,14 +213,14 @@ export function nudgeText(tokens, t, window) {
   return [
     `[context-gauge] Session context is ~${fmt(tokens)} of the ~${fmt(window)} window (nudge line ${fmt(t.nudge)}).`,
     `Never artificially stop a task early for this — the gate is auto-compact avoidance, not cost.`,
-    `Carry on, and take the next COMPACT POINT deliberately rather than drifting past it. Hard stop at ${fmt(t.blockAt)}.`,
+    `Carry on, and stop at the next green commit deliberately rather than drifting past it. Hard stop at ${fmt(t.blockAt)}.`,
   ].join(' ');
 }
 
 export function warnText(tokens, t, window) {
   return [
     `[context-gauge] Session context is ~${fmt(tokens)} of the ~${fmt(window)} window (warn line ${fmt(t.warn)}).`,
-    `Checkpoint now: tick the checklist, record open blockers and the gate-baseline SHA, emit a paste-ready continuation prompt, then /clear.`,
+    `Checkpoint now: commit with the resume block (What/Verified/Next/Ruled out), comment open blockers on the issue, emit a paste-ready continuation prompt, then /clear.`,
     `A wave boundary is a /clear, never a compact. Blocking at ${fmt(t.blockAt)}.`,
   ].join(' ');
 }
@@ -231,8 +231,8 @@ export function blockText(tokens, t, window) {
     ``,
     `Auto-compact would silently do the thing the doctrine forbids: compact a wave boundary instead of clearing it.`,
     `Close out deliberately instead:`,
-    `  1. Tick the active checklist; write open blockers, deviations, and the gate-baseline origin/main SHA to disk.`,
-    `  2. Emit a paste-ready continuation prompt (never a file).`,
+    `  1. Commit with the resume block (What/Verified/Next/Ruled out); comment open blockers and deviations on the issue.`,
+    `  2. Run the continuation skill (it asks clear-vs-continue).`,
     `  3. /clear  — or  /compact <focus for the NEXT task>  if unrecorded conversational state remains.`,
     ``,
     `To override and keep going in this session, include CONTEXT OK in your message.`,

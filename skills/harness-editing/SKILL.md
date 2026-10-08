@@ -15,7 +15,8 @@ disable-model-invocation: true
 | Agent defs + ROUTING.md | `claude-config/agents/` — whole-directory junction to `~/.claude/agents/` |
 | Hooks | `claude-config/hooks/*.mjs` — wiring in `~/.claude/settings.json` |
 | Workflow scripts | `claude-config/scripts/*.mjs` (tests in `scripts/test/`, run `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) |
-| Specs, checklists, issues, archives | `~/code/docs/` (private repo) — never in junctioned claude-config dirs |
+| Specs, tracking, bugs | GitHub issues — harness/cross-repo in claude-config, project work in its repo |
+| Screenshots, harness-evolution archive | `~/code/docs/` (private repo) — never in junctioned claude-config dirs |
 
 **Wiring map:** `claude-config/harness-map.json` names every part and what it calls, gates or feeds — read it before sweeping files. Adding, removing or rewiring a skill, hook, agent or script means updating its node and edges in the same change, or CI (`scripts/harness-map.mjs check`) fails.
 

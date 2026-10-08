@@ -72,7 +72,7 @@
    "label": "spec",
    "summary": "Design doc for open-shape work; the user approves before planning.",
    "rules": [
-    "Lives in docs/<domain>/<project>/specs/",
+    "Lives in the GitHub issue body (## Goal / ## Done when / ## Out of scope)",
     "Skipped when the shape is obvious"
    ]
   },
@@ -80,7 +80,7 @@
    "id": "phase:plan",
    "kind": "phase",
    "label": "plan",
-   "summary": "Plan mode; multi-session work persists as a checklist.",
+   "summary": "Plan mode; the issue body is the spec, commit bodies carry resume state.",
    "rules": [
     "User approves the plan, then execution runs without per-change approval"
    ]
@@ -142,7 +142,7 @@
    "kind": "skill",
    "label": "plan",
    "file": "skills/plan/SKILL.md",
-   "summary": "Plan-mode conventions: spec/checklist persistence, five plan-time checks, design-fork debate.",
+   "summary": "Plan-mode conventions: issue-as-spec, commit-body cadence, five plan-time checks, design-fork debate.",
    "rules": [
     "Spec first when the shape is open"
    ]
@@ -180,7 +180,7 @@
    "kind": "skill",
    "label": "git-ops",
    "file": "skills/git-ops/SKILL.md",
-   "summary": "Git conventions, the claude-config land lane, branch finishing, recovery.",
+   "summary": "Git conventions, the claude-config land lane, branch finishing, recovery, end-of-wave sweep (cleanup.mjs).",
    "rules": [
     "Explicit paths always",
     "Docs repo commits direct to master"
@@ -191,7 +191,7 @@
    "kind": "skill",
    "label": "reflect",
    "file": "skills/reflect/SKILL.md",
-   "summary": "End-of-phase dialogue; gathers inputs via reflect-gather.mjs."
+   "summary": "On PR merge or phase close: 3 evidence-cited questions over every window of the unit, then in-place harness edits."
   },
   {
    "id": "skill:continuation",
@@ -200,15 +200,8 @@
    "file": "skills/continuation/SKILL.md",
    "summary": "Paste-ready resume prompt for after /clear.",
    "rules": [
-    "Skip only when nothing remains"
+    "Always asks clear-vs-continue first; never unprompted"
    ]
-  },
-  {
-   "id": "skill:cleanup",
-   "kind": "skill",
-   "label": "cleanup",
-   "file": "skills/cleanup/SKILL.md",
-   "summary": "End-of-wave sweep: worktrees, dev servers, checklists, uncommitted files."
   },
   {
    "id": "skill:harness-editing",
@@ -365,16 +358,17 @@
    "kind": "hook",
    "label": "session-start",
    "file": "hooks/session-start.mjs",
-   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists active checklists and post-compaction reminders."
+   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders."
   },
   {
    "id": "hook:stop-reflect-gate",
    "kind": "hook",
    "label": "stop-reflect-gate",
    "file": "hooks/stop-reflect-gate.mjs",
-   "summary": "Stop — reminds once per turn end to run reflect when only the reflect line is left.",
+   "summary": "Stop — reminds once per merged PR (a successful gh pr merge in the transcript) to run reflect.",
    "rules": [
-    "Reminds, never hard-blocks (since 2026-08-21)"
+    "Reminds, never hard-blocks (since 2026-08-21)",
+    "Once per merge: handled tool_use ids (newest 200) kept in ~/.claude/stop-reflect-gate.json"
    ]
   },
   {
@@ -461,13 +455,6 @@
    "summary": "Not routed — effort is silently dropped on haiku (user decision 2026-09-04)."
   },
   {
-   "id": "script:checklist",
-   "kind": "script",
-   "label": "checklist.mjs",
-   "file": "scripts/checklist.mjs",
-   "summary": "new / tick / status / done for wave checklists."
-  },
-  {
    "id": "script:worktree",
    "kind": "script",
    "label": "worktree.mjs",
@@ -497,14 +484,7 @@
    "kind": "script",
    "label": "reflect-gather.mjs",
    "file": "scripts/reflect-gather.mjs",
-   "summary": "Checklist, issue log and per-repo git history in one payload."
-  },
-  {
-   "id": "script:session-state",
-   "kind": "script",
-   "label": "session-state.mjs",
-   "file": "scripts/session-state.mjs",
-   "summary": "Active checklists and dirty/off-branch repos, for continuation prompts."
+   "summary": "A unit's evidence via audit.mjs --session <name> plus per-repo git activity, in one payload."
   },
   {
    "id": "script:cleanup",
@@ -536,7 +516,7 @@
    "kind": "store",
    "label": "~/code/docs",
    "file": "~/code/docs",
-   "summary": "Private planning repo: specs, checklists active/done, issues, screenshots.",
+   "summary": "Private repo: screenshots and the harness-evolution archive (read-only). Specs, checklists and issue logs retired to GitHub issues (#72).",
    "rules": [
     "Commits direct to master with explicit paths",
     "Pushed at wave close"
@@ -629,6 +609,14 @@
    "summary": "This map. Read it before sweeping files; update it in the same change as any wiring change."
   },
   {
+   "id": "store:github-issues",
+   "kind": "store",
+   "label": "GitHub issues",
+   "file": "github.com/Crawford-Young/*/issues",
+   "summary": "Tracking (#72): issue = spec (Goal / Done when / Out of scope); active work labelled in-progress; PRs carry Closes #N.",
+   "external": true
+  },
+  {
    "id": "store:transcripts",
    "kind": "store",
    "label": "transcripts",
@@ -641,14 +629,14 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings; grouped by /rename session name, --session filters to one unit."
   },
   {
    "id": "script:audit-lib",
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state cross-check."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state cross-check, custom-title session names."
   },
   {
    "id": "store:push-gate-approvals",
@@ -724,7 +712,7 @@
    "from": "phase:land-pr",
    "to": "phase:reflect",
    "kind": "next-phase",
-   "label": "wave ends"
+   "label": "PR merged"
   },
   {
    "from": "phase:reflect",
@@ -743,15 +731,9 @@
   },
   {
    "from": "skill:plan",
-   "to": "script:checklist",
-   "kind": "invokes",
-   "label": "checklist.mjs new"
-  },
-  {
-   "from": "skill:plan",
-   "to": "store:docs-repo",
+   "to": "store:github-issues",
    "kind": "writes",
-   "label": "specs, checklists"
+   "label": "issue spec"
   },
   {
    "from": "skill:worktree",
@@ -847,12 +829,12 @@
    "label": "rule history"
   },
   {
-   "from": "skill:cleanup",
+   "from": "skill:git-ops",
    "to": "phase:cleanup-continuation",
    "kind": "drives"
   },
   {
-   "from": "skill:cleanup",
+   "from": "skill:git-ops",
    "to": "script:cleanup",
    "kind": "invokes"
   },
@@ -860,11 +842,6 @@
    "from": "skill:continuation",
    "to": "phase:cleanup-continuation",
    "kind": "drives"
-  },
-  {
-   "from": "skill:continuation",
-   "to": "script:session-state",
-   "kind": "invokes"
   },
   {
    "from": "skill:harness-editing",
@@ -1073,15 +1050,21 @@
   },
   {
    "from": "hook:session-start",
-   "to": "store:docs-repo",
+   "to": "store:github-issues",
    "kind": "reads",
-   "label": "active checklists"
+   "label": "in-progress issues"
   },
   {
    "from": "hook:session-start",
    "to": "phase:execute-dispatch",
    "kind": "feeds",
-   "label": "resume at first unchecked"
+   "label": "in-progress issues"
+  },
+  {
+   "from": "hook:stop-reflect-gate",
+   "to": "store:transcripts",
+   "kind": "reads",
+   "label": "gh pr merge calls"
   },
   {
    "from": "hook:precompact-archive",
@@ -1101,20 +1084,16 @@
    "label": "denial log"
   },
   {
-   "from": "script:checklist",
-   "to": "store:docs-repo",
-   "kind": "writes",
-   "label": "checklists"
+   "from": "script:reflect-gather",
+   "to": "script:audit",
+   "kind": "invokes",
+   "label": "--session <name>"
   },
   {
    "from": "script:reflect-gather",
-   "to": "store:docs-repo",
-   "kind": "reads"
-  },
-  {
-   "from": "script:session-state",
-   "to": "store:docs-repo",
-   "kind": "reads"
+   "to": "script:audit-lib",
+   "kind": "reads",
+   "label": "renderMarkdown"
   },
   {
    "from": "script:land",
@@ -1206,6 +1185,12 @@
    "to": "hook:_hooklib",
    "kind": "reads",
    "label": "shared approval read"
+  },
+  {
+   "from": "hook:stop-reflect-gate",
+   "to": "hook:bash-guard",
+   "kind": "reads",
+   "label": "merge-verb parsing"
   },
   {
    "from": "hook:_hooklib",

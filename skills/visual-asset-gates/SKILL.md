@@ -10,6 +10,7 @@ Aesthetic decisions are user gates, not plan-locked prose. Plans lock pipeline, 
 
 ## Universal
 
+- Screenshots live at `~/code/docs/<domain>/<project>/screenshots/<slug>/`.
 - Per-asset user gates with rendered references. Composition, mark form, and copy placement get rejected on sight when plan-locked. Art direction anchors on the user's shipped, liked assets on adjacent surfaces — never on spec adjectives or a recon test render. Two consecutive direction rejections → stop generating, re-anchor on shipped assets.
 - Organic/illustrative shapes are never hand-authored SVG paths — trace a user-approved raster (potrace) from the start; carry `fill-rule` when re-emitting. No "simple geometric" exception; hero/identity surfaces (emotes, badges, alerts) go raster-gen, not CSS-composed.
 - Animation whose correctness is its time-ordering needs multi-frame capture (2–3 mid-animation timestamps) or live eyes — single end-state screenshots can't see sequencing bugs.

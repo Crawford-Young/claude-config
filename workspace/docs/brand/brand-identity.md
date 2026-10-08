@@ -5,7 +5,7 @@
 **Scope:** Portfolio + `@crawfordyoung/ui` + all personal projects (Cybond / scheduling-advisor, instrumenttuner, future)
 
 > Product-specific brand layers extend this spec, they don't replace it:
-> - Cybond naming, logo, voice, splash → [`docs/scheduling-advisor/specs/2026-06-03-cybond-rebrand-design.md`](../scheduling-advisor/specs/2026-06-03-cybond-rebrand-design.md) (logo uses these exact tokens — no color changes)
+> - Cybond naming, logo, voice, splash → `docs@5740fed:web/scheduling-advisor/specs/2026-06-03-cybond-rebrand-design.md` (logo uses these exact tokens — no color changes)
 
 ---
 

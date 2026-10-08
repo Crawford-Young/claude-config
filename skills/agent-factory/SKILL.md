@@ -1,6 +1,6 @@
 ---
 name: agent-factory
-description: Use when executing a multi-task plan or checklist, deciding whether to spawn a subagent, choosing a model for a dispatch, or proposing a Workflow fan-out. Carries the spawn posture, the dispatch template, and model routing.
+description: Use when executing a multi-task plan or issue, deciding whether to spawn a subagent, choosing a model for a dispatch, or proposing a Workflow fan-out. Carries the spawn posture, the dispatch template, and model routing.
 disable-model-invocation: true
 ---
 
@@ -84,6 +84,6 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 - Verify any agent report you act on — reviewer finding or teammate status — against source first, because a teammate's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
 - Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch.
 
-## Checklist execution
+## Issue execution
 
-The checklist (created by the `plan` skill via `checklist.mjs`) is the source of truth across sessions. Tick tasks as they complete (`checklist.mjs tick` — real stamps), append one Log line per dispatch/deviation/decision at the moment it happens, and stop at `<!-- COMPACT POINT -->` markers: state on disk → hand a continuation prompt and suggest `/clear`. Dispatches run in the background — keep working the checklist while children are in flight, and only block when the next task genuinely depends on a still-pending result. At wave close Read `~/code/claude-config/skills/reflect/SKILL.md` and run it, then `checklist.mjs done`.
+The issue's Done-when is the source of truth; each green step is a commit whose body carries the resume block (`What:` / `Verified:` / `Next:` / `Ruled out:`). Deviations and wrong assumptions go on the issue as comments when they happen. Dispatches run in the background — keep working while children are in flight, and only block when the next task genuinely depends on a still-pending result. At wave close Read `~/code/claude-config/skills/reflect/SKILL.md` and run it.

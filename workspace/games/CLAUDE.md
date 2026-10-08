@@ -59,7 +59,7 @@ addons/gut/         # the GUT testing framework itself
 
 ## TDD Scope
 
-Full TDD with 100% coverage applies to **pure logic**: state machines, damage/score calculation, inventory, save/load — anything expressible as a plain script with no node-tree dependency. Scene/node-tree tests are smoke-level (instantiates, `_ready` runs clean). **There is no coverage gate on visual scenes** — state this explicitly in reviews and checklists so it's never mistaken for an oversight.
+Full TDD with 100% coverage applies to **pure logic**: state machines, damage/score calculation, inventory, save/load — anything expressible as a plain script with no node-tree dependency. Scene/node-tree tests are smoke-level (instantiates, `_ready` runs clean). **There is no coverage gate on visual scenes** — state this explicitly in reviews and issues so it's never mistaken for an oversight.
 
 ## Playtest Gate (mandatory)
 

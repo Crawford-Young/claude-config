@@ -95,7 +95,7 @@ const CAPS = {
   totalDescriptionBytes: 1024,
   skillIndexBytes: 1024,
   claudeMd: {
-    'workspace/CLAUDE.md': 7168,
+    'workspace/CLAUDE.md': 7040,
     'workspace/web/CLAUDE.md': 6400,
     'workspace/games/CLAUDE.md': 7168,
     'workspace/apps/CLAUDE.md': 2304,
@@ -250,8 +250,7 @@ function checkSkillIndex(skillsRoot, skillEntries) {
  * CLAUDE.md is caught the moment it exists — not only once someone remembers to add it to
  * CAPS.claudeMd. Returns paths relative to workspaceRoot (matching the CAPS.claudeMd key
  * shape, e.g. `workspace/web/CLAUDE.md`), sorted for deterministic output. Noise directories
- * (node_modules, dotdirs) are skipped; depth is capped the same way findActiveChecklists caps
- * it in lib.mjs, as a cheap guard against an accidental symlink loop.
+ * (node_modules, dotdirs) are skipped; depth is capped, as a cheap guard against an accidental symlink loop.
  */
 function findAllClaudeMdFiles(workspaceRoot) {
   const base = join(workspaceRoot, 'workspace');

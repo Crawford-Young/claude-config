@@ -88,4 +88,4 @@ settings.json hot-reloads; no restart needed.
 
 ## History
 
-Spec: `docs/harness-evolution/specs/2026-08-06-usage-monitor-design.md`. The spec's display section (caveman badge + wrapper child process, plain `pct→reset` text) was superseded at the T3 live QA gate — badge removed entirely, display redesigned across 4 QA rounds (tick bars, token counts, location piece, two-row split). This README documents the shipped code; issue log `docs/harness-evolution/issues/2026-08-06-p2-usage-monitor-issues.md` #3 has the round-by-round record.
+Spec: `docs@5740fed:harness-evolution/specs/2026-08-06-usage-monitor-design.md`. The spec's display section (caveman badge + wrapper child process, plain `pct→reset` text) was superseded at the T3 live QA gate — badge removed entirely, display redesigned across 4 QA rounds (tick bars, token counts, location piece, two-row split). This README documents the shipped code; issue log `docs@5740fed:harness-evolution/issues/done/2026-08-06-p2-usage-monitor-issues.md` #3 has the round-by-round record.
