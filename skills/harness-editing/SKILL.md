@@ -48,3 +48,4 @@ Stop at the first rung that fits. Each rung down is cheaper context than the nex
 - Known-broken description routing: `docs/web/TESTING-TRAPS.md` and games diagnostics are hand-loaded via domain CLAUDE.md pointer lines — don't re-attempt description rewrites for them.
 - The `claude` CLI is `~/.local/bin/claude.exe`, which is not on Git Bash's PATH, and subagent shells lack it too. CLI probes (`--help`, `plugin eval`) call it by path from the orchestrator.
 - Hooks are fail-open: errors go to `~/.claude/hook-errors.log` — check it first when a hook seems silent. Unit-test hooks by piping JSON to stdin.
+- Harness itself suspected: `claude --safe-mode` disables every harness customization at once to confirm the harness is the cause (it won't name the hook); `/doctor` runs a general checkup.

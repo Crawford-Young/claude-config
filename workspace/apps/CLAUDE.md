@@ -1,8 +1,6 @@
 # CLAUDE.md — Apps Domain Standards
 
-**Inherits:** `~/code/CLAUDE.md` (universal rules). Adds the mobile/desktop stack; overrides only where explicitly stated. Applies to every project under `~/code/apps/`.
-
----
+Adds the mobile/desktop stack. Applies to every project under `~/code/apps/`.
 
 ## Stack (key decisions)
 
@@ -15,21 +13,13 @@
 | Styling | NativeWind — Tailwind class syntax compiled to native styles |
 | Client async state | TanStack Query |
 | UI state | Zustand |
-| Validation | Zod |
+| Theme | Dark mode by default — designed and tested dark-first |
 | Testing | Jest + React Native Testing Library |
 | E2E | Maestro |
 | Build/ship | EAS Build + EAS Submit |
 | Error monitoring | Sentry |
 | Package manager | pnpm — never npm or yarn |
 | Commits | Conventional Commits — enforced by commitlint |
-
----
-
-## Carries Over Unchanged From Web
-
-TypeScript strict/no `any` · Zod at all system boundaries · TanStack Query for client async state · Zustand for UI state only · Conventional Commits · dark mode by default (designed and tested dark-first).
-
----
 
 ## Differs From Web
 
@@ -43,8 +33,6 @@ Each is a habit to actively unlearn, not just a swapped tool name:
 - **EAS, not Vercel** — a mobile app ships as a signed binary through app-store review.
 - **No Lighthouse** — the perf gate is cold-start time and sustained frame rate on a physical device.
 
----
-
 ## Definition of Done
 
 - [ ] React Native Testing Library — 100% coverage on logic
@@ -55,11 +43,3 @@ Each is a habit to actively unlearn, not just a swapped tool name:
 - [ ] Both themes (dark + light) verified on-device
 - [ ] Accessibility labels present and pass a screen-reader pass
 - [ ] Sentry — integrated and reporting
-- [ ] README.md + repo CLAUDE.md updated
-
-
----
-
-## Tauri Note
-
-No desktop project exists yet. When the first one starts, brainstorm whether it shares a codebase with the Expo app (Tauri hosts a web frontend — real option to share business logic) or is a fully separate repo. Do not assume either shape going in.

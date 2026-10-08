@@ -1,6 +1,6 @@
 # CLAUDE.md — Web Domain Standards
 
-**Inherits:** `~/code/CLAUDE.md`. Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (App Router); Python/FastAPI for standalone backend services.
+Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (App Router); Python/FastAPI for standalone backend services.
 
 > **Companion references** — load on demand, not by default:
 > - [`../docs/web/STACK.md`](../docs/web/STACK.md) — full stack tables, Published Package setup
@@ -11,7 +11,6 @@
 > - [`../docs/web/TYPESCRIPT-STYLE.md`](../docs/web/TYPESCRIPT-STYLE.md) — full TypeScript style guide
 > - [`../docs/web/TESTING-TRAPS.md`](../docs/web/TESTING-TRAPS.md) — **hand-load before writing tests or QA for interactive UI** (the unit-green/live-broken bug family)
 > - [`../docs/brand/`](../docs/brand/) — brand identity, design system, motion
-> - `~/code/claude-config/skills/visual-asset-gates/SKILL.md` — preview gate, asset pipelines, theme work
 
 ## Stack (key decisions)
 
@@ -32,8 +31,7 @@
 
 - **No monorepos** — shared code is a published package.
 - **Server-first** — RSC by default; `"use client"` only for browser APIs or interactivity; Server Actions for mutations, API routes only for external consumers.
-- **TanStack Query for client async state; Zustand for UI state only; Zod at all system boundaries.**
-- **Dark mode by default** — designed and tested dark-first, both themes verified.
+- **TanStack Query for client async state; Zustand for UI state only.**
 - `@/` path alias — never deep relative imports. Run the `simplify` skill after every implementation pass.
 
 ## Server boundaries (security-critical)
@@ -44,21 +42,17 @@
 
 ## Definition of Done
 
-- [ ] Vitest at the repo's OWN thresholds — **`vitest.config.ts` is the authority; read it before quoting a number.** Read all four metric lines.
+- [ ] Vitest at the repo's own `vitest.config.ts` thresholds, all four metrics
 - [ ] Playwright E2E green · TypeScript zero errors · ESLint + Prettier clean
 - [ ] Storybook builds; every `ui/` component has a story
 - [ ] Lighthouse 100×4 (dark + light) against a production build; documented deviations carry, don't re-litigate. Attribute a low score before treating it as wave scope — rerun on an untouched route.
 - [ ] axe zero violations in BOTH themes — per-surface jest-axe AND one browser-axe sweep per new/reshaped route (component-level green is not page-level green — TESTING-TRAPS.md)
 - [ ] Manual hands-on pass for interactive UI — drive the real feature in a browser
-- [ ] Sentry reporting · Dependabot present · no dead code · `.gitignore`/`.env.example` current
-- [ ] Repo README + CLAUDE.md updated; reflect prompted at wave close
-
-**A scaffold-era repo runs one full first-boot gate battery before its first feature wave** (build, dev boot, every gate, CI on a trivial PR) — a gate that has never run hides its whole blocker stack.
+- [ ] Sentry reporting · Dependabot present
 
 ## Gates in practice
 
-- `just check` composition differs per repo — read the recipe (or `qa.mjs --list`) before quoting a gate as covering anything; run e2e with an explicit `PORT` and verify the port holder first.
-- After any rebase touching `package.json`: `pnpm install` before gates. A fresh worktree needs `pnpm exec playwright install chromium` before its first e2e.
+- After any rebase touching `package.json`: `pnpm install` before gates.
 - Browser e2e rendering time-sensitive UI pins `timezoneId` — CI runs UTC.
 
 ## TypeScript style (the four rules checked on every PR)
@@ -78,13 +72,6 @@ Prettier owns formatting. Full guide → TYPESCRIPT-STYLE.md.
 - OIDC scope overrides REPLACE the default set — re-include `openid`, and test that it survives.
 - CSP `form-action` covers the whole redirect chain and the console error names the wrong host — prefer client-side `signIn()`; verify the served header after any CSP edit.
 - Windows: killing a backgrounded `pnpm start` wrapper leaves the node child serving the stale build — kill the port holder.
-
-## Dependencies
-
-- Policy: `~/code/.claude/rules/dependencies.md` (latest-stable-major, standalone housekeeping PRs).
-- `pnpm audit` in CI, no high/critical. Transitive overrides: pin EXACT inside the consumer's declared range, why-comment the GHSA + drop condition (pnpm 11: overrides live in `pnpm-workspace.yaml`).
-- Toolchain majors: check the Node floor against CI's `node-version` AND `engines`; read the host tool's migration guide, not just peer ranges — bundled plugins break independently.
-- Playwright bumps pin new browser builds — `playwright install chromium` is part of the bump.
 
 ## Design system
 

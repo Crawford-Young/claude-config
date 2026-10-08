@@ -17,7 +17,8 @@ Plan mode is the default planning surface. This skill carries what plan mode doe
    node ~/code/claude-config/scripts/checklist.mjs new <project-docs-dir> <slug> --branch feat/x --spec <path>
    ```
    Fill the tasks from the approved plan. The checklist is the resume file across sessions — tick via `checklist.mjs tick` (real UTC stamps), archive via `checklist.mjs done`.
-4. **Task and checklist granularity is a function of the executing model, not a constant** — a model that holds long sessions without losing the thread can profitably take larger, less-decomposed tasks than this workspace's checklist convention defaults to.
+4. **A scaffold-era repo runs one full first-boot gate battery before its first feature wave** (build, dev boot, every gate, CI on a trivial PR) — a gate that has never run hides its whole blocker stack.
+5. **Task and checklist granularity is a function of the executing model, not a constant** — a model that holds long sessions without losing the thread can profitably take larger, less-decomposed tasks than this workspace's checklist convention defaults to.
 
 ## Five checks before a plan is trusted
 
