@@ -1,6 +1,6 @@
 ---
 name: git-ops
-description: Use for workspace git conventions — landing claude-config changes, finishing a branch, syncing after a merge, or recovering from a failed rebase or stuck worktree. Carries the land.mjs commit lane and the recovery signatures.
+description: Use for workspace git conventions — landing claude-config changes, finishing a branch, syncing after a merge, recovering from a failed rebase or stuck worktree, or sweeping the workspace at end-of-wave. Carries the land.mjs commit lane, cleanup.mjs, and the recovery signatures.
 disable-model-invocation: true
 ---
 
@@ -29,6 +29,16 @@ node ~/code/claude-config/scripts/land.mjs finish <slug>         # remove worktr
 ```
 
 Live edits land on the main checkout's disk (that's what junctions load); `land.mjs` carries only YOUR paths into the commit, so concurrent sessions' in-flight edits stay behind.
+
+## End-of-wave sweep
+
+```
+node ~/code/claude-config/scripts/cleanup.mjs                       # report: dirty repos, worktrees
+node ~/code/claude-config/scripts/cleanup.mjs --kill-port 3000      # kill a dev-server port holder
+node ~/code/claude-config/scripts/cleanup.mjs --remove-worktree <p> # safe worktree removal
+```
+
+Gates green (Read `skills/qa/SKILL.md`), reflect run (Read `skills/reflect/SKILL.md`), then `cleanup.mjs` — resolve everything it reports: commit-or-explain uncommitted files, remove finished worktrees, kill stale servers. Anything left for a next session → Read `skills/continuation/SKILL.md` before `/clear`.
 
 ## Recovery signatures
 
