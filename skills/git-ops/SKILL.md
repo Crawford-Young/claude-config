@@ -8,6 +8,7 @@ disable-model-invocation: true
 
 ## Conventions (all repos)
 
+- Branch per feature/fix (`feat/` `fix/` `chore/` `refactor/`), always in a worktree.
 - Rebase-only history — `git pull --rebase`, never merge commits; PRs merge via "Rebase and merge", never squash.
 - No commit or push without user approval. Conventional Commits (commitlint enforces).
 - Explicit paths always — `git add <paths>` then `git commit --only <paths>` in shared repos (the bash-guard hook blocks `add -A` and env files).

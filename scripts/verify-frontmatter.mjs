@@ -42,9 +42,8 @@
  *   - a total byte cap across all skill + agent descriptions combined
  *   - a byte cap per CLAUDE.md file
  * All three are set at today's measured value (2026-10-08), rounded UP to the next 256 B so
- * the cap itself never flickers red on an unrelated single-byte change, plus +768 B headroom
- * on the root CLAUDE.md for a concurrent PR (#61) already landing a small, known addition
- * there. Later issues (#64, #65, #66) lower these in one place — see CAPS below. Bytes are
+ * the cap itself never flickers red on an unrelated single-byte change. Later issues (#64,
+ * #65, #66) lower these in one place — see CAPS below. Bytes are
  * measured as UTF-8 bytes with CRLF normalized to LF first, so Windows and CI agree.
  *
  * Skill index (issue #64): a skill flagged `disable-model-invocation: true` keeps its
@@ -89,18 +88,17 @@ for (const [label, root] of [
  * agents/reviewer.md) and resident sum (768 B across 3 agents, #66; held one step above the exact 768 so it never flickers — all 14 skills are flagged,
  * 2026-10-08, #64). `skillIndexBytes` is the ≤1 KB budget for skills/INDEX.md.
  * `claudeMd` keys are repo-relative paths under WORKSPACE_ROOT; values are each file's
- * measured byte count rounded up to the next 256 B (root CLAUDE.md additionally gets +768 B
- * for the #61 headroom described above).
+ * measured byte count rounded up to the next 256 B, re-measured after the #65 chain trim.
  */
 const CAPS = {
   perDescriptionBytes: 512,
   totalDescriptionBytes: 1024,
   skillIndexBytes: 1024,
   claudeMd: {
-    'workspace/CLAUDE.md': 11520,
-    'workspace/web/CLAUDE.md': 7936,
-    'workspace/games/CLAUDE.md': 7936,
-    'workspace/apps/CLAUDE.md': 3072,
+    'workspace/CLAUDE.md': 7168,
+    'workspace/web/CLAUDE.md': 6400,
+    'workspace/games/CLAUDE.md': 7168,
+    'workspace/apps/CLAUDE.md': 2304,
   },
 };
 

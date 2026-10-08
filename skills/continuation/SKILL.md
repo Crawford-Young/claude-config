@@ -40,3 +40,5 @@ Blockers first: <uncommitted work, unmerged branch, unrun migration>
 4. Tell the user: "Safe to `/clear`. Paste the prompt above to resume."
 
 Every line must pass one test: does the next session need this to **act**? Mission briefing, not session diary.
+
+Auto-compact thrashing despite the context-gauge gate (e.g. one huge paste): recover via chunked reads → focused `/compact` → subagent offload → `/clear`.
