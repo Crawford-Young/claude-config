@@ -6,19 +6,19 @@ disable-model-invocation: true
 
 # Continuation
 
-Produce a **copy-paste prompt** the user pastes after `/clear`. No handoff file — the checklist, issue log, and git already record durable state; the prompt points at them and carries only what exists nowhere on disk.
+Ask first, with one AskUserQuestion: clear or continue. Emit the block only if the user picks clear — never in the same reply as the ask, and never unprompted.
 
-**Produce one whenever something remains to do after the clear** — a closed wave with carried issues or a named next phase still needs one. Skip only when genuinely nothing remains; then say so in one line.
+## If continue
 
-## Steps
+Say so in one line. No block.
 
-1. Gather the mechanical state:
-   ```
-   node ~/code/claude-config/scripts/session-state.mjs
-   ```
-   (active checklists with next task, repos that are dirty or off-main)
-2. Reconcile: if checklist boxes don't match reality, tick them now — never hand off a checklist that lies.
-3. Emit the prompt, fenced, self-contained, first and last lines the literal markers below — the terminal renders fences invisibly, so the markers are the only visible copy boundary:
+## If clear
+
+Produce a **copy-paste prompt** the user pastes after `/clear`. No handoff file — the GitHub issue and the last commit body already record durable state; the prompt points at them and carries only what exists nowhere on disk.
+
+Tell the user to type `/rename <repo>-<issue>` as its own message first (agents can't run slash commands), then paste the block below as a second message.
+
+Emit the prompt, fenced, self-contained, first and last lines the literal markers below — the terminal renders fences invisibly, so the markers are the only visible copy boundary:
 
 ````markdown
 ```
@@ -26,9 +26,10 @@ Produce a **copy-paste prompt** the user pastes after `/clear`. No handoff file 
 <One line: what the next session is for.>
 
 Read first:
-- <checklist / issue log / spec paths — the durable record>
+- GitHub issue #<issue> — its Done-when checkboxes
+- `git log -1`'s `Next:` line
 
-<Mission — enough to start without re-deriving the goal; cite paths instead of restating their contents.>
+<Mission — enough to start without re-deriving the goal; cite the issue and commit instead of restating their contents.>
 
 Unresolved: <decisions the next session must make, with the trade-off>
 Traps: <what will silently go wrong — especially anything that passes gates while wrong>
@@ -36,8 +37,6 @@ Blockers first: <uncommitted work, unmerged branch, unrun migration>
 ===== CONTINUATION END =====
 ```
 ````
-
-4. Tell the user: "Safe to `/clear`. Paste the prompt above to resume."
 
 Every line must pass one test: does the next session need this to **act**? Mission briefing, not session diary.
 
