@@ -23,6 +23,12 @@
 //      AskUserQuestion answer the model cannot forge — and is single-use per
 //      verb, spent from a small state file keyed by that record's uuid, so
 //      one approving answer covers push → pr create → pr merge once each.
+//      A command holding more than one gated verb is blocked outright (one
+//      gated verb per Bash call), so a compound never spends one approval twice.
+//   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
+//      codegen, show-report, show-trace, open — need the user's browser consent
+//      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
+//      once per session). Headless `playwright test` stays ungated.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -39,11 +45,23 @@
 // checked nothing, and a silent allow is invisible — a loud block is not.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { BILLED_MODEL, block, claudeDir, consumeClearance, logBilled, run } from './_hooklib.mjs';
+import {
+  BILLED_MODEL,
+  DENY_RE,
+  block,
+  browserGateReason,
+  claudeDir,
+  consumeClearance,
+  latestAnswer,
+  logBilled,
+  readState,
+  run,
+  writeState,
+} from './_hooklib.mjs';
 
 const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code');
 
@@ -167,7 +185,7 @@ export function staticCheck(raw) {
   }
 
   // 3. gate output piped to tail/head
-  const gate = /\b(pnpm (test|lint|typecheck|e2e|vitest)|vitest\b|npx? tsc\b|tsc --noEmit|just check|npm test)\b/;
+  const gate = /\b((?:pnpm|npm|yarn)(?: run)? (test|lint|typecheck|e2e|vitest)|vitest\b|npx? tsc\b|tsc --noEmit|just check|node --test|playwright test)\b/;
   if (gate.test(cmd) && /\|\s*(tail|head)\b/.test(cmd)) {
     return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use scripts/qa.mjs for compact output).';
   }
@@ -263,54 +281,34 @@ function ghCalls(raw, cwd) {
   const out = [];
   for (const { cmd, words: w } of commands(raw, cwd)) {
     if (!/^gh(?:\.exe)?$/i.test(cmd)) continue;
-    const nonFlag = w.slice(1).filter((a) => !a.startsWith('-'));
+    // `-R x` / `--repo x` take a value, before the subcommand or after it.
+    const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
     out.push({ sub: nonFlag[0] || null, action: nonFlag[1] || null });
   }
   return out;
 }
 
-/** 8. The verb a command would spend a push/PR approval on, or null when
- *  nothing here is gated — callers must check this FIRST and read nothing
- *  else when it's null, so a non-gated command costs zero extra I/O.
- *  `git push --dry-run` is exempt. */
-export function gatedVerb(raw, cwd) {
+/** 8. Every verb a command would spend a push/PR approval on, in order —
+ *  empty when nothing here is gated. `git push --dry-run` is exempt. */
+export function gatedVerbs(raw, cwd) {
   const cmd = scrub(raw);
+  const out = [];
   for (const { sub, args } of gitCalls(cmd, cwd)) {
-    if (sub === 'push' && !args.includes('--dry-run')) return 'git push';
+    if (sub === 'push' && !args.includes('--dry-run')) out.push('git push');
   }
   for (const { sub, action } of ghCalls(cmd, cwd)) {
-    if (sub === 'pr' && action === 'create') return 'gh pr create';
-    if (sub === 'pr' && action === 'merge') return 'gh pr merge';
+    if (sub === 'pr' && (action === 'create' || action === 'merge')) out.push(`gh pr ${action}`);
   }
-  return null;
+  return out;
 }
 
-/** Walk a transcript JSONL file backward for the most recent user record
- *  carrying an AskUserQuestion answer (`toolUseResult.answers`: question text
- *  -> answer text, alongside the record's own `uuid`/`timestamp`). Returns
- *  null when the transcript holds none. Throws on a missing/unreadable file —
- *  callers fail closed. */
-export function latestAnswer(transcriptPath) {
-  const lines = readFileSync(transcriptPath, 'utf8').split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const l = lines[i];
-    if (!l || l[0] !== '{') continue;
-    let o;
-    try {
-      o = JSON.parse(l);
-    } catch {
-      continue;
-    }
-    const answers = o?.toolUseResult?.answers;
-    if (o?.type === 'user' && answers && typeof answers === 'object' && !Array.isArray(answers)) {
-      return { uuid: o.uuid, timestamp: o.timestamp, answers };
-    }
-  }
-  return null;
+/** The first gated verb, or null — callers must check this FIRST and read
+ *  nothing else when it's null, so a non-gated command costs zero extra I/O. */
+export function gatedVerb(raw, cwd) {
+  return gatedVerbs(raw, cwd)[0] || null;
 }
 
 const APPROVE_RE = /\b(commit|push|pr|pull request|merge|ship|land)\b/i;
-const DENY_RE = /\b(hold|review first|don'?t|do not|not yet|wait|no)\b/i;
 
 /** Does some answer value read as approving (mentions the act) without also
  *  reading as a refusal? Only the record's own answers are considered — the
@@ -321,33 +319,16 @@ export function isApproving(answers) {
 
 export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
 
-function readApprovalState(file) {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function writeApprovalState(file, state) {
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(state));
-  } catch {
-    // advisory persistence only — losing it costs a duplicate ask, nothing more
-  }
-}
-
 /** Has `verb` already been spent against approval `uuid`? Records it spent on
  *  first use. Self-trims to the newest 200 approval uuids. */
 function spend(uuid, verb, file) {
-  const state = readApprovalState(file);
+  const state = readState(file);
   const entry = state[uuid] || [];
   if (entry.includes(verb)) return true;
   state[uuid] = [...entry, verb];
   const keys = Object.keys(state);
   if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete state[k];
-  writeApprovalState(file, state);
+  writeState(file, state);
   return false;
 }
 
@@ -358,8 +339,12 @@ const askRemedy = (verb) =>
  *  transcript, spent once per verb. `transcriptPath` is read lazily — a
  *  non-gated command never touches disk here. */
 export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile()) {
-  const verb = gatedVerb(raw, cwd);
-  if (!verb) return null;
+  const verbs = gatedVerbs(raw, cwd);
+  if (!verbs.length) return null;
+  if (verbs.length > 1) {
+    return `This command holds ${verbs.length} gated verbs (${verbs.join(', ')}) — run each gated verb in its own Bash call, so each one is checked against the user's approval on its own. Nothing was spent.`;
+  }
+  const [verb] = verbs;
 
   if (!transcriptPath || !existsSync(transcriptPath)) {
     return `${verb} needs explicit user approval (CLAUDE.md: "No commit or push without explicit user approval"), but there is no transcript to read it from. ${askRemedy(verb)}`;
@@ -384,6 +369,36 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
     return `${verb} already spent that approval — one push/PR per approving answer. ${askRemedy(verb)}`;
   }
 
+  return null;
+}
+
+const PW_LAUNCHER = /^(?:npx|pnpx|bunx|pnpm|yarn|npm|bun)(?:\.cmd|\.exe)?$/i;
+const PW_VISIBLE_SUB = /^(?:codegen|show-report|show-trace|open)$/;
+const PW_VISIBLE_FLAG = /^--(?:headed|ui|debug)(?:=.*)?$/;
+
+/** 9. A description of the visible-browser launch a command makes, or null.
+ *  Parsed by command word: `playwright` itself, or behind a package runner
+ *  (`npx`, `pnpm exec`, `yarn dlx` …). `--headed` on any other command (a
+ *  package script forwarding it) counts too. Headless `playwright test` is a
+ *  QA gate and stays ungated. */
+export function browserCommand(raw, cwd) {
+  for (const { cmd, words: w } of commands(scrub(raw), cwd)) {
+    let p = -1;
+    if (/^playwright(?:\.cmd|\.exe)?$/i.test(cmd)) p = 0;
+    else if (PW_LAUNCHER.test(cmd)) {
+      const i = w.findIndex((a, j) => j > 0 && !/^(?:-.*|exec|dlx|x|run)$/.test(a));
+      if (i !== -1 && /^(?:@playwright\/test|playwright)$/.test(w[i])) p = i;
+    }
+    const args = w.slice(p === -1 ? 1 : p + 1);
+    if (p === -1) {
+      if (args.includes('--headed')) return `${cmd} --headed`;
+      continue;
+    }
+    const sub = args.find((a) => !a.startsWith('-'));
+    if (sub && PW_VISIBLE_SUB.test(sub)) return `playwright ${sub}`;
+    const flag = args.find((a) => PW_VISIBLE_FLAG.test(a));
+    if (flag) return `playwright ${flag}`;
+  }
   return null;
 }
 
@@ -447,7 +462,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     (payload) => {
       const cmd = payload?.tool_input?.command || '';
       const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
-      const reason = staticCheck(cmd) || branchRules(cmd, cwd) || pushGateReason(cmd, cwd, payload?.transcript_path);
+      const browser = browserCommand(cmd, cwd);
+      // Browser before push: a blocked command never spends a push approval.
+      const reason =
+        staticCheck(cmd) ||
+        branchRules(cmd, cwd) ||
+        (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
+        pushGateReason(cmd, cwd, payload?.transcript_path);
       if (reason) block(reason);
       // Last, so a command another rule blocks never spends the clearance.
       const billed = billedLaunch(cmd);
