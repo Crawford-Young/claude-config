@@ -15,6 +15,7 @@ import {
   billedLaunch,
   gatedVerb,
   pushGateReason,
+  browserCommand,
 } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
@@ -454,4 +455,103 @@ test('end-to-end through the real hook: git push is gated and spends its approva
   assert.equal(guardRunT('git push', h, transcriptPath), 2);
   // A non-gated command with the very same transcript is untouched.
   assert.equal(guardRunT('git status', h, transcriptPath), 0);
+});
+
+// --- #75 follow-up (a): one gated verb per Bash call ---------------------------
+
+test('a command with more than one gated verb is blocked without spending the approval', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
+  for (const cmd of ['git push; gh pr create --fill', 'git push && git push origin v1', 'gh pr create --fill && gh pr merge --rebase']) {
+    const reason = pushGateReason(cmd, '/repo', t, stateFile);
+    assert.match(reason || '', /own Bash call/, cmd);
+  }
+  // Nothing was spent: each verb still passes once on its own.
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile), null);
+});
+
+test('one gated verb next to ungated commands is still a single gated call', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
+  assert.equal(pushGateReason('git status && git push -u origin feat/x', '/repo', t, stateFile), null);
+});
+
+// --- #75 follow-up (b): gh global flags before the subcommand -------------------
+
+test('gatedVerb sees gh pr create/merge behind -R / --repo / --repo=', () => {
+  assert.equal(gatedVerb('gh -R owner/repo pr merge 12 --rebase', '/repo'), 'gh pr merge');
+  assert.equal(gatedVerb('gh --repo owner/repo pr create --fill', '/repo'), 'gh pr create');
+  assert.equal(gatedVerb('gh --repo=owner/repo pr merge 12', '/repo'), 'gh pr merge');
+  assert.equal(gatedVerb('gh pr -R owner/repo merge 12', '/repo'), 'gh pr merge');
+  assert.equal(gatedVerb('gh -R owner/repo pr view 12', '/repo'), null);
+});
+
+// --- #75 gate-pipe row: common gate forms piped to tail/head --------------------
+
+test('common gate forms piped to tail/head are blocked', () => {
+  assert.ok(staticCheck('pnpm test | tail'));
+  assert.ok(staticCheck('npm run lint | head'));
+  assert.ok(staticCheck('node --test scripts/test/ | tail -5'));
+  assert.ok(staticCheck('pnpm run typecheck 2>&1 | tail -20'));
+  assert.ok(staticCheck('npx playwright test | tail'));
+  assert.equal(staticCheck('npm run lint'), null);
+  assert.equal(staticCheck('node --test scripts/test/'), null);
+  assert.equal(staticCheck('node scripts/foo.mjs | head'), null);
+});
+
+// --- #75 browser consent: commands that open a visible browser -----------------
+
+test('browserCommand flags playwright forms that open a visible browser', () => {
+  for (const cmd of [
+    'npx playwright test --headed',
+    'pnpm exec playwright test e2e/x.spec.ts --headed',
+    'pnpm playwright test --ui',
+    'npx playwright codegen http://localhost:3000',
+    'npx playwright show-report',
+    'playwright open http://localhost:3000',
+    'cd web && npx playwright test --headed',
+  ]) {
+    assert.ok(browserCommand(cmd, '/repo'), cmd);
+  }
+});
+
+test('headless playwright and mentions of it stay ungated', () => {
+  for (const cmd of [
+    'npx playwright test',
+    'pnpm exec playwright test e2e/x.spec.ts --reporter=line',
+    'pnpm e2e',
+    'echo "npx playwright test --headed"',
+    'grep -rn "playwright codegen" docs',
+    'git commit -m "run playwright --headed"',
+  ]) {
+    assert.equal(browserCommand(cmd, '/repo'), null, cmd);
+  }
+});
+
+test('end-to-end: a headed playwright run needs a browser answer, then the session is granted', () => {
+  const h = tmpHome();
+  const stateEnv = { CLAUDE_BROWSER_GATE_STATE: join(h, 'browser.json') };
+  const run = (command, transcriptPath, session_id) => {
+    try {
+      execFileSync(process.execPath, [hookPath], {
+        input: JSON.stringify({ tool_input: { command }, cwd: h, transcript_path: transcriptPath, session_id }),
+        env: { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code'), ...stateEnv },
+        encoding: 'utf8',
+      });
+      return 0;
+    } catch (e) {
+      return e.status;
+    }
+  };
+  const push = transcriptWith(h, { 'Ship?': 'Push + PR' });
+  const browser = transcriptWith(h, { 'Launch the lab?': 'Yes, open Chrome' });
+  assert.equal(run('npx playwright test --headed', join(h, 'missing.jsonl'), 's1'), 2); // fail closed
+  assert.equal(run('npx playwright test --headed', push, 's1'), 2); // not a browser answer
+  assert.equal(run('npx playwright test', push, 's1'), 0); // headless: ungated
+  assert.equal(run('npx playwright test --headed', browser, 's1'), 0);
+  // Granted for the session: later calls pass even once the latest answer moved on.
+  assert.equal(run('npx playwright codegen', push, 's1'), 0);
+  // A different session is not granted.
+  assert.equal(run('npx playwright codegen', push, 's2'), 2);
 });

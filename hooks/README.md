@@ -5,7 +5,7 @@ git history). A rule that must hold every time lives here or in a deny rule,
 never as CLAUDE.md prose. **Fail-open is the default**: errors append to
 `~/.claude/hook-errors.log` and exit 0 — check that log first when a hook
 seems silent. **Guards opt into fail-closed** (`bash-guard.mjs`,
-`agent-model-guard.mjs`, `pre-model-switch.mjs`, via `run(..., { failClosed:
+`agent-model-guard.mjs`, `pre-model-switch.mjs`, `browser-gate.mjs`, via `run(..., { failClosed:
 true })`): a fail-open guard failure is silent and unbounded (a crashed
 `bash-guard` waves through `git add -A`; a crashed `agent-model-guard` waves
 through an unclearanced usage-billed dispatch), while a fail-closed failure
@@ -14,7 +14,7 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer in the transcript (`git push --dry-run` exempt). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer in the transcript (`git push --dry-run` exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). |
 
 **Commands, not text** — the git rules (1, 2, 5, 6) and the cmdlet rule (4)
 read parsed commands, so quoted text never trips them: `grep -rn "git add -A"`
@@ -51,6 +51,7 @@ fixed false verdict; change them only with a test:
   fresh answer. A missing/unreadable transcript or a non-approving/absent
   answer blocks with a message telling the model to ask via AskUserQuestion
   and retry. A non-gated command never reads the transcript.
+| `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
@@ -77,7 +78,8 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
 "hooks": {
   "PreToolUse": [
     { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/bash-guard.mjs"] }] },
-    { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs"] }] }
+    { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs"] }] },
+    { "matcher": "mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/browser-gate.mjs"] }] }
   ],
   "UserPromptSubmit": [ { "hooks": [
     { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs"] },

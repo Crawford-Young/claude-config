@@ -304,7 +304,7 @@
    "kind": "hook",
    "label": "bash-guard",
    "file": "hooks/bash-guard.mjs",
-   "summary": "PreToolUse:Bash|PowerShell — eight rules, incl. shell-launched fable (rule 7, added in C8) and push/PR approval (rule 8, #75).",
+   "summary": "PreToolUse:Bash|PowerShell — nine rules, incl. shell-launched fable (rule 7, added in C8), push/PR approval (rule 8, #75) and headed-Playwright browser consent (rule 9, #75).",
    "rules": [
     "No git add -A / commit -a",
     "No .env in git",
@@ -313,7 +313,21 @@
     "No commit on main in code repos (each git call judged in its own cd'd repo)",
     "claude-config main never switches branch or restores files",
     "claude --model fable needs FABLE OK",
-    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer in the transcript, single-use per verb"
+    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer in the transcript, single-use per verb",
+    "One gated verb per Bash call — a compound with two is blocked unspent",
+    "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated"
+   ]
+  },
+  {
+   "id": "hook:browser-gate",
+   "kind": "hook",
+   "label": "browser-gate",
+   "file": "hooks/browser-gate.mjs",
+   "summary": "PreToolUse:mcp__claude-in-chrome__.* — a visible browser needs the user's AskUserQuestion consent, granted once per session (#75).",
+   "rules": [
+    "Fails closed",
+    "tabs_context_mcp and list_connected_browsers are never gated",
+    "One approving answer grants the rest of the session"
    ]
   },
   {
@@ -666,6 +680,14 @@
    "label": "push-gate-approvals.json",
    "file": "~/.claude/push-gate-approvals.json",
    "summary": "Which push/PR verbs each AskUserQuestion approval (keyed by transcript record uuid) has already spent (#75). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
+   "external": true
+  },
+  {
+   "id": "store:browser-gate-sessions",
+   "kind": "store",
+   "label": "browser-gate-sessions.json",
+   "file": "~/.claude/browser-gate-sessions.json",
+   "summary": "Sessions (by session_id) the user has granted a visible browser (#75). Self-trims to the newest 200. CLAUDE_BROWSER_GATE_STATE overrides the path.",
    "external": true
   }
  ],
@@ -1229,6 +1251,30 @@
    "to": "store:push-gate-approvals",
    "kind": "writes",
    "label": "rule 8: spends the approval per verb"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:browser-gate",
+   "kind": "loads",
+   "label": "PreToolUse:mcp__claude-in-chrome__.*"
+  },
+  {
+   "from": "hook:browser-gate",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "shared approval read"
+  },
+  {
+   "from": "hook:_hooklib",
+   "to": "store:browser-gate-sessions",
+   "kind": "writes",
+   "label": "per-session browser grant"
+  },
+  {
+   "from": "hook:browser-gate",
+   "to": "phase:qa",
+   "kind": "gates",
+   "label": "visible browser needs consent"
   }
  ]
 }

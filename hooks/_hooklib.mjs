@@ -103,3 +103,93 @@ export function appendTrimmed(file, line, { maxBytes = 512 * 1024, keepLines = 2
     // trim is best-effort
   }
 }
+
+// ---- user-approval gates (bash-guard push/PR, browser-gate) -----------------
+// Approval is the user's most recent AskUserQuestion answer — a record the
+// model cannot forge. Shared so every gate reads it, and refusals, alike.
+
+/** Walk a transcript JSONL file backward for the most recent user record
+ *  carrying an AskUserQuestion answer (`toolUseResult.answers`: question text
+ *  -> answer text, alongside the record's own `uuid`/`timestamp`). Returns
+ *  null when the transcript holds none. Throws on a missing/unreadable file —
+ *  callers fail closed. */
+export function latestAnswer(transcriptPath) {
+  const lines = readFileSync(transcriptPath, 'utf8').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (!l || l[0] !== '{') continue;
+    let o;
+    try {
+      o = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    const answers = o?.toolUseResult?.answers;
+    if (o?.type === 'user' && answers && typeof answers === 'object' && !Array.isArray(answers)) {
+      return { uuid: o.uuid, timestamp: o.timestamp, answers };
+    }
+  }
+  return null;
+}
+
+export const DENY_RE = /\b(hold|review first|don'?t|do not|not yet|wait|no)\b/i;
+
+/** A small JSON state file; absent or corrupt reads as empty. */
+export function readState(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+/** Advisory persistence only — a lost write costs a duplicate ask, nothing more. */
+export function writeState(file, state) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(state));
+  } catch {
+    // best-effort
+  }
+}
+
+// "open" is left out on purpose: "Push + open PR" must not grant a browser.
+const BROWSER_RE = /\b(browser|chrome|launch|playwright|headed)\b/i;
+
+/** Does some answer value read as approving a visible browser? */
+export function isBrowserApproving(answers) {
+  return Object.values(answers).some((v) => BROWSER_RE.test(v) && !DENY_RE.test(v));
+}
+
+export const browserGateStateFile = () => process.env.CLAUDE_BROWSER_GATE_STATE || join(claudeDir, 'browser-gate-sessions.json');
+
+const browserRemedy =
+  'Ask the user with AskUserQuestion — give it an option that approves opening the browser (answer wording like "launch"/"browser"/"Chrome", without "hold"/"wait"/"no") — then retry. One approval covers the rest of the session.';
+
+/** A visible browser (Chrome MCP, headed Playwright) needs the user's consent
+ *  once per session: an approving answer records `sessionId` in the state
+ *  file, and every later browser call in that session passes without reading
+ *  the transcript. Returns the block reason, or null to allow. Fails closed. */
+export function browserGateReason(what, sessionId, transcriptPath, stateFile = browserGateStateFile()) {
+  const state = readState(stateFile);
+  if (sessionId && state[sessionId]) return null;
+  if (!transcriptPath || !existsSync(transcriptPath)) {
+    return `${what} opens a visible browser and needs the user's consent, but there is no transcript to read it from. ${browserRemedy}`;
+  }
+  let record;
+  try {
+    record = latestAnswer(transcriptPath);
+  } catch {
+    return `${what} opens a visible browser and needs the user's consent, but the transcript could not be read. ${browserRemedy}`;
+  }
+  if (!record || !isBrowserApproving(record.answers)) {
+    return `${what} opens a visible browser and needs the user's consent; the most recent AskUserQuestion answer does not give it. ${browserRemedy}`;
+  }
+  if (sessionId) {
+    state[sessionId] = new Date().toISOString();
+    const keys = Object.keys(state);
+    if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete state[k];
+    writeState(stateFile, state);
+  }
+  return null;
+}
