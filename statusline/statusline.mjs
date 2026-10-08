@@ -134,19 +134,40 @@ function namePiece(status, env) {
   return `${ESC}[2m~${cut}${RST}`;
 }
 
-/** repo@branch for the session's directory; bare folder name outside git. */
-function locationPiece(status) {
-  const dir = status.workspace?.current_dir || status.cwd;
-  if (!dir) return null;
+/** Toplevel the active-repo hook last recorded for this session, or null. */
+function activeTop(sessionId, env) {
+  if (typeof sessionId !== 'string' || !/^[\w-]+$/.test(sessionId)) return null;
+  const dir = env.CLAUDE_ACTIVE_REPO_DIR || join(homedir(), '.claude', 'active-repo');
   try {
-    if (!statSync(dir).isDirectory()) return null;
+    const top = JSON.parse(readText(join(dir, `${sessionId}.json`)) || 'null')?.top;
+    return typeof top === 'string' && top ? top : null;
   } catch {
     return null;
   }
-  const g = gitInfo(dir);
-  if (!g) return basename(dir);
-  const name = basename(g.top);
-  return g.branch ? `${name}@${g.branch}` : name;
+}
+
+/**
+ * repo@branch for the checkout being edited (active-repo hook), else the
+ * session's directory. A linked worktree names the repo it belongs to plus a dim
+ * `wt`; the label turns yellow on main/master. Bare folder name outside git.
+ */
+function locationPiece(status, env) {
+  const top = activeTop(status.session_id, env);
+  const g = (top && gitInfo(top)) || null;
+  const dir = status.workspace?.current_dir || status.cwd;
+  if (!g && !dir) return null;
+  const info = g || gitInfo(dir);
+  if (!info) {
+    try {
+      return statSync(dir).isDirectory() ? basename(dir) : null;
+    } catch {
+      return null;
+    }
+  }
+  const name = basename(info.owner || info.top);
+  const label = info.branch ? `${name}@${info.branch}` : name;
+  const shown = info.branch === 'main' || info.branch === 'master' ? `${ESC}[33m${label}${RST}` : label;
+  return info.worktree ? `${shown} ${ESC}[2mwt${RST}` : shown;
 }
 
 function contextPiece(cw) {
@@ -204,7 +225,7 @@ export function render(status, env = process.env) {
     };
     const name = piece(() => namePiece(status, env));
     if (name) top.push(name);
-    const loc = piece(() => locationPiece(status));
+    const loc = piece(() => locationPiece(status, env));
     if (loc) top.push(loc);
     if (status.model?.display_name) top.push(String(status.model.display_name));
     if (status.effort?.level) top.push(String(status.effort.level));
