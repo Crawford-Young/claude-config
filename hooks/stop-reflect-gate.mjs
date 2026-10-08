@@ -68,7 +68,7 @@ run('stop-reflect-gate', (payload) => {
     if (now - st.mtimeMs > WINDOW_MS) continue;
     if (needsReflect(readFileSync(f, 'utf8'))) {
       block(
-        `Checklist ${f} is complete except reflect. Before ending: prompt the user to run the reflect skill now (or to explicitly skip it). This gate blocks once per turn end — the retry passes — but it stores no decision, so it fires again at every turn end until that reflect line is ticked or the checklist moves to done/. If the user has already declined, say that and end the turn; do not re-decide silently, and do not run reflect on a wave this session did not execute.`,
+        `Checklist ${f} is complete except reflect. Before ending: prompt the user to run reflect now — Read ~/code/claude-config/skills/reflect/SKILL.md — or to explicitly skip it. This gate blocks once per turn end — the retry passes — but it stores no decision, so it fires again at every turn end until that reflect line is ticked or the checklist moves to done/. If the user has already declined, say that and end the turn; do not re-decide silently, and do not run reflect on a wave this session did not execute.`,
       );
     }
   }

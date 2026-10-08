@@ -1,6 +1,7 @@
 ---
 name: harness-editing
 description: Use before editing the workspace harness — the CLAUDE.md chain, claude-config, hooks, skills, agent defs, or settings.json. Carries the layout map, the live-vs-commit rule, and verification discipline for harness changes.
+disable-model-invocation: true
 ---
 
 # Harness Editing
@@ -39,7 +40,7 @@ Stop at the first rung that fits. Each rung down is cheaper context than the nex
 - Separately from whether a rule becomes a hook: **scaffolding that prevents an irreversible mistake stays even when it duplicates something stated elsewhere** (ordering constraints like "commit `.gitignore` before any other file" or "no changeset before verification passes") — scaffolding that only restates a habit or a default behavior the executing agent already follows (e.g. the TDD chain the implementer agent definition already enforces) is a deletion candidate.
 - **`/rewind`'s code-restore is a no-op on claude-config's live-edited harness files** — junctioned/symlinked into `~/code` and `~/.claude`, so `/rewind` can't see through the link to what changed; git via `land.mjs` is the only real undo path.
 - **New rules are one imperative line that names its reason** (why, not when) — a rule stripped of its reason is the one the next audit prunes. The incident story goes to `docs/harness-evolution/archive/rule-history.md`. Recurrence despite a rule = prune or mechanize, never restate louder.
-- Skill frontmatter: an unquoted `: ` in `description` silently unpublishes the skill (`verify-frontmatter.mjs` gates it in CI); lead descriptions with discriminating keywords.
+- Skill frontmatter: an unquoted `: ` in `description` silently unpublishes the skill (`verify-frontmatter.mjs` gates it in CI); lead descriptions with discriminating keywords. Every skill carries `disable-model-invocation: true` and a trigger line in `skills/INDEX.md` (injected by session-start; CI fails a skill missing from it).
 
 ## Verification
 

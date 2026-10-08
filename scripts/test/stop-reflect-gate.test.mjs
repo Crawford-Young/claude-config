@@ -39,6 +39,8 @@ test('reminds once, then lets the stop pass', () => {
   const first = runHook({}, docs);
   assert.equal(first.code, 2, 'first stop attempt should block with the reminder');
   assert.match(first.stderr, /prompt the user/i);
+  // #64: skills are not Skill-tool invocable — the gate points at the file to Read
+  assert.match(first.stderr, /Read ~\/code\/claude-config\/skills\/reflect\/SKILL\.md/);
 
   const second = runHook({ stop_hook_active: true }, docs);
   assert.equal(second.code, 0, 'retry must pass — relaxed gate reminds once');

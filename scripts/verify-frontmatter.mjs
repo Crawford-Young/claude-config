@@ -46,6 +46,13 @@
  * on the root CLAUDE.md for a concurrent PR (#61) already landing a small, known addition
  * there. Later issues (#64, #65, #66) lower these in one place — see CAPS below. Bytes are
  * measured as UTF-8 bytes with CRLF normalized to LF first, so Windows and CI agree.
+ *
+ * Skill index (issue #64): a skill flagged `disable-model-invocation: true` keeps its
+ * description out of context (it only feeds the `/` menu), so it drops out of both description
+ * caps. Routing to it moves to skills/INDEX.md, which session-start.mjs injects every session —
+ * so INDEX.md is resident instead, under its own cap, and every skill must be listed in it by its
+ * `<name>/SKILL.md` path. A flagged skill missing from the index is reachable only by `/name`,
+ * the same unroutable-but-green class the frontmatter check above exists for.
  */
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
@@ -77,17 +84,18 @@ for (const [label, root] of [
 }
 
 /**
- * Every cap in ONE obvious place — see file header. `perDescriptionBytes` is today's measured
- * max (411 B, skills/visual-asset-gates/SKILL.md) rounded up to 256 B. `totalDescriptionBytes`
- * was 5376 B (sum 5128 B across 14 skills + 6 agents) and was lowered by the 954 B the #66
- * roster cut removed (6 agents → 3; sum now 4174 B).
+ * Every cap in ONE obvious place — see file header. `perDescriptionBytes` and
+ * `totalDescriptionBytes` are rounded-up-to-256 versions of the measured resident max (271 B,
+ * agents/reviewer.md) and resident sum (768 B across 3 agents, #66; held one step above the exact 768 so it never flickers — all 14 skills are flagged,
+ * 2026-10-08, #64). `skillIndexBytes` is the ≤1 KB budget for skills/INDEX.md.
  * `claudeMd` keys are repo-relative paths under WORKSPACE_ROOT; values are each file's
  * measured byte count rounded up to the next 256 B (root CLAUDE.md additionally gets +768 B
  * for the #61 headroom described above).
  */
 const CAPS = {
   perDescriptionBytes: 512,
-  totalDescriptionBytes: 4422,
+  totalDescriptionBytes: 1024,
+  skillIndexBytes: 1024,
   claudeMd: {
     'workspace/CLAUDE.md': 11520,
     'workspace/web/CLAUDE.md': 7936,
@@ -186,7 +194,8 @@ function checkRoot(entries) {
       }
     }
 
-    if (fields.has('description') && fields.get('description') !== '') {
+    const resident = fields.get('disable-model-invocation') !== 'true';
+    if (resident && fields.has('description') && fields.get('description') !== '') {
       descriptions.push({ rel, bytes: byteLength(fields.get('description')) });
     }
   }
@@ -215,6 +224,27 @@ function checkDescriptionCaps(descriptions) {
     );
   }
   return { problems, total };
+}
+
+/**
+ * skills/INDEX.md (#64): must exist, stay under CAPS.skillIndexBytes, and name every skill's
+ * `<name>/SKILL.md` path — session-start.mjs injects it as the only routing to flagged skills.
+ */
+function checkSkillIndex(skillsRoot, skillEntries) {
+  const file = join(skillsRoot, 'INDEX.md');
+  if (!existsSync(file)) {
+    return { problems: [`INDEX.md: missing at ${file} — session-start would inject no skill routing`], bytes: 0 };
+  }
+  const text = readFileSync(file, 'utf8');
+  const bytes = byteLength(text);
+  const problems = [];
+  if (bytes > CAPS.skillIndexBytes) {
+    problems.push(`INDEX.md: ${bytes} B, over the cap of ${CAPS.skillIndexBytes} B`);
+  }
+  for (const { rel } of skillEntries) {
+    if (!text.includes(rel)) problems.push(`INDEX.md: ${rel} is not listed — the skill is unroutable`);
+  }
+  return { problems, bytes };
 }
 
 /**
@@ -285,7 +315,8 @@ function checkClaudeMdCaps(workspaceRoot) {
   return { problems, sizes };
 }
 
-const skillsResult = checkRoot(enumerateSkills(SKILLS_ROOT));
+const skillEntries = enumerateSkills(SKILLS_ROOT);
+const skillsResult = checkRoot(skillEntries);
 const agentsResult = checkRoot(enumerateAgents(AGENTS_ROOT));
 
 console.log(`skills checked: ${skillsResult.checked}`);
@@ -319,13 +350,19 @@ if (zeroCountRoots.length > 0) {
 const allDescriptions = [...skillsResult.descriptions, ...agentsResult.descriptions];
 const descriptionCapResult = checkDescriptionCaps(allDescriptions);
 const claudeMdCapResult = checkClaudeMdCaps(WORKSPACE_ROOT);
+const skillIndexResult = checkSkillIndex(SKILLS_ROOT, skillEntries);
 
 console.log(`descriptions measured: ${allDescriptions.length} (${descriptionCapResult.total} B total)`);
+console.log(`skills/INDEX.md: ${skillIndexResult.bytes} B (cap ${CAPS.skillIndexBytes} B)`);
 for (const { rel, bytes, cap } of claudeMdCapResult.sizes) {
   console.log(`${rel}: ${bytes} B (cap ${cap} B)`);
 }
 
-const residentProblems = [...descriptionCapResult.problems, ...claudeMdCapResult.problems];
+const residentProblems = [
+  ...descriptionCapResult.problems,
+  ...skillIndexResult.problems,
+  ...claudeMdCapResult.problems,
+];
 if (residentProblems.length > 0) {
   console.error(`\n--- RESIDENT BYTE CAP EXCEEDED (${residentProblems.length}) — BLOCKER ---`);
   for (const p of residentProblems) console.error(`  ${p}`);

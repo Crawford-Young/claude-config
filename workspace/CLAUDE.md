@@ -19,19 +19,7 @@ Workspace infrastructure: `claude-config/` (this file's source, skills, agents, 
 
 ## Skills are the workflow
 
-The owned skills in `claude-config/skills/` are the actionable units; their scripts (`claude-config/scripts/*.mjs`) do the mechanical work. Invoke by situation:
-
-- **plan** — before implementing anything non-trivial (plan mode + spec/checklist conventions + plan-time checks)
-- **worktree** — starting branch work anywhere (all branch work happens in worktrees; main checkouts stay on main)
-- **agent-factory** — executing a multi-task plan, any dispatch or model decision (`agents/ROUTING.md` is the model guide)
-- **qa** — running gates or verifying work (`qa.mjs` keeps exit codes honest)
-- **git-ops** — landing claude-config changes (`land.mjs`), finishing branches, git recovery
-- **reflect** — at every phase end (the stop gate reminds once per turn end until the line is ticked; user can decline)
-- **continuation** — before `/clear` whenever work remains
-- **cleanup** — end-of-wave workspace sweep
-- **harness-editing** — before editing this chain, skills, hooks, or agents
-
-Domain skills: `new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`. Hand-load (broken description routing — don't re-litigate): `~/code/docs/web/TESTING-TRAPS.md` before test/QA work on interactive UI; `~/code/docs/games/DIAGNOSTICS.md` before Godot movement/physics/feel work.
+The skills in `claude-config/skills/` are the actionable units (their `scripts/*.mjs` do the mechanical work); the session-start hook injects their index — Read the SKILL.md it names when its trigger matches.
 
 ## Planning docs
 

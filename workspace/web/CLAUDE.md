@@ -11,7 +11,7 @@
 > - [`../docs/web/TYPESCRIPT-STYLE.md`](../docs/web/TYPESCRIPT-STYLE.md) — full TypeScript style guide
 > - [`../docs/web/TESTING-TRAPS.md`](../docs/web/TESTING-TRAPS.md) — **hand-load before writing tests or QA for interactive UI** (the unit-green/live-broken bug family)
 > - [`../docs/brand/`](../docs/brand/) — brand identity, design system, motion
-> - `visual-asset-gates` skill — preview gate, asset pipelines, theme work
+> - `~/code/claude-config/skills/visual-asset-gates/SKILL.md` — preview gate, asset pipelines, theme work
 
 ## Stack (key decisions)
 

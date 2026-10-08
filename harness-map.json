@@ -365,7 +365,7 @@
    "kind": "hook",
    "label": "session-start",
    "file": "hooks/session-start.mjs",
-   "summary": "SessionStart — lists active checklists and post-compaction reminders."
+   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists active checklists and post-compaction reminders."
   },
   {
    "id": "hook:stop-reflect-gate",
@@ -518,7 +518,7 @@
    "kind": "script",
    "label": "verify-frontmatter.mjs",
    "file": "scripts/verify-frontmatter.mjs",
-   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (descriptions + CLAUDE.md files) stay within CAPS (issue #63).",
+   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (unflagged descriptions + skills/INDEX.md + CLAUDE.md files) stay within CAPS (issues #63, #64).",
    "rules": [
     "Caps live in one CAPS const at the top of the script",
     "Bytes measured as UTF-8 with CRLF normalized to LF"

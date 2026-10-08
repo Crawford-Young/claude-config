@@ -1,6 +1,7 @@
 ---
 name: continuation
 description: Use whenever anything remains to be done after a `/clear` — wave close, spec approval, heavy-session boundary. Produces a paste-ready prompt (never a file) so the next session resumes without loss.
+disable-model-invocation: true
 ---
 
 # Continuation

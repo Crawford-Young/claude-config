@@ -18,7 +18,7 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 | `telemetry/` | OTel usage receiver + report | data in `~/.claude/otel/` |
 | `docs/` | Repo-only docs (migration notes, prompts) | — |
 
-Claude Code loads every `CLAUDE.md` from the working directory upward, so a session in `~/code/web/<repo>` gets universal → web → repo rules. Skill routing is the skills' own frontmatter descriptions — there is no routing table.
+Claude Code loads every `CLAUDE.md` from the working directory upward, so a session in `~/code/web/<repo>` gets universal → web → repo rules. Skill routing is `skills/INDEX.md` (trigger → SKILL.md path), injected by `hooks/session-start.mjs` every session; every skill carries `disable-model-invocation: true`, so its description only feeds the `/` menu and the model Reads the SKILL.md instead of calling the Skill tool (#64).
 
 Retired in the 2026-08 restructure (full text in git history and `docs` repo → `harness-evolution/archive/`): all vendored plugins (superpowers, claude-md-management, vercel, sentry, stripe, frontend-design, caveman), the `overrides/` junction hack, the SKILLS.md routing table, per-type agent profiles + performance-MD/eval machinery, the relocation gate, and the PowerShell hook set.
 
