@@ -19,13 +19,18 @@ const bar = (pct) => {
 };
 const tmp = () => mkdtempSync(join(tmpdir(), 'statusline-'));
 
-/** Fixture with cwd/current_dir repointed — location resolves from the real dir. */
+/** Fixture with cwd/current_dir repointed — location resolves from the real dir.
+ *  session_name is dropped so the row leads with the location. */
 const at = (name, dir) => {
   const s = json(name);
   s.cwd = dir;
   s.workspace.current_dir = dir;
+  delete s.session_name;
   return s;
 };
+// render() reads the real registry by default; tests point it at an empty dir
+const NOREG = { CLAUDE_SESSIONS_DIR: join(tmpdir(), 'statusline-no-registry') };
+const SID = '4ebbd908-ff44-4647-a06b-2f807203d3b8';
 
 function runScript(input, env = {}) {
   const r = spawnSync(process.execPath, [SCRIPT], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
@@ -63,7 +68,7 @@ test('full fixture: identity row, then ctx/cache/5h/7d row', () => {
   const root = tmp();
   try {
     mkdirSync(join(root, 'plain-folder'));
-    const out = render(at('full.json', join(root, 'plain-folder')));
+    const out = render(at('full.json', join(root, 'plain-folder')), NOREG);
     const [row1, row2] = plain(out).split('\n');
     assert.equal(row1, 'plain-folder · Fable 5 · high · $3.13');
     assert.ok(row2.startsWith(`ctx ${bar(10)} 102k/1M 10% · cache warm 91% · 5h ${bar(22)} 22%→`), row2);
@@ -76,7 +81,7 @@ test('full fixture: identity row, then ctx/cache/5h/7d row', () => {
 });
 
 test('high usage: red/yellow thresholds, cold cache with miss cause, fast tag', () => {
-  const out = render(json('high-usage.json'));
+  const out = render(json('high-usage.json'), NOREG);
   const p = plain(out);
   assert.ok(p.includes(`5h ${bar(92)} 92%`));
   assert.ok(p.includes(`7d ${bar(75)} 75%`));
@@ -86,7 +91,7 @@ test('high usage: red/yellow thresholds, cold cache with miss cause, fast tag', 
 });
 
 test('no rate_limits: no window bars', () => {
-  const p = plain(render(json('no-rate-limits.json')));
+  const p = plain(render(json('no-rate-limits.json'), NOREG));
   assert.ok(!p.includes('5h ') && !p.includes('7d '));
   assert.ok(p.split('\n')[1].startsWith('ctx '));
 });
@@ -101,11 +106,11 @@ test('location: repo@branch in a checkout, short SHA when detached, folder name 
   try {
     const { dir, git } = gitRepo(root, 'my-repo', 'feat/test-branch');
     mkdirSync(join(dir, 'sub'));
-    assert.ok(plain(render(at('full.json', join(dir, 'sub')))).startsWith('my-repo@feat/test-branch · '));
+    assert.ok(plain(render(at('full.json', join(dir, 'sub')), NOREG)).startsWith('my-repo@feat/test-branch · '));
     git('checkout', '-q', '--detach');
-    assert.match(plain(render(at('full.json', dir))), /^my-repo@[0-9a-f]{7} · /);
+    assert.match(plain(render(at('full.json', dir), NOREG)), /^my-repo@[0-9a-f]{7} · /);
     mkdirSync(join(root, 'plain'));
-    assert.ok(plain(render(at('full.json', join(root, 'plain')))).startsWith('plain · '));
+    assert.ok(plain(render(at('full.json', join(root, 'plain')), NOREG)).startsWith('plain · '));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -124,6 +129,57 @@ test('gitInfo: a linked worktree names its owning repo', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+/** A registry dir holding one session file plus an unrelated and a torn one. */
+function registry(entry) {
+  const dir = tmp();
+  writeFileSync(join(dir, '111.json'), '{"sessionId":"' + SID); // torn write, names this session
+  writeFileSync(join(dir, '222.json'), JSON.stringify({ sessionId: 'other', name: 'not-me', nameSource: 'user' }));
+  writeFileSync(join(dir, '333.json'), JSON.stringify({ pid: 333, sessionId: SID, ...entry }));
+  writeFileSync(join(dir, '333.abc.key'), 'x');
+  return dir;
+}
+
+test('session name: a chosen name leads row 1 in bold', () => {
+  for (const nameSource of ['user', 'peer']) {
+    const dir = registry({ name: 'claude-config-77', nameSource });
+    try {
+      const out = render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: dir });
+      assert.ok(out.startsWith('\x1b[1mclaude-config-77\x1b[0m · '), JSON.stringify(out));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('session name: an auto title is dim, ~-marked and cut to 24', () => {
+  const dir = registry({ name: 'Agent orchestration app naming', nameSource: 'auto' });
+  const bare = registry({ name: '872d7dd5' }); // spare bg session: no nameSource
+  try {
+    assert.ok(render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: dir }).startsWith('\x1b[2m~Agent orchestration app…\x1b[0m · '));
+    assert.ok(plain(render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: bare })).startsWith('~872d7dd5 · '));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  }
+});
+
+test('session name: control and bidi bytes are stripped', () => {
+  const dir = registry({ name: '\x1b[31mevil\x07\u009b2J‮name\n', nameSource: 'user' });
+  try {
+    const row1 = render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: dir }).split('\n')[0];
+    assert.ok(row1.startsWith('\x1b[1m[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('session name: no registry entry falls back to the payload title as auto', () => {
+  assert.ok(plain(render(json('no-rate-limits.json'), NOREG)).startsWith('~Start harness-evolution… · '));
+  const s = json('no-rate-limits.json');
+  delete s.session_name;
+  assert.ok(!plain(render(s, NOREG)).startsWith('~'));
 });
 
 test('history: one schema-complete sample, throttled per session', () => {

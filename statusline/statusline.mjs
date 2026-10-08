@@ -8,7 +8,7 @@
 // Render budget is 50 ms including Node's ≈36 ms startup, so the hot path spawns
 // nothing: git state is read from .git files directly, not via `git`.
 
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -86,6 +86,54 @@ export function gitInfo(dir) {
   }
 }
 
+// C0, DEL and C1 (U+009B is an 8-bit CSI) let a name paint the terminal; bidi
+// overrides let it reorder the row.
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
+
+/**
+ * Session name from the registry (~/.claude/sessions/<pid>.json) matched on
+ * sessionId — the id follows /clear while the pid file stays. nameSource is
+ * 'user' (/rename) or 'peer' (claude --bg -n); anything else is an auto title.
+ * → { name, auto } | null.
+ */
+export function sessionName(sessionId, dir) {
+  if (!sessionId) return null;
+  let files;
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    const raw = readText(join(dir, f));
+    if (!raw || !raw.includes(sessionId)) continue; // never parse other sessions' files
+    try {
+      const j = JSON.parse(raw);
+      const name = j.sessionId === sessionId && typeof j.name === 'string' ? j.name.replace(UNSAFE, '').trim() : '';
+      if (name) return { name, auto: j.nameSource !== 'user' && j.nameSource !== 'peer' };
+    } catch {
+      /* half-written registry entry */
+    }
+  }
+  return null;
+}
+
+/** Bold for a chosen name; dim, ~-prefixed and cut to 24 for an auto title, so
+ *  an un-renamed session shows at a glance. */
+function namePiece(status, env) {
+  const dir = env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
+  let n = sessionName(status.session_id, dir);
+  if (!n && typeof status.session_name === 'string') {
+    const name = status.session_name.replace(UNSAFE, '').trim();
+    if (name) n = { name, auto: true }; // the payload's session_name is the auto title
+  }
+  if (!n) return null;
+  if (!n.auto) return `${ESC}[1m${n.name}${RST}`;
+  const cut = n.name.length > 24 ? `${n.name.slice(0, 23)}…` : n.name;
+  return `${ESC}[2m~${cut}${RST}`;
+}
+
 /** repo@branch for the session's directory; bare folder name outside git. */
 function locationPiece(status) {
   const dir = status.workspace?.current_dir || status.cwd;
@@ -143,7 +191,7 @@ function windowPieces(rl) {
 
 /** Rows for one status payload. Never empty: a blank statusline is
  *  indistinguishable from a crashed one, so it degrades to a sentinel. */
-export function render(status) {
+export function render(status, env = process.env) {
   const top = [];
   const bars = [];
   if (status && typeof status === 'object') {
@@ -154,6 +202,8 @@ export function render(status) {
         return null;
       }
     };
+    const name = piece(() => namePiece(status, env));
+    if (name) top.push(name);
     const loc = piece(() => locationPiece(status));
     if (loc) top.push(loc);
     if (status.model?.display_name) top.push(String(status.model.display_name));
