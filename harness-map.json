@@ -372,27 +372,6 @@
    ]
   },
   {
-   "id": "hook:precompact-archive",
-   "kind": "hook",
-   "label": "precompact-archive",
-   "file": "hooks/precompact-archive.mjs",
-   "summary": "PreCompact — copies the transcript to ~/.claude/compact-archives/."
-  },
-  {
-   "id": "hook:subagentstop-log",
-   "kind": "hook",
-   "label": "subagentstop-log",
-   "file": "hooks/subagentstop-log.mjs",
-   "summary": "SubagentStop — one log line per subagent stop."
-  },
-  {
-   "id": "hook:permission-denied",
-   "kind": "hook",
-   "label": "permission-denied",
-   "file": "hooks/permission-denied.mjs",
-   "summary": "PermissionDenied — logs each denial; cannot block."
-  },
-  {
    "id": "agent:implementer",
    "kind": "agent",
    "label": "implementer",
@@ -538,14 +517,6 @@
    "label": "current-model.json",
    "file": "~/.claude/current-model.json",
    "summary": "Live model per session — how the guard knows what a fork really runs on.",
-   "external": true
-  },
-  {
-   "id": "store:compact-archives",
-   "kind": "store",
-   "label": "compact-archives/",
-   "file": "~/.claude/compact-archives/",
-   "summary": "Transcript copies taken before every compaction.",
    "external": true
   },
   {
@@ -1058,23 +1029,6 @@
    "to": "store:transcripts",
    "kind": "reads",
    "label": "gh pr merge calls"
-  },
-  {
-   "from": "hook:precompact-archive",
-   "to": "store:compact-archives",
-   "kind": "writes"
-  },
-  {
-   "from": "hook:subagentstop-log",
-   "to": "phase:execute-dispatch",
-   "kind": "observes",
-   "label": "SubagentStop log"
-  },
-  {
-   "from": "hook:permission-denied",
-   "to": "phase:execute-dispatch",
-   "kind": "observes",
-   "label": "denial log"
   },
   {
    "from": "script:reflect-gather",

@@ -56,12 +56,9 @@ fixed false verdict; change them only with a test:
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `post-model-switch.mjs` | PostModelSwitch | Records which model each session is on to `~/.claude/current-model.json`, keyed by `session_id`, newest 50 kept. Not a gate — it is the data `agent-model-guard.mjs` reads to catch a fork on a live fable session. Fires on Claude Code's own switches too (e.g. session resume), which is why records are never expired by age. |
-| `permission-denied.mjs` | PermissionDenied | Logs denials to `~/.claude/permission-denials.log`. **This event cannot block** — its exit code and stderr are ignored by Claude Code and the denial stands regardless. |
 | `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before auto-compact can silently compact a wave boundary. Bands are fractions of the **live window** — note at 0.40, louder at 0.70 (once each), **blocks at 0.94**; 400k / 700k / 940k on today's 1M window, and silent when no source can name the window (thresholds section below). Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Tune with `CLAUDE_CTX_WINDOW`, or per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
 | `stop-reflect-gate.mjs` | Stop | After a successful `gh pr merge` (Bash or PowerShell, parsed by `bash-guard.mjs`, so `gh -R x pr merge` counts; `--auto` only queues and doesn't) in the session's transcript, blocks ONCE per merge with "prompt the user to run reflect". Handled tool_use ids are a set (newest 200) in `~/.claude/stop-reflect-gate.json`, so parallel sessions don't re-fire each other; retries and later turn ends pass. A merge within 60 min of a reflect `SKILL.md` read (or reflect Skill call) is the reflect's own landing PR, so it is marked handled without blocking (#76). Reflect is prompted, never forced. |
 | `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then open `in-progress` issues across owner Crawford-Young (one `gh search issues` call, at most 10, 3 s cap, silent on failure; `SESSION_START_GH` stubs it in tests); after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
-| `precompact-archive.mjs` | PreCompact | Copies the transcript to `~/.claude/compact-archives/` before every compaction. |
-| `subagentstop-log.mjs` | SubagentStop | One line per stop to `~/.claude/subagent-stops.log` (self-trims: 512KB → last 200 lines). |
 | `notification-toast.ps1` | Notification | Windows WinRT toast (WezTerm has no native notifications). Stays PowerShell — Windows-only integration. |
 
 ## settings.json wiring
@@ -86,16 +83,13 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
   ] } ],
   "Stop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs"] }] } ],
   "SessionStart": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/session-start.mjs"] }] } ],
-  "PreCompact": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/precompact-archive.mjs"] }] } ],
-  "SubagentStop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/subagentstop-log.mjs"] }] } ],
   "Notification": [ { "hooks": [{ "type": "command", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/young/code/claude-config/hooks/notification-toast.ps1"] }] } ],
-  "PermissionDenied": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/permission-denied.mjs"] }] } ],
   "PreModelSwitch": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/pre-model-switch.mjs"] }] } ],
   "PostModelSwitch": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/post-model-switch.mjs"] }] } ]
 }
 ```
 
-PermissionDenied, PreModelSwitch and PostModelSwitch take no matcher. The
+PreModelSwitch and PostModelSwitch take no matcher. The
 `statusLine` command has no exec form; it always runs through `bash -c`.
 
 Keep the settings `deny` rules for `git add -A` forms — the two layers
