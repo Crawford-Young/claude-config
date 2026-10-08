@@ -15,7 +15,6 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 | `workspace/docs/` | Reference docs (web stack docs, `TESTING-TRAPS`, games `DIAGNOSTICS`, brand) | `~/code/docs/...` (file-by-file symlinks) |
 | `workspace/.claude/rules/` | Path-scoped rules | `~/code/.claude/rules` |
 | `statusline/` | Node statusline + subagent rows (`statusline/README.md`) | `statusLine` + `subagentStatusLine` commands |
-| `telemetry/` | OTel usage receiver + report | data in `~/.claude/otel/` |
 | `docs/` | Repo-only docs (migration notes, prompts) | — |
 
 Claude Code loads every `CLAUDE.md` from the working directory upward, so a session in `~/code/web/<repo>` gets universal → web → repo rules. Skill routing is `skills/INDEX.md` (trigger → SKILL.md path), injected by `hooks/session-start.mjs` every session; every skill carries `disable-model-invocation: true`, so its description only feeds the `/` menu and the model Reads the SKILL.md instead of calling the Skill tool (#64).
