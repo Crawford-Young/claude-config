@@ -6,7 +6,8 @@
 //   1. git add -A/--all/. and git commit -a/--all/-am, any flag order (sweeps
 //      concurrent sessions' files)
 //   2. git add/commit of real env files (.env, .env.local — secrets)
-//   3. gate commands piped to tail/head (the pipe's exit code masks the gate's)
+//   3. gate commands (by command word: pnpm test, node --test, just check,
+//      cargo test/clippy…) piped onward — the pipe's exit code masks the gate's
 //   4. PowerShell Set-Content/Out-File/Add-Content (mojibake + BOM on UTF-8)
 //   5. git commit on main/master in a code repo (worktree-always; docs repo exempt)
 //   6. git checkout/switch off a branch, or a file restore (checkout -- <path>,
@@ -146,9 +147,11 @@ export function substitutions(s, quotesLiteral = false) {
 /** Split a compound command into its individual clauses on unquoted
  *  separators, so a flag in one clause can't be attributed to a command in
  *  another and quoted text stays with the command that owns it. A substitution
- *  body stays whole (`echo $(a; b)` is one clause). Unbalanced quotes fall back
- *  to the plain split — never swallow the rest of the line. */
-export function clauses(cmd) {
+ *  body stays whole (`echo $(a; b)` is one clause), and so does a redirection
+ *  (`2>&1`, `&>f`). With `pipes`, a pipeline (`a | b`, `a |& b`) is one piece
+ *  — `pipelines()`. Unbalanced quotes fall back to the plain split — never
+ *  swallow the rest of the line. */
+export function clauses(cmd, pipes = false) {
   const out = [];
   let cur = '';
   let quote = null;
@@ -167,16 +170,24 @@ export function clauses(cmd) {
     } else if (ch === '"' || ch === "'") {
       quote = ch;
       cur += ch;
+    } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
+      cur += ch;
+    } else if (pipes && ch === '|' && cmd[i + 1] !== '|') {
+      cur += ch;
+      if (cmd[i + 1] === '&') cur += cmd[++i];
     } else if (/[;&|\n]/.test(ch)) {
       if ((ch === '&' || ch === '|') && cmd[i + 1] === ch) i++;
       out.push(cur);
       cur = '';
     } else cur += ch;
   }
-  if (quote) return cmd.split(/\|\||&&|[;&|\n]/).map((c) => c.trim()).filter(Boolean);
+  if (quote) return cmd.split(pipes ? /\|\||&&|(?<![<>|])&(?!>)|[;\n]/ : /\|\||&&|(?<![<>])&(?!>)|[;|\n]/).map((c) => c.trim()).filter(Boolean);
   out.push(cur);
   return out.map((c) => c.trim()).filter(Boolean);
 }
+
+/** The pipelines of a compound command: clauses that keep `|` inside. */
+const pipelines = (cmd) => clauses(cmd, true);
 
 /** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
  *  word. Unbalanced quotes: plain whitespace split. */
@@ -279,15 +290,16 @@ export function staticCheck(raw) {
     return 'Refusing to stage/commit a .env file (secrets). Only .env.example belongs in git.';
   }
 
-  // 3. gate output piped to tail/head
-  const gate = /\b((?:pnpm|npm|yarn)(?: run)? (test|lint|typecheck|e2e|vitest)|vitest\b|npx? tsc\b|tsc --noEmit|just check|node --test|playwright test)\b/;
-  if (gate.test(cmd) && /\|\s*(tail|head)\b/.test(cmd)) {
+  // 3. gate output piped onward — a gate command, by command word, with any
+  //    command after it in the same pipeline (tail, head, grep, tee… all mask it)
+  const cmds = commands(cmd, null);
+  if (cmds.some((g) => isGate(g) && cmds.some((t) => t.pipe === g.pipe && t.seg > g.seg))) {
     return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use scripts/qa.mjs for compact output).';
   }
 
   // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
   //    not as a word someone greps for
-  if (commands(cmd, null).some(({ cmd: c }) => /^(?:Set-Content|Out-File|Add-Content)$/i.test(c))) {
+  if (cmds.some(({ cmd: c }) => /^(?:Set-Content|Out-File|Add-Content)$/i.test(c))) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
@@ -322,38 +334,76 @@ const toDir = (dir, p) => {
   return dir ? resolve(dir, e) : null;
 };
 
-/** Every command a line runs, as { cmd, words, dir }: `cmd` is the command
- *  word's basename, `dir` the payload cwd walked through the cd clauses before
- *  it. cd clauses are consumed; a quoted command handed to a shell is expanded
- *  in place, and so is every substitution body (`…`, $(…), <(…)), which runs
- *  before the clause holding it. Other quoted text is an argument, never a command. */
+/** Every command a line runs, as { cmd, words, dir, pipe, seg }: `cmd` is the
+ *  command word's basename, `dir` the payload cwd walked through the cd clauses
+ *  before it, `pipe` an identity shared by the commands of one pipeline and
+ *  `seg` the command's place in it. cd clauses are consumed; a quoted command
+ *  handed to a shell is expanded in place, and so is every substitution body
+ *  (`…`, $(…), <(…)), which runs before the clause holding it. Other quoted
+ *  text is an argument, never a command. */
 function commands(raw, cwd) {
   const out = [];
   let dir = cwd || null;
-  for (const c of clauses(raw)) {
-    const w = words(c);
-    while (w.length && WRAPPER.test(w[0])) w.shift();
-    if (w.length && /^[({]/.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
-    const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
-    const shellAt = !SHELL_C.test(cmd) ? -1 : /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
-    const shellCmd = shellAt !== -1 && w[shellAt + 1] !== undefined ? w.slice(shellAt + 1).join(' ') : null;
-    // A shell's own command string is parsed whole below; reading its
-    // substitutions here too would count each gated verb twice.
-    if (shellCmd === null) for (const body of substitutions(c)) out.push(...commands(body, dir));
-    if (!w.length) continue;
-    if (CD.test(cmd)) {
-      const arg = w.slice(1).find((a) => !/^-/.test(a) || a === '-');
-      if (arg === undefined) dir = /^cd$/i.test(cmd) ? homedir() : dir;
-      else if (arg !== '-') dir = toDir(dir, arg.replace(/\)+$/, ''));
-      continue;
+  for (const p of pipelines(raw)) {
+    const pipe = {};
+    for (const [seg, c] of clauses(p).entries()) {
+      const w = words(c);
+      while (w.length && WRAPPER.test(w[0])) w.shift();
+      if (w.length && /^[({]/.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
+      const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
+      const shellAt = !SHELL_C.test(cmd) ? -1 : /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
+      const shellCmd = shellAt !== -1 && w[shellAt + 1] !== undefined ? w.slice(shellAt + 1).join(' ') : null;
+      // A shell's own command string is parsed whole below; reading its
+      // substitutions here too would count each gated verb twice.
+      if (shellCmd === null) for (const body of substitutions(c)) out.push(...commands(body, dir));
+      if (!w.length) continue;
+      if (CD.test(cmd)) {
+        const arg = w.slice(1).find((a) => !/^-/.test(a) || a === '-');
+        if (arg === undefined) dir = /^cd$/i.test(cmd) ? homedir() : dir;
+        else if (arg !== '-') dir = toDir(dir, arg.replace(/\)+$/, ''));
+        continue;
+      }
+      if (SHELL_C.test(cmd)) {
+        if (shellCmd !== null) out.push(...commands(shellCmd, dir));
+        continue;
+      }
+      out.push({ cmd, words: w, dir, pipe, seg });
     }
-    if (SHELL_C.test(cmd)) {
-      if (shellCmd !== null) out.push(...commands(shellCmd, dir));
-      continue;
-    }
-    out.push({ cmd, words: w, dir });
   }
   return out;
+}
+
+const PKG_RUNNER = /^(?:pnpm|npm|yarn|bun|npx|pnpx|bunx)(?:\.cmd|\.exe)?$/i;
+const PKG_FLAG_WITH_ARG = /^(?:--filter|-F|-C|--dir|--prefix|--workspace|-w)$/;
+const PKG_GATE = /^(?:test|lint|typecheck|e2e|vitest|tsc)$/;
+const JUST_GATE = /^(?:check|test|lint|typecheck|e2e|clippy)$/;
+const firstArg = (args) => args.find((a) => !a.startsWith('-') && !a.startsWith('+'));
+
+/** 3. Is this command a QA gate whose exit code matters? Read by command word
+ *  and subcommand, so `npm view vitest` or `grep tsc` is not a gate (#98). */
+function isGate({ cmd, words: w }) {
+  const c = cmd.replace(/\.(?:cmd|exe)$/i, '').toLowerCase();
+  const args = w.slice(1);
+  if (PKG_RUNNER.test(cmd)) {
+    // Skip flags (and their values) and the run/exec verbs to the script or bin.
+    let i = 0;
+    for (; i < args.length; i++) {
+      if (PKG_FLAG_WITH_ARG.test(args[i])) i++;
+      else if (!args[i].startsWith('-') && !/^(?:run|exec|dlx|x)$/.test(args[i])) break;
+    }
+    const bin = args[i];
+    if (bin === 'playwright' || bin === '@playwright/test') return firstArg(args.slice(i + 1)) === 'test';
+    return PKG_GATE.test(bin || '');
+  }
+  if (c === 'vitest' || c === 'tsc') return true;
+  if (c === 'playwright') return firstArg(args) === 'test';
+  if (c === 'node') return args.includes('--test');
+  if (c === 'just') return JUST_GATE.test(firstArg(args) || '');
+  if (c === 'cargo') {
+    const sub = firstArg(args);
+    return sub === 'test' || sub === 'clippy' || sub === 'nextest' || (sub === 'fmt' && args.includes('--check'));
+  }
+  return false;
 }
 
 /** Every git call in a command, each with its subcommand, args, and the repo it
