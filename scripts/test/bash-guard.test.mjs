@@ -652,6 +652,49 @@ test('#88: "delete" wording is still subject to the deny words', () => {
   assert.ok(pushGateReason('git push origin --delete feat/a', '/repo', t, stateFile));
 });
 
+// --- #98: the gate-pipe rule reads gate commands, not tool names ---------------
+
+test('#98: non-gate commands that mention a tool name pass', () => {
+  for (const cmd of [
+    'npm view typescript@6 version | tail -1; npm view lint-staged version | tail -1',
+    'npm view vitest version | tail -1',
+    'pnpm add -D vitest 2>&1 | tail -5',
+    'grep -rn "tsc --noEmit" docs | head',
+    'for p in vite vitest; do echo $p; done | head',
+    'node --test scripts/test/x.test.mjs > out.txt 2>&1; echo rc=$?; grep fail out.txt | head',
+  ]) {
+    assert.equal(staticCheck(cmd), null, cmd);
+  }
+});
+
+test('#98: Rust, just and package-runner gates piped onward are blocked', () => {
+  for (const cmd of [
+    'cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -5; echo EXIT:${PIPESTATUS[0]}',
+    'cargo test | tail',
+    'cargo +nightly test --workspace | head -20',
+    'cargo fmt --all --check | head',
+    'just test 2>&1 | grep -E "Passing|Failing"',
+    'just typecheck | tail',
+    'node --test scripts/test/*.test.mjs 2>&1 | grep -E "^ℹ (pass|fail)"',
+    'pnpm --filter web test | tail',
+    'pnpm exec tsc --noEmit | tail',
+    'npx tsc | tee tsc.log',
+    'bash -c "pnpm test | tail"',
+    'pnpm test |& tail',
+  ]) {
+    assert.ok(staticCheck(cmd), cmd);
+  }
+  for (const cmd of ['cargo fmt --all | head', 'cargo build | tail', 'just dev | tail', 'cargo test > out.txt 2>&1']) {
+    assert.equal(staticCheck(cmd), null, cmd);
+  }
+});
+
+test('clauses keeps redirections whole; pipes split only without the pipes flag', () => {
+  assert.deepEqual(clauses('pnpm test 2>&1 | tail'), ['pnpm test 2>&1', 'tail']);
+  assert.deepEqual(clauses('a &>log && b'), ['a &>log', 'b']);
+  assert.deepEqual(clauses('a 2>&1 | b; c & d', true), ['a 2>&1 | b', 'c', 'd']);
+});
+
 // --- #96: a negator refuses only the act it negates -----------------------------
 
 test('#96 incident: "…push and pr but … dont know if…" approves the push', () => {
