@@ -16,7 +16,7 @@ with `node --test scripts/test/*.test.mjs`.
 | `audit.mjs` (+ `audit-lib.mjs`, `prices.json`) | Transcript-replay audit over `~/.claude/projects`: $ and context depth per day/session, per-agent-type cost, skill/slash/doc invocation counts, hook blocks and timings, cross-checked against Claude Code's own `cost-state`. Re-verify `prices.json` when it warns |
 | `lib.mjs` | Shared helpers (workspace root, git, checklist discovery, argv) |
 | `harness-map.mjs` | `check` (CI): `harness-map.json` has a node for every skill, hook, agent, script and CLAUDE.md, and nothing dangles. `render <out>` builds the diagram page from `harness-map.template.html` |
-| `verify-frontmatter.mjs` | CI gate — every SKILL.md publishes a usable name + description (the unquoted `: ` YAML trap silently unpublishes a skill) |
+| `verify-frontmatter.mjs` | CI gate — every SKILL.md publishes a usable name + description (the unquoted `: ` YAML trap silently unpublishes a skill); also enforces resident-byte caps on descriptions and each `CLAUDE.md` (issue #63) so resident context can't silently re-bloat |
 | `export-harness.ps1` / `import-harness.ps1` | Move harness config between machines |
 | `open-admin-shells.ps1` | Elevated shells for junction work |
 

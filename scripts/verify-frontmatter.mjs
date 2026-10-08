@@ -33,6 +33,19 @@
  *   2  the checker could not run (bad/missing root, or a root's enumerator found zero files
  *      to check — the latter is its own class of "could not run": a structurally broken
  *      enumerator must never look like a clean sweep)
+ *
+ * Resident-byte caps (issue #63): past the frontmatter-publishes check above, this script
+ * also enforces that resident context — the bytes every session loads before doing any work —
+ * cannot silently re-bloat. Three caps, reusing the same enumerators and parser as the
+ * publishes-check above rather than a second YAML reader:
+ *   - a per-description byte cap (every skill + agent description individually)
+ *   - a total byte cap across all skill + agent descriptions combined
+ *   - a byte cap per CLAUDE.md file
+ * All three are set at today's measured value (2026-10-08), rounded UP to the next 256 B so
+ * the cap itself never flickers red on an unrelated single-byte change, plus +768 B headroom
+ * on the root CLAUDE.md for a concurrent PR (#61) already landing a small, known addition
+ * there. Later issues (#64, #65, #66) lower these in one place — see CAPS below. Bytes are
+ * measured as UTF-8 bytes with CRLF normalized to LF first, so Windows and CI agree.
  */
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
@@ -40,14 +53,18 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_SKILLS = resolve(HERE, '..', 'skills');
-const DEFAULT_AGENTS = resolve(HERE, '..', 'agents');
+const REPO_ROOT = resolve(HERE, '..');
+const DEFAULT_SKILLS = resolve(REPO_ROOT, 'skills');
+const DEFAULT_AGENTS = resolve(REPO_ROOT, 'agents');
+const DEFAULT_WORKSPACE = REPO_ROOT;
 
 const argv = process.argv.slice(2);
 const skillsIdx = argv.indexOf('--skills');
 const SKILLS_ROOT = skillsIdx === -1 ? DEFAULT_SKILLS : resolve(argv[skillsIdx + 1] ?? '');
 const agentsIdx = argv.indexOf('--agents');
 const AGENTS_ROOT = agentsIdx === -1 ? DEFAULT_AGENTS : resolve(argv[agentsIdx + 1] ?? '');
+const workspaceIdx = argv.indexOf('--workspace');
+const WORKSPACE_ROOT = workspaceIdx === -1 ? DEFAULT_WORKSPACE : resolve(argv[workspaceIdx + 1] ?? '');
 
 for (const [label, root] of [
   ['skills', SKILLS_ROOT],
@@ -57,6 +74,30 @@ for (const [label, root] of [
     console.error(`ABORT: no ${label} directory at ${root}`);
     process.exit(2);
   }
+}
+
+/**
+ * Every cap in ONE obvious place — see file header. `perDescriptionBytes` and
+ * `totalDescriptionBytes` are rounded-up-to-256 versions of today's measured max (411 B,
+ * agents/Explore.md) and today's measured sum (5128 B across 14 skills + 6 agents).
+ * `claudeMd` keys are repo-relative paths under WORKSPACE_ROOT; values are each file's
+ * measured byte count rounded up to the next 256 B (root CLAUDE.md additionally gets +768 B
+ * for the #61 headroom described above).
+ */
+const CAPS = {
+  perDescriptionBytes: 512,
+  totalDescriptionBytes: 5376,
+  claudeMd: {
+    'workspace/CLAUDE.md': 11520,
+    'workspace/web/CLAUDE.md': 7936,
+    'workspace/games/CLAUDE.md': 7936,
+    'workspace/apps/CLAUDE.md': 3072,
+  },
+};
+
+/** UTF-8 byte length of a string, CRLF normalized to LF first so Windows checkouts and CI agree. */
+function byteLength(str) {
+  return Buffer.byteLength(str.replace(/\r\n/g, '\n'), 'utf8');
 }
 
 const REQUIRED = ['name', 'description'];
@@ -102,6 +143,7 @@ function enumerateAgents(root) {
  */
 function checkRoot(entries) {
   const problems = [];
+  const descriptions = [];
   let checked = 0;
 
   for (const { file, rel } of entries) {
@@ -142,9 +184,104 @@ function checkRoot(entries) {
         );
       }
     }
+
+    if (fields.has('description') && fields.get('description') !== '') {
+      descriptions.push({ rel, bytes: byteLength(fields.get('description')) });
+    }
   }
 
-  return { checked, problems };
+  return { checked, problems, descriptions };
+}
+
+/**
+ * Resident-byte checks for the parsed descriptions of BOTH roots combined, per CAPS. Takes
+ * already-parsed `{ rel, bytes }` entries (not a filesystem root) so it reuses the same
+ * parser as checkRoot instead of re-reading files.
+ */
+function checkDescriptionCaps(descriptions) {
+  const problems = [];
+  for (const { rel, bytes } of descriptions) {
+    if (bytes > CAPS.perDescriptionBytes) {
+      problems.push(
+        `${rel}: description is ${bytes} B, over the per-description cap of ${CAPS.perDescriptionBytes} B`,
+      );
+    }
+  }
+  const total = descriptions.reduce((sum, d) => sum + d.bytes, 0);
+  if (total > CAPS.totalDescriptionBytes) {
+    problems.push(
+      `all descriptions combined: ${total} B, over the total cap of ${CAPS.totalDescriptionBytes} B`,
+    );
+  }
+  return { problems, total };
+}
+
+/**
+ * Recursively find every `CLAUDE.md` under `<workspaceRoot>/workspace`, so a new domain's
+ * CLAUDE.md is caught the moment it exists — not only once someone remembers to add it to
+ * CAPS.claudeMd. Returns paths relative to workspaceRoot (matching the CAPS.claudeMd key
+ * shape, e.g. `workspace/web/CLAUDE.md`), sorted for deterministic output. Noise directories
+ * (node_modules, dotdirs) are skipped; depth is capped the same way findActiveChecklists caps
+ * it in lib.mjs, as a cheap guard against an accidental symlink loop.
+ */
+function findAllClaudeMdFiles(workspaceRoot) {
+  const base = join(workspaceRoot, 'workspace');
+  const found = [];
+  const walk = (dir, depth) => {
+    if (depth > 8) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+        walk(p, depth + 1);
+      } else if (entry.isFile() && entry.name === 'CLAUDE.md') {
+        found.push(p);
+      }
+    }
+  };
+  walk(base, 0);
+  return found
+    .map((file) => file.slice(workspaceRoot.length + 1).replace(/\\/g, '/'))
+    .sort();
+}
+
+/**
+ * Byte cap per CLAUDE.md file, read relative to `workspaceRoot`. Checks BOTH directions: every
+ * CAPS.claudeMd entry must exist on disk (unchanged from before), AND every CLAUDE.md actually
+ * found on disk under workspace/ must have a CAPS.claudeMd entry — a new domain's CLAUDE.md
+ * must never be resident context the gate silently never measures.
+ */
+function checkClaudeMdCaps(workspaceRoot) {
+  const problems = [];
+  const sizes = [];
+  const onDisk = new Set(findAllClaudeMdFiles(workspaceRoot));
+
+  for (const [rel, cap] of Object.entries(CAPS.claudeMd)) {
+    const file = join(workspaceRoot, rel);
+    if (!existsSync(file)) {
+      problems.push(`${rel}: expected at ${file}, but it does not exist`);
+      continue;
+    }
+    const bytes = byteLength(readFileSync(file, 'utf8'));
+    sizes.push({ rel, bytes, cap });
+    if (bytes > cap) {
+      problems.push(`${rel}: ${bytes} B, over the cap of ${cap} B`);
+    }
+  }
+
+  for (const rel of onDisk) {
+    if (!(rel in CAPS.claudeMd)) {
+      problems.push(`${rel}: found on disk with no cap in CAPS.claudeMd — add a cap for ${rel}`);
+    }
+  }
+
+  return { problems, sizes };
 }
 
 const skillsResult = checkRoot(enumerateSkills(SKILLS_ROOT));
@@ -175,9 +312,30 @@ if (zeroCountRoots.length > 0) {
   process.exit(2);
 }
 
-if (problems.length > 0) {
-  console.error(`\nFAIL: ${problems.length} problem(s).`);
+// Resident-byte caps (issue #63) — run regardless of the publishes-check result above, so one
+// run always surfaces every class of problem rather than making an operator fix frontmatter,
+// re-run, and only then discover a byte cap is also blown.
+const allDescriptions = [...skillsResult.descriptions, ...agentsResult.descriptions];
+const descriptionCapResult = checkDescriptionCaps(allDescriptions);
+const claudeMdCapResult = checkClaudeMdCaps(WORKSPACE_ROOT);
+
+console.log(`descriptions measured: ${allDescriptions.length} (${descriptionCapResult.total} B total)`);
+for (const { rel, bytes, cap } of claudeMdCapResult.sizes) {
+  console.log(`${rel}: ${bytes} B (cap ${cap} B)`);
+}
+
+const residentProblems = [...descriptionCapResult.problems, ...claudeMdCapResult.problems];
+if (residentProblems.length > 0) {
+  console.error(`\n--- RESIDENT BYTE CAP EXCEEDED (${residentProblems.length}) — BLOCKER ---`);
+  for (const p of residentProblems) console.error(`  ${p}`);
+}
+
+const allProblems = [...problems, ...residentProblems];
+if (allProblems.length > 0) {
+  console.error(`\nFAIL: ${allProblems.length} problem(s).`);
   process.exit(1);
 }
 
-console.log('PASS: every SKILL.md and agent definition publishes a name and description.');
+console.log(
+  'PASS: every SKILL.md and agent definition publishes a name and description, and resident bytes are within cap.',
+);
