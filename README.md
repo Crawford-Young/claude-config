@@ -14,7 +14,7 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 | `workspace/<domain>/CLAUDE.md` | Web / games / apps standards | `~/code/<domain>/CLAUDE.md` |
 | `workspace/docs/` | Reference docs (web stack docs, `TESTING-TRAPS`, games `DIAGNOSTICS`, brand) | `~/code/docs/...` (file-by-file symlinks) |
 | `workspace/.claude/rules/` | Path-scoped rules | `~/code/.claude/rules` |
-| `statusline/` | Usage statusline | `statusLine.command` |
+| `statusline/` | Node statusline + subagent rows (`statusline/README.md`) | `statusLine` + `subagentStatusLine` commands |
 | `telemetry/` | OTel usage receiver + report | data in `~/.claude/otel/` |
 | `docs/` | Repo-only docs (migration notes, prompts) | — |
 

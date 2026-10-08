@@ -1,91 +1,95 @@
-# statusline/ — Usage Statusline
+# statusline/ — Statusline
 
-`usage-statusline.ps1` is the Claude Code `statusLine` entry point (wired in `~/.claude/settings.json`). It renders a two-row status display from the statusline stdin JSON and appends a throttled usage sample to a monthly history log.
+`statusline.mjs` is the Claude Code `statusLine` entry point and `subagent.mjs` the `subagentStatusLine` one (#77). Both are wired in `~/.claude/settings.json`:
 
-Targets Windows PowerShell 5.1. ASCII-only source; display glyphs built from `[char]` code points. Output encoding is forced to BOM-less UTF-8 — PS 5.1's default OEM code page (CP437) mangles the arrow/dot glyphs on redirected stdout.
+```json
+"statusLine": { "type": "command", "command": "node C:/Users/young/code/claude-config/statusline/statusline.mjs" },
+"subagentStatusLine": { "type": "command", "command": "node C:/Users/young/code/claude-config/statusline/subagent.mjs" }
+```
+
+`statusLine` has no exec form, so it always runs through `bash -c`. **Render cost** on that path is p50 49.1 ms. A bare `node -e 0` costs 46.1 ms through the same wrapper, and the old `usage-statusline.ps1` cost 367.8 ms (measured 2026-10-08). The hot path spawns nothing: git state comes from `.git` files, and spend comes from a cache.
 
 ## Display
 
-Two rows, empty pieces dropped, pieces joined with `·`:
-
 ```
-claude-config@feat/usage-statusline · Fable 5 · high · fast · $22.96
+claude-config-77 · claude-config@feat/77-statusline wt · Opus 5.5 · high · $3.41 · day $48
 ctx ▰▱▱▱▱▱▱▱▱▱ 102k/1M 8% · cache warm 91% · 5h ▰▰▰▱▱▱▱▱▱▱ 27%→14:00 · 7d ▰▱▱▱▱▱▱▱▱▱ 5%→Wed
 ```
 
-- **Row 1 — identity:** location `repo@branch` (git toplevel basename + current branch; worktrees show their own dir name; detached HEAD shows short SHA; non-git dirs show the folder name), model display name, effort level, a `fast` tag when `fast_mode` is `true` (omitted otherwise), session cost `$0.00`.
-- **Row 2 — usage:** context window (10-cell fill bar, used/total token counts, percent), prompt-cache state (`cache warm 91%` / `cache cold 42% miss:eviction` — omitted when `prompt_cache` is absent from stdin), five-hour window (bar, percent, `→HH:mm` local reset), seven-day window (bar, percent, `→ddd` reset day).
-- **Bars:** 10 cells, 1 cell = 10%, ceiling-rounded so any nonzero usage shows at least one cell. Filled cells colored by threshold — green < 70%, yellow ≥ 70%, red ≥ 90% — empty cells dim. The percent number carries the same color.
-- **Prompt cache:** `warm`/`cold` label colored green/red from `prompt_cache.warm`, hit ratio from `prompt_cache.hit_ratio` (rounded to a whole percent), and `miss:<cause>` appended when `prompt_cache.last_miss_cause` is non-null. `prompt_cache` is absent from stdin until the session's first API response (observed live, `claude-fable-5`/`claude-opus-5`, CLI v2.1.260) — the whole piece is dropped when it is missing, same as every other optional row-2 piece.
-- Git runs through `cmd /c "git ... 2>nul"` — under `$ErrorActionPreference = 'Stop'`, a PowerShell-level stderr redirect of a native command throws (`NativeCommandError`); the cmd-level redirect avoids it.
+Pieces are joined with `·`, and an absent piece is dropped. A fully empty render prints `[statusline]`, because a blank row looks like a crash.
 
-### Not implemented: `rate_limits.spend_limit`
+- **Session name:** comes from `~/.claude/sessions/<pid>.json` `.name`, matched on `sessionId`, with control and bidi characters stripped. `nameSource` `user` (`/rename`) or `peer` (`claude --bg -n`) renders bold. Anything else is an auto title, rendered dim with a `~` prefix and cut to 24 chars, so an un-renamed session stands out. With no registry entry, the name falls back to the payload's `session_name`, marked the same way.
+- **Location:** `repo@branch` for the checkout being edited.
+  - The repo comes from the active-repo record (below) when one exists, otherwise from `workspace.current_dir`.
+  - A linked worktree shows its owning repo plus a dim `wt`.
+  - On `main`/`master` the label turns yellow.
+  - A detached HEAD shows its short SHA. Outside git, the folder name shows.
+- **Model, effort, `fast`** (shown only when `fast_mode` is true), and **session cost**.
+- **`day $X`:** today's spend (local day) across every transcript, subagents included, at `scripts/prices.json` API rates. It has no target and no color (user decision, #77). It is absent until the first refresh.
+- **Row 2:** context (10-cell bar, token counts, %), prompt cache (`warm`/`cold`, hit ratio, `miss:<cause>`; absent until the first API response), and the five-hour and seven-day windows (bar, %, reset time).
+  - Bars ceiling-round, so any nonzero usage shows at least one cell. Fill is green below 70%, yellow from 70%, red from 90%.
 
-The statusline JSON schema documents a `rate_limits.spend_limit.{used_percentage,resets_at}` field ("behind a Claude apps gateway"), but it did not appear in any live payload captured on this machine (four consecutive samples, CLI v2.1.260, this account). Not rendered and not logged. If it starts appearing, extend the `rate_limits` render loop (`usage-statusline.ps1`, the `$Win` array) and the history sample the same way `five_hour`/`seven_day` are handled.
+### Subagent rows
 
-## Fail-open guarantees
+```
+review diff · sonnet · 42k · 1m12s
+! fix tests · opus · high · 180k · 4m03s
+```
 
-- Malformed or empty stdin → `$Status = $null` → display degrades piece-by-piece; a fully empty render emits the sentinel `[statusline]` instead of a blank line (a blank statusline is indistinguishable from a crashed one).
-- The history block is wrapped in a blanket `try/catch`; logging failure never breaks the display.
-- The script always `exit 0`.
+Each row shows label · model tier · effort · tokens · elapsed. Effort appears only when the dispatch set it; an absent effort means the subagent inherits the session's. A red `!` marks opus or fable at `high`/`xhigh`/`max`, the expensive dispatch worth catching live. A task with no resolved model gets no output line and keeps the CLI's default row. The contract is described at code.claude.com/docs/en/statusline § Subagent status lines (verified 2026-10).
+
+## Active repo
+
+`hooks/active-repo.mjs` is a PostToolUse hook (matcher `Write|Edit|MultiEdit|NotebookEdit`). It writes `{ top, ts }` for the edited file's checkout to `~/.claude/active-repo/<session_id>.json`, and prunes records older than a week. The hook records only the toplevel; the render reads branch and worktree from `.git`, so a branch switch after the last edit still shows. Wiring:
+
+```json
+"PostToolUse": [ { "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/active-repo.mjs"] }] } ]
+```
+
+## Day spend
+
+`spend.mjs` prices today's assistant records with `audit-lib.priceUsage`. For each requestId it keeps the max-output record, deduped across files so a resumed session's replay counts once.
+- Per-file byte offsets live in `~/.claude/spend/day-<date>.state.json`, so a refresh reads only appended bytes: cold 121 ms, warm 12 ms over 46 transcripts.
+- The render reads only `day-<date>.json`. When that file is over 60 s old, the render spawns the worker detached under `refresh.lock` (stale after 120 s), so a render never waits on it.
+- Earlier days' files are deleted on refresh.
+- **Credits:** no documented account-credits source exists. The documented `rate_limits.spend_limit` (Claude apps gateway only) has never appeared in this account's payloads, so it is not rendered.
 
 ## History log
 
-One JSON object per line, appended to `~/.claude/usage-history/yyyy-MM.jsonl` (monthly files). Throttled to at most one sample per 60 s per session via a state file `claude-usage-throttle-<session_id>.txt` holding the last-write epoch.
+The render appends at most one sample per 60 s per session to `~/.claude/usage-history/yyyy-MM.jsonl`. The throttle state is in `claude-usage-throttle-<session_id>.txt` under `%TEMP%`. `hooks/context-gauge.mjs` reads `context_window_size` from this log.
 
-**Reflect agents: read `~/.claude/usage-history/*.jsonl`, one JSON object per line — best-effort log, not a complete session record.** Concurrent-session appends can collide and are swallowed by design; absence of a sample proves nothing.
+**Reflect agents:** the log is best-effort, not a complete session record. Concurrent appends can collide, and a missing sample proves nothing.
 
-### Sample schema
+| Field | Source |
+|---|---|
+| `ts` | local ISO-8601 timestamp |
+| `session_id` | `session_id` (sample skipped without it) |
+| `cwd`, `model_id`, `effort`, `fast_mode` | `cwd`, `model.id`, `effort.level`, `fast_mode` |
+| `five_hour_pct`, `five_hour_resets_at`, `seven_day_pct`, `seven_day_resets_at` | `rate_limits.*` |
+| `cost_usd` | `cost.total_cost_usd` |
+| `context_pct`, `context_window_size` | `context_window.*` |
+| `cache_read_tokens`, `cache_creation_tokens` | `context_window.current_usage.*` |
+| `cache_warm`, `cache_hit_ratio`, `cache_miss_cause` | `prompt_cache.*` |
+| `exceeds_200k` | `exceeds_200k_tokens` |
 
-| Field | Source | Null when |
-|---|---|---|
-| `ts` | ISO-8601 local timestamp | never |
-| `session_id` | `session_id` | never (sample skipped without it) |
-| `cwd` | `cwd` | absent in stdin |
-| `model_id` | `model.id` | no `model` |
-| `effort` | `effort.level` | no `effort` |
-| `fast_mode` | `fast_mode` | absent in stdin |
-| `five_hour_pct` | `rate_limits.five_hour.used_percentage` | no `rate_limits` |
-| `five_hour_resets_at` | `rate_limits.five_hour.resets_at` (unix epoch) | no `rate_limits` |
-| `seven_day_pct` | `rate_limits.seven_day.used_percentage` | no `rate_limits` |
-| `seven_day_resets_at` | `rate_limits.seven_day.resets_at` (unix epoch) | no `rate_limits` |
-| `cost_usd` | `cost.total_cost_usd` | no `cost` |
-| `context_pct` | `context_window.used_percentage` | no `context_window` |
-| `context_window_size` | `context_window.context_window_size` | no `context_window` |
-| `cache_read_tokens` | `context_window.current_usage.cache_read_input_tokens` | no `current_usage` |
-| `cache_creation_tokens` | `context_window.current_usage.cache_creation_input_tokens` | no `current_usage` |
-| `cache_warm` | `prompt_cache.warm` | no `prompt_cache` |
-| `cache_hit_ratio` | `prompt_cache.hit_ratio` | no `prompt_cache` |
-| `cache_miss_cause` | `prompt_cache.last_miss_cause` | no `prompt_cache`, or no miss recorded |
-| `exceeds_200k` | `exceeds_200k_tokens` | absent in stdin |
+Every field is present on every sample; it is `null` when its source is absent.
 
 ## Env overrides (tests)
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `CLAUDE_USAGE_HISTORY_DIR` | `~/.claude/usage-history` | history log directory |
-| `CLAUDE_USAGE_THROTTLE_DIR` | `$env:TEMP` | throttle state-file directory |
+| Variable | Default |
+|---|---|
+| `CLAUDE_SESSIONS_DIR` | `~/.claude/sessions` |
+| `CLAUDE_ACTIVE_REPO_DIR` | `~/.claude/active-repo` |
+| `CLAUDE_SPEND_DIR` | `~/.claude/spend` |
+| `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` (spend worker) |
+| `CLAUDE_SPEND_NO_REFRESH` | unset; any value stops the render spawning the worker |
+| `CLAUDE_USAGE_HISTORY_DIR` | `~/.claude/usage-history` |
+| `CLAUDE_USAGE_THROTTLE_DIR` | `%TEMP%` |
 
 ## Tests
 
-`tests/run-tests.ps1` — self-contained runner (no framework), fixtures in `tests/fixtures/`. Run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
-```
-
-Covers display layout (ANSI-stripped exact-line asserts + raw color asserts), bar arithmetic/thresholds, location resolution (temp git repo + plain folder), malformed-input sentinel, history schema, throttle suppress/allow, null-field degradation, prompt-cache warm/cold + hit-ratio + miss-cause rendering and logging, and the `fast_mode` tag. The runner forces UTF-8 `OutputEncoding` to match the script.
+`node --test scripts/test/statusline.test.mjs` covers render and hook. The fixtures are in `tests/fixtures/`. Render a payload by hand with `node statusline/statusline.mjs < statusline/tests/fixtures/full.json`.
 
 ## Rollback
 
-Restore the previous statusline by setting `statusLine.command` in `~/.claude/settings.json` back to:
-
-```json
-"command": "powershell -ExecutionPolicy Bypass -File \"C:\\Users\\young\\.claude\\plugins\\cache\\caveman\\caveman\\c2ed24b3e5d4\\hooks\\caveman-statusline.ps1\""
-```
-
-settings.json hot-reloads; no restart needed.
-
-## History
-
-Spec: `docs@5740fed:harness-evolution/specs/2026-08-06-usage-monitor-design.md`. The spec's display section (caveman badge + wrapper child process, plain `pct→reset` text) was superseded at the T3 live QA gate — badge removed entirely, display redesigned across 4 QA rounds (tick bars, token counts, location piece, two-row split). This README documents the shipped code; issue log `docs@5740fed:harness-evolution/issues/done/2026-08-06-p2-usage-monitor-issues.md` #3 has the round-by-round record.
+`git show 731142c:statusline/usage-statusline.ps1` recovers the PowerShell version. Point `statusLine.command` back at it with `powershell -NoProfile -ExecutionPolicy Bypass -File <path>`. settings.json hot-reloads.
