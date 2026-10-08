@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lastMerge } from '../../hooks/stop-reflect-gate.mjs';
+import { lastMerge, lastReflectAt } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
@@ -51,6 +51,42 @@ test('reminds once per merged PR, then stays quiet', () => {
 
   assert.equal(runHook({ transcript_path, stop_hook_active: true }, home).code, 0, 'the retry passes');
   assert.equal(runHook({ transcript_path }, home).code, 0, 'a later turn end on the same merge passes');
+});
+
+const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+const reflectRead = (id, min, path = 'C:\\Users\\u\\code\\claude-config\\skills\\reflect\\SKILL.md') => ({
+  type: 'assistant',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: path } }] },
+});
+
+test('lastReflectAt: the newest reflect SKILL.md read or reflect Skill call, else null', () => {
+  const at = lastReflectAt(
+    [
+      reflectRead('r1', 90),
+      reflectRead('r2', 5, '~/code/claude-config/skills/reflect/SKILL.md'),
+      { type: 'assistant', timestamp: ago(1), message: { content: [{ type: 'tool_use', id: 'o', name: 'Read', input: { file_path: 'skills/qa/SKILL.md' } }] } },
+    ]
+      .map((r) => JSON.stringify(r))
+      .join('\n'),
+  );
+  assert.ok(Math.abs(at - (Date.now() - 5 * 60_000)) < 5_000, 'newest reflect read wins; other skills do not count');
+  const skill = { type: 'assistant', timestamp: ago(3), message: { content: [{ type: 'tool_use', id: 's', name: 'Skill', input: { skill: 'reflect' } }] } };
+  assert.ok(lastReflectAt(JSON.stringify(skill)));
+  assert.equal(lastReflectAt(JSON.stringify(call('a', 'gh pr merge 5'))), null);
+});
+
+test('a merge within 60 min of a reflect read is the reflect landing itself: quiet, and stays quiet', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(reflectRead('r', 10), call('m94', 'gh pr merge 94 --rebase'), result('m94'));
+  assert.equal(runHook({ transcript_path }, home).code, 0, 'the reflect-landing merge does not re-prompt reflect');
+  assert.equal(runHook({ transcript_path }, home).code, 0);
+});
+
+test('a reflect read older than 60 min does not cover a later merge', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(reflectRead('r', 120), call('m2', 'gh pr merge 95 --rebase'), result('m2'));
+  assert.equal(runHook({ transcript_path }, home).code, 2, "a later wave's merge still prompts");
 });
 
 test('quiet with no merge, a failed merge, or no transcript', () => {
