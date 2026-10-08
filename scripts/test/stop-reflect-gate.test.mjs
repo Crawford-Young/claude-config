@@ -1,7 +1,7 @@
 // node --test scripts/test/stop-reflect-gate.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -22,10 +22,9 @@ function transcript(...records) {
 
 function runHook(payload, home) {
   try {
-    execFileSync(process.execPath, [hook], {
+    execHarness(hook, [], {
       input: JSON.stringify(payload),
-      encoding: 'utf8',
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      home,
     });
     return { code: 0 };
   } catch (e) {

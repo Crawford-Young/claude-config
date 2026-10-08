@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { execHarness, isolatedEnv } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -18,11 +19,9 @@ function home() {
   return h;
 }
 
-const envFor = (h) => ({ ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code') });
-
 function runHook(script, payload, h) {
   try {
-    execFileSync(process.execPath, [script], { input: JSON.stringify(payload), encoding: 'utf8', env: envFor(h) });
+    execHarness(script, [], { input: JSON.stringify(payload), home: h });
     return { code: 0 };
   } catch (e) {
     return { code: e.status, stderr: e.stderr };
@@ -47,7 +46,7 @@ test('the temp-home redirect actually takes effect in a spawned hook', () => {
   const h = home();
   const seen = execFileSync(process.execPath, ['-e', 'console.log(require("os").homedir())'], {
     encoding: 'utf8',
-    env: envFor(h),
+    env: isolatedEnv(h),
   }).trim();
   assert.equal(seen, h, 'os.homedir() in the child must resolve to the temp home (Windows reads USERPROFILE, not HOME)');
 });
@@ -118,7 +117,7 @@ test('a stale (>30min) or corrupt marker blocks', () => {
 
 /** Runs the guard and parses its stdout decision (null when it printed none). */
 function runGuardOut(payload, h) {
-  const out = execFileSync(process.execPath, [guard], { input: JSON.stringify(payload), encoding: 'utf8', env: envFor(h) });
+  const out = execHarness(guard, [], { input: JSON.stringify(payload), home: h });
   return out.trim() ? JSON.parse(out) : null;
 }
 
@@ -276,7 +275,7 @@ test('the guard blocks when it cannot read the payload', () => {
   let code = 0;
   let stderr = '';
   try {
-    execFileSync(process.execPath, [guard], { input: 'not json', encoding: 'utf8', env: envFor(h) });
+    execHarness(guard, [], { input: 'not json', home: h });
   } catch (e) {
     code = e.status;
     stderr = e.stderr;

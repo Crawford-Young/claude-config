@@ -1,7 +1,8 @@
 // node --test scripts/test/statusline.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnHarness } from './_spawn.mjs';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,7 +48,7 @@ const NOREG = {
 const SID = '4ebbd908-ff44-4647-a06b-2f807203d3b8';
 
 function runScript(input, env = {}) {
-  const r = spawnSync(process.execPath, [SCRIPT], { input, env: { ...process.env, ...NOREG, ...env }, encoding: 'utf8' });
+  const r = spawnHarness(SCRIPT, [], { input, env: { ...NOREG, ...env } });
   return { out: r.stdout, code: r.status };
 }
 
@@ -179,7 +180,7 @@ test('active repo: the hook records the edited checkout; the row names its ownin
     const payload = { session_id: SID, tool_name: 'Write', tool_input: { file_path: join(root, 'owner-repo-77-x', 'new', 'file.mjs') } };
     // the file's directory does not exist yet: the hook resolves upward
     mkdirSync(join(root, 'owner-repo-77-x', 'new'));
-    const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(payload), env: { ...process.env, CLAUDE_ACTIVE_REPO_DIR: active }, encoding: 'utf8' });
+    const r = spawnHarness(HOOK, [], { input: JSON.stringify(payload), env: { CLAUDE_ACTIVE_REPO_DIR: active } });
     assert.equal(r.status, 0);
     assert.equal(r.stdout, '');
     const env = { ...NOREG, CLAUDE_ACTIVE_REPO_DIR: active };
@@ -380,7 +381,7 @@ test('spend: a failed refresh keeps the lock, so renders back off instead of res
   try {
     mkdirSync(spend);
     writeFileSync(spendLock(spend), String(Date.now()));
-    const r = spawnSync(process.execPath, [SPEND], { env: { ...process.env, CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'missing') } });
+    const r = spawnHarness(SPEND, [], { env: { CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'missing') } });
     assert.equal(r.status, 0);
     assert.ok(existsSync(spendLock(spend)), 'lock released on failure');
   } finally {
@@ -451,7 +452,7 @@ test('spend_limit renders when the payload carries it, dollars when present', ()
 test('stdin with a BOM still renders; a session_id that is not a plain id writes no file', () => {
   const BOM = String.fromCharCode(0xfeff);
   assert.ok(runScript(BOM + fixture('no-rate-limits.json')).out.includes('ctx '));
-  const sub = spawnSync(process.execPath, [SUBAGENT], { input: BOM + JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }), encoding: 'utf8' });
+  const sub = spawnHarness(SUBAGENT, [], { input: BOM + JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }) });
   assert.ok(sub.stdout.includes('"id":"z"'));
   const hist = tmp();
   try {
@@ -503,9 +504,9 @@ test('subagent: label · tier · effort · tokens · elapsed; red ! only for opu
 });
 
 test('subagent: malformed stdin prints nothing and exits 0', () => {
-  const r = spawnSync(process.execPath, [SUBAGENT], { input: '{nope', encoding: 'utf8' });
+  const r = spawnHarness(SUBAGENT, [], { input: '{nope' });
   assert.deepEqual([r.stdout, r.status], ['', 0]);
-  const ok = spawnSync(process.execPath, [SUBAGENT], { input: JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }), encoding: 'utf8' });
+  const ok = spawnHarness(SUBAGENT, [], { input: JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }) });
   assert.equal(plain(JSON.parse(ok.stdout.trim()).content), 'l · haiku');
 });
 

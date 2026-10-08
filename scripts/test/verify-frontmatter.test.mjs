@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
@@ -91,9 +91,9 @@ function validAgentsRoot() {
  * Returns { status, out }; never throws on non-zero exit.
  */
 function run(skillsRoot, agentsRoot, workspaceRoot) {
-  const args = [CHECK, '--skills', skillsRoot, '--agents', agentsRoot];
+  const args = ['--skills', skillsRoot, '--agents', agentsRoot];
   if (workspaceRoot) args.push('--workspace', workspaceRoot);
-  const r = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  const r = spawnHarness(CHECK, args);
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
 }
 
@@ -531,7 +531,7 @@ test('a new workspace/<domain>/CLAUDE.md with no CAPS entry fails, not silently 
 });
 
 test('the live repo itself passes every resident-byte cap with its real skills, agents and CLAUDE.md files', () => {
-  const r = spawnSync(process.execPath, [CHECK], { encoding: 'utf8' });
+  const r = spawnHarness(CHECK, []);
   assert.equal(r.status, 0);
   assert.match(`${r.stdout}${r.stderr}`, /resident bytes are within cap/);
 });

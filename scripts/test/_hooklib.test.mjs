@@ -3,7 +3,7 @@
 // this covers (H21 BOM, H3 unbounded logs) only appear across the process boundary.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -25,10 +25,9 @@ function home({ claudeIsAFile = false } = {}) {
 }
 
 function runHook(script, input, h) {
-  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code') };
   const stdin = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
   try {
-    const stdout = execFileSync(process.execPath, [script], { input: stdin, encoding: 'utf8', env });
+    const stdout = execHarness(script, [], { input: stdin, home: h });
     return { code: 0, stdout, stderr: '' };
   } catch (e) {
     return { code: e.status, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };

@@ -2,7 +2,7 @@
 // transcript and two tiny fake checkouts whose staticCheck differs on one command.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -38,7 +38,7 @@ function config(files) {
 }
 
 function run(configDir, ...args) {
-  return execFileSync('node', [script, ...args], { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, encoding: 'utf8' });
+  return execHarness(script, args, { env: { CLAUDE_CONFIG_DIR: configDir } });
 }
 
 test('prints exactly one line per changed verdict, deduped, plus a summary', () => {
