@@ -48,7 +48,7 @@
    "kind": "config",
    "label": "settings.json",
    "file": "~/.claude/settings.json",
-   "summary": "Wires every hook by event and matcher; session default model opus; teams on; OTel env.",
+   "summary": "Wires every hook by event and matcher; session default model opus; teams on.",
    "rules": [
     "Denies git add -A / --all at the permission layer too"
    ],

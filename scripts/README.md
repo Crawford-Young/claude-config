@@ -18,6 +18,8 @@ with `node --test scripts/test/*.test.mjs`.
 | `export-harness.ps1` / `import-harness.ps1` | Move harness config between machines |
 | `open-admin-shells.ps1` | Elevated shells for junction work |
 
+**Retention:** `audit.mjs` replays transcripts, and Claude Code deletes them after `cleanupPeriodDays` (default 30). `~/.claude/settings.json` (user-level, untracked) sets `"cleanupPeriodDays": 365` (#62, 2026-10-08) - keep it, or the audit loses its data. The OTel receiver that once captured cost was deleted (#76, #104).
+
 Env overrides (tests/remotes): `CLAUDE_WORKSPACE_ROOT` (default `~/code`),
 `CLAUDE_CONFIG_REPO`.
 
