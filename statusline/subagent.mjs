@@ -7,15 +7,14 @@
 // verified 2026-10). stdout: one {"id","content"} JSON line per row overridden.
 // A task without a model gets no line and keeps the default row. Fails to silence.
 
-import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { formatTokens } from './statusline.mjs';
+import { formatTokens, readJsonStdin } from './statusline.mjs';
 
 const ESC = '\x1b';
 const RST = `${ESC}[0m`;
 const paint = (code, s) => `${ESC}[${code}m${s}${RST}`;
 const SEP = ` ${paint(2, '·')} `;
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 const clean = (s) => String(s ?? '').replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim();
 
 /** Price tier from a model id: claude-opus-5-5 → opus. */
@@ -61,7 +60,7 @@ export function render(input, now = Date.now()) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const out = render(JSON.parse(readFileSync(0, 'utf8')));
+    const out = render(readJsonStdin());
     if (out) process.stdout.write(`${out}\n`);
   } catch {
     /* default rows */

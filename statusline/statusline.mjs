@@ -44,6 +44,17 @@ export function formatTokens(n) {
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const pad2 = (n) => String(n).padStart(2, '0');
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** stdin as JSON; a BOM-prefixed payload parses (the _hooklib H21 lesson). null on failure. */
+export function readJsonStdin() {
+  try {
+    const raw = readFileSync(0, 'utf8').replace(/^\uFEFF/, '');
+    return raw.trim() ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 function readText(file) {
   try {
@@ -56,8 +67,10 @@ function readText(file) {
 /**
  * Git identity of the checkout containing dir, from .git files alone (a `git`
  * spawn costs 30–50 ms on Windows — most of the render budget).
- * → { top, branch, worktree, owner } | null. branch is the short SHA when
- * detached; worktree/owner are set only in a linked worktree.
+ * → { top, branch, worktree, repo } | null. branch is the short SHA when
+ * detached, '' when unreadable (a reftable repo's HEAD is the stub
+ * refs/heads/.invalid); worktree is set only in a linked worktree; repo names
+ * the owning repository (a worktree's toplevel is the worktree dir).
  */
 export function gitInfo(dir) {
   for (let d = resolve(dir); ; d = dirname(d)) {
@@ -79,9 +92,11 @@ export function gitInfo(dir) {
       const commondir = common ? resolve(gitdir, common.trim()) : gitdir;
       const head = (readText(join(gitdir, 'HEAD')) || '').trim();
       const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
-      const branch = ref ? ref[1] : /^[0-9a-f]{7,}$/i.test(head) ? head.slice(0, 7) : '';
+      const branch = ref ? (ref[1] === '.invalid' ? '' : ref[1]) : /^[0-9a-f]{7,}$/i.test(head) ? head.slice(0, 7) : '';
       const linked = resolve(gitdir) !== resolve(commondir);
-      return { top: d, branch, worktree: linked ? basename(gitdir) : '', owner: linked ? dirname(commondir) : '' };
+      // common dir: <repo>/.git, a bare <name>.git, or a submodule's .git/modules/<name>
+      const repo = !linked ? basename(d) : basename(commondir) === '.git' ? basename(dirname(commondir)) : basename(commondir).replace(/\.git$/, '');
+      return { top: d, branch, worktree: linked ? basename(gitdir) : '', repo };
     }
     if (dirname(d) === d) return null;
   }
@@ -89,7 +104,7 @@ export function gitInfo(dir) {
 
 // C0, DEL and C1 (U+009B is an 8-bit CSI) let a name paint the terminal; bidi
 // overrides let it reorder the row.
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /**
  * Session name from the registry (~/.claude/sessions/<pid>.json) matched on
@@ -131,7 +146,8 @@ function namePiece(status, env) {
   }
   if (!n) return null;
   if (!n.auto) return `${ESC}[1m${n.name}${RST}`;
-  const cut = n.name.length > 24 ? `${n.name.slice(0, 23)}…` : n.name;
+  const chars = [...n.name]; // by code point: a cut must not split a surrogate pair
+  const cut = chars.length > 24 ? `${chars.slice(0, 23).join('')}…` : n.name;
   return `${ESC}[2m~${cut}${RST}`;
 }
 
@@ -165,7 +181,7 @@ function locationPiece(status, env) {
       return null;
     }
   }
-  const name = basename(info.owner || info.top);
+  const name = info.repo;
   const label = info.branch ? `${name}@${info.branch}` : name;
   const shown = info.branch === 'main' || info.branch === 'master' ? `${ESC}[33m${label}${RST}` : label;
   return info.worktree ? `${shown} ${ESC}[2mwt${RST}` : shown;
@@ -192,13 +208,21 @@ function kickRefresh(dir, env, now) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(lock, String(now));
   const worker = fileURLToPath(new URL('./spend.mjs', import.meta.url));
-  spawn(process.execPath, [worker], { detached: true, stdio: 'ignore', windowsHide: true, env }).unref();
+  // cwd off the session's dir, so the worker never pins a worktree being removed
+  const child = spawn(process.execPath, [worker], { detached: true, stdio: 'ignore', windowsHide: true, env, cwd: dir });
+  child.on('error', () => {}); // EMFILE/EAGAIN must not turn into an uncaught exit 1
+  child.unref();
 }
 
 /** `day $48` — today's spend across sessions; absent until the first refresh. */
 function dayPiece(env, now = Date.now()) {
   const dir = spendDir(env);
-  const cache = JSON.parse(readText(join(dir, `day-${localDay(new Date(now))}.json`)) || 'null');
+  let cache = null;
+  try {
+    cache = JSON.parse(readText(join(dir, `day-${localDay(new Date(now))}.json`)) || 'null');
+  } catch {
+    /* torn or corrupt: treated as stale, so the next refresh rewrites it */
+  }
   if (!env.CLAUDE_SPEND_NO_REFRESH && !(now - (cache?.ts || 0) < SPEND_STALE_MS)) kickRefresh(dir, env, now);
   const usd = num(cache?.usd);
   if (usd === null) return null;
@@ -229,18 +253,23 @@ function cachePiece(pc) {
   return `cache ${color}${pc.warm ? 'warm' : 'cold'}${hit}${RST}${miss}`;
 }
 
+/** Rate windows. spend_limit is documented (Claude apps gateway only) and has never
+ *  appeared in this account's payloads; it renders when it does (#77 decision).
+ *  Its dollar figures arrive after the percentage and may stay absent. */
 function windowPieces(rl) {
   const out = [];
   for (const [key, label, fmt] of [
     ['five_hour', '5h', (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`],
     ['seven_day', '7d', (d) => DAYS[d.getDay()]],
+    ['spend_limit', 'spend', (d) => `${MONTHS[d.getMonth()]} ${d.getDate()}`],
   ]) {
     const w = rl?.[key];
     const pct = num(w?.used_percentage);
     if (pct === null) continue;
     const p = Math.trunc(pct);
+    const usd = num(w.used_usd) !== null && num(w.limit_usd) !== null ? ` $${Math.round(w.used_usd)}/$${Math.round(w.limit_usd)}` : '';
     const when = num(w.resets_at) !== null ? `→${fmt(new Date(w.resets_at * 1000))}` : '';
-    out.push(`${label} ${fillBar(p)} ${usageColor(p)}${p}%${RST}${when}`);
+    out.push(`${label} ${fillBar(p)} ${usageColor(p)}${p}%${RST}${usd}${when}`);
   }
   return out;
 }
@@ -325,6 +354,7 @@ export function logHistory(s, env = process.env, now = new Date()) {
   const historyDir = env.CLAUDE_USAGE_HISTORY_DIR || join(homedir(), '.claude', 'usage-history');
   const throttleDir = env.CLAUDE_USAGE_THROTTLE_DIR || env.TEMP || tmpdir();
   const epoch = Math.floor(now.getTime() / 1000);
+  if (typeof s.session_id !== 'string' || !/^[\w-]+$/.test(s.session_id)) return; // it names a file
   const state = join(throttleDir, `claude-usage-throttle-${s.session_id}.txt`);
   const last = Number.parseInt(readText(state) || '', 10);
   if (Number.isFinite(last) && epoch - last < 60) return;
@@ -335,18 +365,7 @@ export function logHistory(s, env = process.env, now = new Date()) {
 }
 
 function main() {
-  let raw = '';
-  try {
-    raw = readFileSync(0, 'utf8');
-  } catch {
-    /* no stdin */
-  }
-  let status = null;
-  try {
-    if (raw.trim()) status = JSON.parse(raw);
-  } catch {
-    status = null;
-  }
+  const status = readJsonStdin();
   process.stdout.write(render(status));
   try {
     logHistory(status);
