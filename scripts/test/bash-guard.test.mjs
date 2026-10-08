@@ -750,3 +750,24 @@ test('#92: the other rules read substitution bodies too', () => {
   assert.ok(staticCheck('x=`git commit -am wip`'));
   assert.equal(staticCheck("echo '$(git add -A)'"), null);
 });
+
+test('commit-on-main stays blocked when a remote-tracking ref exists but HEAD is unborn', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  bornRepo(app);
+  const clone = join(h, 'clone');
+  mkdirSync(clone);
+  execFileSync('git', ['init', '-q', '-b', 'main', clone]);
+  execFileSync('git', ['-C', clone, 'remote', 'add', 'origin', app]);
+  execFileSync('git', ['-C', clone, 'fetch', '-q', 'origin']);
+  assert.equal(guardRun(`cd ${clone} && git commit -m x`, h), 2);
+});
+
+test('commit-on-main stays blocked when HEAD names a missing main but another branch exists', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  bornRepo(app);
+  execFileSync('git', ['-C', app, 'branch', 'other']);
+  execFileSync('git', ['-C', app, 'update-ref', '-d', 'refs/heads/main']);
+  assert.equal(guardRun(`cd ${app} && git commit -m x`, h), 2);
+});

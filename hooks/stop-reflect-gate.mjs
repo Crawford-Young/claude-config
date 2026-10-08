@@ -58,7 +58,7 @@ export function lastMerge(text) {
 export function lastReflectAt(text) {
   let at = null;
   for (const l of text.split('\n')) {
-    if (!l.includes('reflect')) continue;
+    if (!l.toLowerCase().includes('reflect')) continue;
     let o;
     try {
       o = JSON.parse(l);
@@ -70,7 +70,7 @@ export function lastReflectAt(text) {
         c.type === 'tool_use' &&
         ((c.name === 'Read' && REFLECT_SKILL.test(c.input?.file_path || '')) ||
           (c.name === 'Skill' && c.input?.skill === 'reflect') ||
-          (MERGE_TOOLS.has(c.name) && shellSkillReads(c.input?.command).includes('reflect'))),
+          (MERGE_TOOLS.has(c.name) && shellSkillReads(scrub(c.input?.command)).some((n) => n.toLowerCase() === 'reflect'))),
     );
     const t = Date.parse(o?.timestamp);
     if (hit && !Number.isNaN(t)) at = Math.max(at ?? 0, t);

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,4 +74,16 @@ test('a dispatch older than one read chunk is still found', () => {
   const filler = Array.from({ length: 400 }, (_, i) => use('Bash', { command: pad }, `b${i}`));
   const ctx = setup([...five, use('Agent', {}, 'd1'), edit('x.ts'), ...filler]);
   assert.equal(fire(ctx), null);
+});
+
+test('a missing transcript logs no hook error', () => {
+  const ctx = setup(five);
+  assert.equal(fire(ctx, { transcript_path: join(ctx.h, 'nope.jsonl') }), null);
+  assert.equal(existsSync(join(ctx.h, '.claude', 'hook-errors.log')), false);
+});
+
+test('one file spelled with backslashes, slashes and another case counts once', () => {
+  const ctx = setup(['C:\\a\\x.md', 'C:/a/x.md', 'c:/a/x.md', 'c:/a/y.md', 'c:/a/z.md', 'c:/a/w.md', 'c:/a/v.md'].map(edit));
+  assert.equal(fire(ctx, {}, 'C:\\a\\X.md'), null, '5 distinct files');
+  assert.ok(fire(ctx, {}, 'c:/a/u.md'), '6 distinct files');
 });

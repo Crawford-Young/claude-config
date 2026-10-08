@@ -26,13 +26,20 @@ const CHUNK = 256 * 1024;
 
 export const MESSAGE = `${THRESHOLD} files edited inline since the last dispatch — agent-factory: dispatch multi-file work; inline is for ≤2-file docs/config.`;
 
+const norm = (p) => p.replaceAll('\\', '/').toLowerCase();
+
 export const stateFile = () => process.env.CLAUDE_INLINE_NUDGE_STATE || join(claudeDir, 'inline-edit-nudge.json');
 
-/** Walk the transcript backward to the last dispatch. → { runId, files } where
+/** Walk the transcript backward to the last dispatch. → null when unreadable, else { runId, files } where
  *  files are the distinct paths edited after it (or since the start). */
 export function currentRun(transcriptPath) {
   const files = new Set();
-  const fd = openSync(transcriptPath, 'r');
+  let fd;
+  try {
+    fd = openSync(transcriptPath, 'r');
+  } catch {
+    return null; // missing or unreadable transcript: nothing to count, and no hook-errors.log entry
+  }
   try {
     let pos = fstatSync(fd).size;
     let carry = Buffer.alloc(0);
@@ -61,7 +68,7 @@ export function currentRun(transcriptPath) {
           if (DISPATCHES.has(b.name)) return { runId: b.id || 'dispatch', files };
           if (EDITS.has(b.name)) {
             const f = b.input?.file_path || b.input?.notebook_path;
-            if (f) files.add(f);
+            if (f) files.add(norm(f));
           }
         }
       }
@@ -78,9 +85,11 @@ export function nudge(payload, file = stateFile()) {
   const sid = payload?.session_id;
   const path = payload?.transcript_path;
   if (payload?.agent_id || typeof sid !== 'string' || !sid || typeof path !== 'string' || !path) return null;
-  const { runId, files } = currentRun(path);
+  const cur = currentRun(path);
+  if (!cur) return null;
+  const { runId, files } = cur;
   const own = payload.tool_input?.file_path || payload.tool_input?.notebook_path;
-  if (own) files.add(own); // the transcript may not hold the in-flight call yet
+  if (own) files.add(norm(own)); // the transcript may not hold the in-flight call yet
   if (files.size < THRESHOLD) return null;
   const state = readState(file);
   if (state[sid] === runId) return null;
