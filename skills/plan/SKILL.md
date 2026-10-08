@@ -1,6 +1,7 @@
 ---
 name: plan
 description: Use when planning any feature, fix, or refactor — before writing implementation code. Plan mode is the planning surface; this skill adds the workspace's spec/checklist conventions, the five plan-time verification checks, and the trade-off debate for genuine design forks.
+disable-model-invocation: true
 ---
 
 # Plan

@@ -1,6 +1,7 @@
 ---
 name: worktree
 description: New branch, worktree, or session isolation — use when starting branch work in any code repo, when parallel sessions need isolation, or when a worktree must be removed. Creates/removes feature worktrees with env files copied automatically. All branch work happens in worktrees; main checkouts stay on main.
+disable-model-invocation: true
 ---
 
 # Worktree
@@ -31,5 +32,5 @@ Encodes the Windows-safe sequence (git remove → force → recursive delete →
 
 - `claude agents --cwd <repo>` (or `claude.exe agents --cwd <repo>` on this Windows setup) answers "is another session already active on this repo?" — run it before starting concurrent/multi-session branch work, not just before land.
 - Two concurrent sessions on one repo always use separate worktrees.
-- claude-config commits never happen on its main checkout — use the `git-ops` skill (`land.mjs`).
+- claude-config commits never happen on its main checkout — Read `skills/git-ops/SKILL.md` (`land.mjs`).
 - `worktree.mjs list` shows every registered worktree across the workspace.

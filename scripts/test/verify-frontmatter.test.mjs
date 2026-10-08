@@ -29,22 +29,33 @@ model: sonnet
 You are a demo agent.
 `;
 
-/** Build a throwaway skills root holding one SKILL.md with the given body. */
-function skillsRootWith(name, contents) {
-  const root = mkdtempSync(join(tmpdir(), 'skills-'));
-  mkdirSync(join(root, name));
-  writeFileSync(join(root, name, 'SKILL.md'), contents, 'utf8');
-  return root;
+/** A skills INDEX.md (#64) listing every given skill name by its SKILL.md path. */
+function indexFor(names) {
+  return `Read the path; skills are not Skill-tool invocable.\n${names.map((n) => `- ${n} → ${n}/SKILL.md`).join('\n')}\n`;
 }
 
-/** Build a throwaway skills root holding several `<name>/SKILL.md` files at once. */
-function multiSkillsRootWith(files) {
+/** Build a throwaway skills root holding one SKILL.md with the given body, plus its INDEX.md. */
+function skillsRootWith(name, contents) {
+  return multiSkillsRootWith({ [name]: contents });
+}
+
+/**
+ * Build a throwaway skills root holding several `<name>/SKILL.md` files at once. An INDEX.md
+ * listing all of them is written too unless `index` overrides it (`null` = no INDEX.md).
+ */
+function multiSkillsRootWith(files, index = indexFor(Object.keys(files))) {
   const root = mkdtempSync(join(tmpdir(), 'skills-'));
   for (const [name, contents] of Object.entries(files)) {
     mkdirSync(join(root, name));
     writeFileSync(join(root, name, 'SKILL.md'), contents, 'utf8');
   }
+  if (index !== null) writeFileSync(join(root, 'INDEX.md'), index, 'utf8');
   return root;
+}
+
+/** The same skill with `disable-model-invocation: true` — its description is not resident. */
+function flagged(contents) {
+  return contents.replace(/\n---\n/, '\ndisable-model-invocation: true\n---\n');
 }
 
 /** A SKILL.md whose description is exactly `bytes` long (all 'a', so no colon trap). */
@@ -358,16 +369,78 @@ test('a single description over the per-description cap fails, not silently trun
 
 test('descriptions each under the per-item cap can still blow the combined total cap', () => {
   const files = {};
-  for (let i = 0; i < 12; i++) files[`skill-${i}`] = skillWithDescriptionBytes(500);
+  for (let i = 0; i < 4; i++) files[`skill-${i}`] = skillWithDescriptionBytes(500);
   const root = multiSkillsRootWith(files);
   try {
     const { status, out } = runSkillsCheck(root);
     assert.equal(status, 1);
-    // 12 skill descriptions * 500 B + the fixed valid agent fixture's description, over the
-    // 4422 B total cap, with every individual description still under the 512 B per-item cap
+    // 4 skill descriptions * 500 B + the fixed valid agent fixture's description, over the
+    // 1024 B total cap, with every individual description still under the 512 B per-item cap
     // — this must be the ONLY class of failure.
-    assert.match(out, /all descriptions combined: \d+ B, over the total cap of 4422 B/);
+    assert.match(out, /all descriptions combined: \d+ B, over the total cap of 1024 B/);
     assert.doesNotMatch(out, /over the per-description cap/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- Skill index + disable-model-invocation (issue #64) --------------------------------------
+
+test('flagged skills drop out of the resident description total and per-item cap', () => {
+  const files = {};
+  for (let i = 0; i < 4; i++) files[`skill-${i}`] = flagged(skillWithDescriptionBytes(500));
+  files['big-flagged'] = flagged(skillWithDescriptionBytes(600));
+  const root = multiSkillsRootWith(files);
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 0, out);
+    // only the agent fixture's description is resident
+    assert.match(out, /descriptions measured: 1 \(/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a flagged skill still has to publish its description, which feeds the / menu', () => {
+  const root = skillsRootWith('demo-skill', flagged(VALID.replace('covers the thing', 'note: covers the thing')));
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /colon/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a skills root with no INDEX.md fails — session-start would inject no skill routing at all', () => {
+  const root = multiSkillsRootWith({ 'demo-skill': VALID }, null);
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /INDEX\.md: missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a skill whose SKILL.md path is absent from INDEX.md fails as unroutable', () => {
+  const root = multiSkillsRootWith({ 'demo-skill': VALID, 'lost-skill': VALID }, indexFor(['demo-skill']));
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /INDEX\.md: lost-skill\/SKILL\.md is not listed/);
+    assert.doesNotMatch(out, /demo-skill\/SKILL\.md is not listed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an INDEX.md over its byte cap fails', () => {
+  const root = multiSkillsRootWith({ 'demo-skill': VALID }, `${indexFor(['demo-skill'])}${'a'.repeat(1024)}\n`);
+  try {
+    const { status, out } = runSkillsCheck(root);
+    assert.equal(status, 1);
+    assert.match(out, /INDEX\.md: \d+ B, over the cap of 1024 B/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

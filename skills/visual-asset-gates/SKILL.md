@@ -1,6 +1,7 @@
 ---
 name: visual-asset-gates
 description: Images, brand assets, SVGs, palettes/themes, screenshots, and preview gates — use when generating or iterating on images and brand assets, tracing or emitting SVGs, deciding palettes or themes, capturing screenshots, or running the preview gate before user QA, including while still scoping or planning such work, since art direction and composition are per-asset user gates rather than plan-locked decisions.
+disable-model-invocation: true
 ---
 
 # Visual & Asset Gates

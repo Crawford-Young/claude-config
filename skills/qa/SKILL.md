@@ -1,6 +1,7 @@
 ---
 name: qa
 description: Use when running quality gates — tests, lint, typecheck, e2e, coverage — for any repo, or when verifying work before calling it done. Runs the repo's own gates with honest exit codes and compact output via qa.mjs.
+disable-model-invocation: true
 ---
 
 # QA

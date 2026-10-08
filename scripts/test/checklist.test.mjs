@@ -26,6 +26,7 @@ test('new + tick + status + done round-trip', () => {
   const file = runCli(['new', project, 'wave-1', '--branch', 'feat/x']).trim();
   assert.ok(existsSync(file));
   assert.match(readFileSync(file, 'utf8'), /feat\/x/);
+  assert.match(readFileSync(file, 'utf8'), /\*\*Reflect\*\* — Read ~\/code\/claude-config\/skills\/reflect\/SKILL\.md/);
 
   runCli(['tick', file, 'Task 1', '--note', 'went fine']);
   const after = readFileSync(file, 'utf8');

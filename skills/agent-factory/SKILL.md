@@ -1,6 +1,7 @@
 ---
 name: agent-factory
 description: Use when executing a multi-task plan or checklist, deciding whether to spawn a subagent, choosing a model for a dispatch, or proposing a Workflow fan-out. Carries the spawn posture, the dispatch template, and model routing.
+disable-model-invocation: true
 ---
 
 # Agent Factory
@@ -85,4 +86,4 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 
 ## Checklist execution
 
-The checklist (created by the `plan` skill via `checklist.mjs`) is the source of truth across sessions. Tick tasks as they complete (`checklist.mjs tick` — real stamps), append one Log line per dispatch/deviation/decision at the moment it happens, and stop at `<!-- COMPACT POINT -->` markers: state on disk → hand a continuation prompt and suggest `/clear`. Dispatches run in the background — keep working the checklist while children are in flight, and only block when the next task genuinely depends on a still-pending result. At wave close run the `reflect` skill, then `checklist.mjs done`.
+The checklist (created by the `plan` skill via `checklist.mjs`) is the source of truth across sessions. Tick tasks as they complete (`checklist.mjs tick` — real stamps), append one Log line per dispatch/deviation/decision at the moment it happens, and stop at `<!-- COMPACT POINT -->` markers: state on disk → hand a continuation prompt and suggest `/clear`. Dispatches run in the background — keep working the checklist while children are in flight, and only block when the next task genuinely depends on a still-pending result. At wave close Read `~/code/claude-config/skills/reflect/SKILL.md` and run it, then `checklist.mjs done`.

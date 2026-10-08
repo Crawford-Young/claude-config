@@ -120,6 +120,21 @@ test('skill calls, slash commands and doc reads are counted once per tool_use id
   assert.deepEqual(r.docs, { 'code/docs/web/TESTING-TRAPS.md': 1 });
 });
 
+// #64: skills carry disable-model-invocation and are reached by Reading their SKILL.md from the
+// session-start index — a Read of skills/<name>/SKILL.md is an invocation, or every skill reads as dead.
+test('a Read of skills/<name>/SKILL.md counts as that skill being invoked, once per tool_use id', () => {
+  const c = createCollector({ prices: PRICES, installedSkills: ['plan', 'qa', 'reflect'] });
+  const win = { type: 'tool_use', id: 'k1', name: 'Read', input: { file_path: 'C:\\Users\\young\\code\\claude-config\\skills\\qa\\SKILL.md' } };
+  const junction = { type: 'tool_use', id: 'k2', name: 'Read', input: { file_path: '/home/u/.claude/skills/plan/SKILL.md' } };
+  const sibling = { type: 'tool_use', id: 'k3', name: 'Read', input: { file_path: 'C:/x/skills/reflect/gotchas.md' } };
+  c.add(asst('r1', usage(), { content: [win, junction, sibling] }), MAIN);
+  c.add(asst('r1', usage({ output_tokens: 3 }), { content: [win] }), MAIN); // partial repeat
+  const r = c.report();
+  assert.deepEqual(r.skillReads, { qa: 1, plan: 1 });
+  assert.deepEqual(r.unusedSkills, ['reflect']);
+  assert.match(renderMarkdown(r, { top: 5 }), /\*\*SKILL\.md reads\*\*[\s\S]*\| qa \| 1 \|/);
+});
+
 test('hook block text parses to event, tool, hook script and reason', () => {
   const b = parseHookBlock('PreToolUse:Bash hook error: [node "C:/Users/young/code/claude-config/hooks/bash-guard.mjs"]: A pipe after a gate reports the pipe\'s exit code.\n');
   assert.deepEqual(b, { event: 'PreToolUse', tool: 'Bash', hook: 'bash-guard.mjs', reason: "A pipe after a gate reports the pipe's exit code." });

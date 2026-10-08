@@ -52,7 +52,7 @@ function cmdNew() {
 
 <!-- COMPACT POINT -->
 
-- [ ] **Reflect** — run the reflect skill at wave close
+- [ ] **Reflect** — Read ~/code/claude-config/skills/reflect/SKILL.md at wave close
 
 ## Log
 <!-- one line per dispatch, deviation, or decision - at the moment it happens -->

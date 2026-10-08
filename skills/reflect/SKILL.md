@@ -1,6 +1,7 @@
 ---
 name: reflect
 description: Use when a development phase ends — branch merged, wave finished, milestone complete — to review what happened with the user and update the harness. Owned replacement for the old plugin reflect; gathers inputs via reflect-gather.mjs.
+disable-model-invocation: true
 ---
 
 # Reflect
@@ -39,4 +40,4 @@ Apply agreed edits with the Edit tool, showing each diff. **Pruning bias — eve
 
 ## 5. Close the boundary
 
-Wave done with more work ahead: `continuation` skill → verify checklist ticked and archived → suggest `/clear`. Project fully done: just suggest `/clear`.
+Wave done with more work ahead: Read `skills/continuation/SKILL.md` → verify checklist ticked and archived → suggest `/clear`. Project fully done: just suggest `/clear`.

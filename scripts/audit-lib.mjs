@@ -76,7 +76,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const seenTool = new Set();
   const titles = new Map(); // sessionId -> { custom, ai }
   const costState = new Map(); // sessionId -> max totalCostUSD
-  const skills = {}, slash = {}, docs = {};
+  const skills = {}, skillReads = {}, slash = {}, docs = {};
   const hookBlocks = {}, hookTimes = {}, hookFires = {};
   const inWindow = (ts) => {
     if (!ts) return true;
@@ -89,6 +89,10 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     if (b?.type !== 'tool_use' || !b.id || seenTool.has(b.id)) return;
     seenTool.add(b.id);
     if (b.name === 'Skill' && b.input?.skill) bump(skills, b.input.skill);
+    // #64: skills are disable-model-invocation and reached by Reading the SKILL.md the
+    // session-start index names — that Read is the invocation
+    const skillFile = b.name === 'Read' && /[\\/]skills[\\/]([^\\/]+)[\\/]SKILL\.md$/i.exec(b.input?.file_path || '');
+    if (skillFile) bump(skillReads, skillFile[1]);
     // docs only: Reads of source files are editing, not doc consumption
     if (b.name === 'Read' && /\.md$/i.test(b.input?.file_path || '') && prefixes.length) {
       const path = b.input.file_path.replace(/\\/g, '/');
@@ -217,7 +221,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
     const timed = {};
     for (const [h, ms] of Object.entries(hookTimes)) timed[h] = { fires: ms.length, p50: pct(ms, 50), p95: pct(ms, 95) };
-    const used = new Set([...Object.keys(skills), ...Object.keys(slash)].map((s) => s.split(':').pop()));
+    const used = new Set([...Object.keys(skills), ...Object.keys(skillReads), ...Object.keys(slash)].map((s) => s.split(':').pop()));
 
     return {
       pricesVerified: prices.verified,
@@ -230,6 +234,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         .sort((a, b) => b.usd - a.usd),
       agents,
       skills,
+      skillReads,
       slash,
       unusedSkills: installedSkills.filter((s) => !used.has(s)).sort(),
       docs,
@@ -301,6 +306,7 @@ export function renderMarkdown(r, { top = 15 } = {}) {
       .map(([k, a]) => [k, a.runs, a.requests, usd(a.usd), usd(a.usd / a.runs), byCount(a.models).map(([m, c]) => `${m}×${c}`).join(', ')])));
   out.push('', '## Invocations');
   out.push('**Skill tool calls**', table(['skill', 'calls'], byCount(r.skills)));
+  out.push('', '**SKILL.md reads**', table(['skill', 'reads'], byCount(r.skillReads)));
   out.push('', '**Slash commands**', table(['command', 'uses'], byCount(r.slash)));
   if (r.unusedSkills.length) out.push('', `**Installed skills with 0 invocations:** ${r.unusedSkills.join(', ')}`);
   out.push('', '**Doc reads**', table(['path', 'reads'], byCount(r.docs).slice(0, top)));
