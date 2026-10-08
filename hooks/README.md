@@ -14,7 +14,7 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout. |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands piped to `tail`/`head`; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo + worktrees exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer in the transcript (`git push --dry-run` exempt). |
 
 **Commands, not text** — the git rules (1, 2, 5, 6) and the cmdlet rule (4)
 read parsed commands, so quoted text never trips them: `grep -rn "git add -A"`
@@ -36,6 +36,21 @@ fixed false verdict; change them only with a test:
   `cd`/`Set-Location`/`pushd` clause **before that call**, then `-C`. The
   workspace root is not itself a repo, so `cd <repo> && git commit` is the shape
   they must see, and `cd a; git status; cd docs && git commit` commits in docs.
+- **Push/PR approval (rule 8)** — `git push` (`-C` composes the same as the
+  branch rules; `--dry-run` is exempt), `gh pr create` and `gh pr merge` are
+  parsed by command word, same as `git`. Approval comes from the transcript:
+  the hook walks `transcript_path`'s JSONL backward for the most recent user
+  record carrying `toolUseResult.answers` (an AskUserQuestion answer — the
+  model cannot forge it). It approves when some answer value matches
+  `/\b(commit|push|pr|pull request|merge|ship|land)\b/i` and not
+  `/\b(hold|review first|don'?t|do not|not yet|wait|no)\b/i`. Only the latest
+  record counts. Each approval (keyed by its record `uuid`) is single-use per
+  verb — spent from `~/.claude/push-gate-approvals.json`
+  (`CLAUDE_PUSH_GATE_STATE` overrides) — so one approving answer covers
+  `push` → `pr create` → `pr merge` once each, but a second push needs a
+  fresh answer. A missing/unreadable transcript or a non-approving/absent
+  answer blocks with a message telling the model to ask via AskUserQuestion
+  and retry. A non-gated command never reads the transcript.
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | Blocks model-omitted dispatches on frontmatter-less types; blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
