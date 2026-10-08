@@ -1141,6 +1141,12 @@
    "kind": "reads"
   },
   {
+   "from": "script:audit-lib",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "shared shell SKILL.md read detector"
+  },
+  {
    "from": "hook:bash-guard",
    "to": "store:push-gate-approvals",
    "kind": "writes",

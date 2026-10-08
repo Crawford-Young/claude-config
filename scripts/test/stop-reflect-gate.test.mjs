@@ -76,6 +76,18 @@ test('lastReflectAt: the newest reflect SKILL.md read or reflect Skill call, els
   assert.equal(lastReflectAt(JSON.stringify(call('a', 'gh pr merge 5'))), null);
 });
 
+test('lastReflectAt: a Bash cat or PowerShell Get-Content of reflect SKILL.md counts; mentions and Edit/Write do not', () => {
+  const tx = (...r) => r.map((x) => JSON.stringify({ type: 'assistant', timestamp: ago(4), message: { content: [x] } })).join('\n');
+  const use = (name, input) => ({ type: 'tool_use', id: 'u', name, input });
+  assert.ok(lastReflectAt(tx(use('Bash', { command: 'cat ~/code/claude-config/skills/reflect/SKILL.md' }))), 'Bash cat');
+  assert.ok(lastReflectAt(tx(use('PowerShell', { command: 'Get-Content C:\\Users\\u\\code\\claude-config\\skills\\reflect\\SKILL.md' }))), 'PowerShell');
+  assert.ok(lastReflectAt(tx(use('Bash', { command: 'cat skills/INDEX.md skills/reflect/SKILL.md' }))), 'relative path');
+  assert.equal(lastReflectAt(tx(use('Bash', { command: 'echo reflect on the skills' }))), null, 'a mention is not a read');
+  assert.equal(lastReflectAt(tx(use('Bash', { command: 'cat skills/qa/SKILL.md # reflect' }))), null, 'another skill is not reflect');
+  assert.equal(lastReflectAt(tx(use('Edit', { file_path: 'skills/reflect/SKILL.md', old_string: 'a', new_string: 'b' }))), null, 'Edit is not a read');
+  assert.equal(lastReflectAt(tx(use('Write', { file_path: 'skills/reflect/SKILL.md', content: 'x' }))), null, 'Write is not a read');
+});
+
 test('a merge within 60 min of a reflect read is the reflect landing itself: quiet, and stays quiet', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
   const transcript_path = transcript(reflectRead('r', 10), call('m94', 'gh pr merge 94 --rebase'), result('m94'));

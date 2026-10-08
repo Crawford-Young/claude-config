@@ -143,3 +143,21 @@ test('agent-model-guard still enforces when its audit log cannot be written', ()
   assert.equal(r.code, 2, 'a broken audit log must not let a fable dispatch through');
   assert.match(r.stderr, /FABLE OK/);
 });
+
+// #103: one detector for a SKILL.md / INDEX.md read done through the shell
+test('shellSkillReads: names skills/<name>/SKILL.md and skills/INDEX.md in either slash direction, any prefix', async () => {
+  const { shellSkillReads } = await import(hooklibUrl);
+  assert.deepEqual(shellSkillReads('cat ~/code/claude-config/skills/reflect/SKILL.md'), ['reflect']);
+  assert.deepEqual(shellSkillReads('Get-Content C:\\Users\\y\\code\\claude-config\\skills\\qa\\SKILL.md'), ['qa']);
+  assert.deepEqual(shellSkillReads('cat skills/plan/SKILL.md skills/plan/SKILL.md skills\\worktree\\SKILL.md'), ['plan', 'worktree']);
+  assert.deepEqual(shellSkillReads('cat ./skills/INDEX.md'), ['INDEX']);
+  assert.deepEqual(shellSkillReads('type "C:\\a b\\skills\\INDEX.md"'), ['INDEX']);
+});
+
+test('shellSkillReads: a bare mention of skills, other skill files, or non-strings are not reads', async () => {
+  const { shellSkillReads } = await import(hooklibUrl);
+  assert.deepEqual(shellSkillReads('ls skills'), []);
+  assert.deepEqual(shellSkillReads('echo "read the skills first"'), []);
+  assert.deepEqual(shellSkillReads('wc -c skills/reflect/gotchas.md skills/reflect/scripts/x.mjs'), []);
+  assert.deepEqual(shellSkillReads(undefined), []);
+});
