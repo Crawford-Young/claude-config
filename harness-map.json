@@ -431,33 +431,9 @@
    "kind": "agent",
    "label": "recon",
    "file": "agents/recon.md",
-   "summary": "Read-only fact-finding; also the fable diagnostic lane.",
+   "summary": "Read-only local and web fact-finding; also the fable diagnostic lane.",
    "rules": [
     "No Write/Edit"
-   ]
-  },
-  {
-   "id": "agent:web-recon",
-   "kind": "agent",
-   "label": "web-recon",
-   "file": "agents/web-recon.md",
-   "summary": "Read-only web fact-checks with citations."
-  },
-  {
-   "id": "agent:docs-agent",
-   "kind": "agent",
-   "label": "docs-agent",
-   "file": "agents/docs-agent.md",
-   "summary": "Prose and doc work; never commits."
-  },
-  {
-   "id": "agent:Explore",
-   "kind": "agent",
-   "label": "Explore",
-   "file": "agents/Explore.md",
-   "summary": "Broad read-only fan-out search; reports conclusions with file:line.",
-   "rules": [
-    "Pinned sonnet/low"
    ]
   },
   {
@@ -929,21 +905,6 @@
    "kind": "dispatches"
   },
   {
-   "from": "skill:agent-factory",
-   "to": "agent:web-recon",
-   "kind": "dispatches"
-  },
-  {
-   "from": "skill:agent-factory",
-   "to": "agent:docs-agent",
-   "kind": "dispatches"
-  },
-  {
-   "from": "skill:agent-factory",
-   "to": "agent:Explore",
-   "kind": "dispatches"
-  },
-  {
    "from": "doc:routing",
    "to": "model:sonnet",
    "kind": "routes-to",
@@ -996,24 +957,6 @@
    "to": "model:fable",
    "kind": "routes-to",
    "label": "diagnostic lane"
-  },
-  {
-   "from": "agent:web-recon",
-   "to": "model:sonnet",
-   "kind": "routes-to",
-   "label": "frontmatter, low"
-  },
-  {
-   "from": "agent:docs-agent",
-   "to": "model:sonnet",
-   "kind": "routes-to",
-   "label": "frontmatter"
-  },
-  {
-   "from": "agent:Explore",
-   "to": "model:sonnet",
-   "kind": "routes-to",
-   "label": "pinned, low"
   },
   {
    "from": "store:settings-json",

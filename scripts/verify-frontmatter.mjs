@@ -77,16 +77,17 @@ for (const [label, root] of [
 }
 
 /**
- * Every cap in ONE obvious place — see file header. `perDescriptionBytes` and
- * `totalDescriptionBytes` are rounded-up-to-256 versions of today's measured max (411 B,
- * agents/Explore.md) and today's measured sum (5128 B across 14 skills + 6 agents).
+ * Every cap in ONE obvious place — see file header. `perDescriptionBytes` is today's measured
+ * max (411 B, skills/visual-asset-gates/SKILL.md) rounded up to 256 B. `totalDescriptionBytes`
+ * was 5376 B (sum 5128 B across 14 skills + 6 agents) and was lowered by the 954 B the #66
+ * roster cut removed (6 agents → 3; sum now 4174 B).
  * `claudeMd` keys are repo-relative paths under WORKSPACE_ROOT; values are each file's
  * measured byte count rounded up to the next 256 B (root CLAUDE.md additionally gets +768 B
  * for the #61 headroom described above).
  */
 const CAPS = {
   perDescriptionBytes: 512,
-  totalDescriptionBytes: 5376,
+  totalDescriptionBytes: 4422,
   claudeMd: {
     'workspace/CLAUDE.md': 11520,
     'workspace/web/CLAUDE.md': 7936,
