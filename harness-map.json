@@ -455,7 +455,7 @@
    "id": "model:haiku",
    "kind": "model",
    "label": "haiku",
-   "summary": "Not routed — effort is silently dropped on haiku (user decision 2026-09-04)."
+   "summary": "Not routed — effort was dropped on Haiku 4.5 (user decision 2026-09-04); Haiku 5.5 re-test in #112."
   },
   {
    "id": "script:worktree",
