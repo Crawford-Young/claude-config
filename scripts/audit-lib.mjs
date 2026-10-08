@@ -88,6 +88,8 @@ const DAY_MS = 864e5;
 // a tool that waits on a person is user time, not tool latency
 const USER_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const SHELLS = new Set(['Bash', 'PowerShell']);
+const EDITS = new Set(['Edit', 'Write', 'NotebookEdit']); // #99: inline implementation
+const DISPATCHES = new Set(['Agent', 'Task']);
 // overlap priority: idle > asked > model > tools > waiting for the next prompt;
 // a span none of them covers is other (background waits, stop hooks)
 const ORDER = ['idle', 'ask', 'model', 'tools', 'wait'];
@@ -232,7 +234,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       tl.lastEnd = Math.max(tl.lastEnd ?? t, t);
       for (const b of rec.message?.content || []) {
         if (b?.type !== 'tool_use' || !b.id || tl.byId.has(b.id)) continue;
-        const u = { name: b.name, t, end: null, err: false, text: '', cmd: SHELLS.has(b.name) ? commandHead(b.input?.command) : null };
+        const u = { name: b.name, t, end: null, err: false, text: '', cmd: SHELLS.has(b.name) ? commandHead(b.input?.command) : null,
+          file: EDITS.has(b.name) ? b.input?.file_path || b.input?.notebook_path || '' : null };
         tl.uses.push(u);
         tl.byId.set(b.id, u);
       }
@@ -407,7 +410,32 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       docs,
       hooks: { blocks: hookBlocks, timed, fires: hookFires },
       time: timeReport({ sessions, days, agents, runUsd }),
+      inline: inlineReport(),
     };
+  }
+
+  /** #99's measure: per main session, Edit/Write calls against Agent dispatches,
+   *  and the most distinct files edited between two dispatches. */
+  function inlineReport() {
+    const rows = [];
+    for (const tl of lines.values()) {
+      if (tl.agent) continue;
+      const files = new Set();
+      let edits = 0, dispatches = 0, run = new Set(), longestRun = 0;
+      for (const u of [...tl.uses].sort((a, b) => a.t - b.t)) {
+        if (EDITS.has(u.name)) {
+          edits++;
+          files.add(u.file);
+          run.add(u.file);
+          longestRun = Math.max(longestRun, run.size);
+        } else if (DISPATCHES.has(u.name)) {
+          dispatches++;
+          run = new Set();
+        }
+      }
+      if (edits || dispatches) rows.push({ sessionId: tl.sessionId, title: titles.get(tl.sessionId)?.custom || titles.get(tl.sessionId)?.ai || '', edits, editFiles: files.size, dispatches, longestRun });
+    }
+    return rows.sort((a, b) => b.edits - a.edits);
   }
 
   /** Wall vs active time, the model/tools/user/other split per session, name and
@@ -609,6 +637,11 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   out.push('', '**Stop-hook runtime**', table(['hook', 'fires', 'p50 ms', 'p95 ms'], Object.entries(r.hooks.timed).map(([h, x]) => [h, x.fires, x.p50, x.p95])));
   out.push('', '**Other hook fires**', table(['hook event', 'fires'], byCount(r.hooks.fires)));
   if (r.time) out.push('', renderTime(r.time, top));
+  if (r.inline) {
+    out.push('', `## Inline edits vs dispatches (top ${top} main sessions by edits)`);
+    out.push(table(['title', 'edits', 'files', 'dispatches', 'most files between dispatches'],
+      r.inline.slice(0, top).map((s) => [cell(s.title || s.sessionId.slice(0, 8)).slice(0, 50), s.edits, s.editFiles, s.dispatches, s.longestRun])));
+  }
   return out.join('\n');
 }
 

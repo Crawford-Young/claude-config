@@ -425,6 +425,20 @@ test('time: replayed records in a resumed session\'s file are timed once', () =>
   assert.deepEqual(t.sessions.map((s) => [s.sessionId, sec(s.wallMs)]).sort(), [['s1', 5], ['s2', 10]]);
 });
 
+test('inline: main-session Edit/Write calls vs Agent dispatches, with the longest no-dispatch run of files (#99)', () => {
+  const c = createCollector({ prices: PRICES });
+  feed(c, MAIN,
+    human(0),
+    say(1, 'r1', [use('e1', 'Edit', { file_path: 'a' }), use('e2', 'Edit', { file_path: 'b' }), use('w1', 'Write', { file_path: 'a' })]),
+    say(2, 'r2', [use('g1', 'Agent', { subagent_type: 'implementer' })]),
+    say(3, 'r3', [use('e3', 'Edit', { file_path: 'c' }), use('n1', 'NotebookEdit', { notebook_path: 'd.ipynb' })]),
+    say(4, 'r4', [], 'end_turn'));
+  c.add(say(2.5, 'x1', [use('e9', 'Edit', { file_path: 'z' })]), { sessionId: 's1', agent: { id: 'p1', type: 'implementer' } });
+  const r = c.report();
+  assert.deepEqual(r.inline, [{ sessionId: 's1', title: '', edits: 5, editFiles: 4, dispatches: 1, longestRun: 2 }]);
+  assert.match(renderMarkdown(r), /## Inline edits vs dispatches[\s\S]*\| s1 \| 5 \| 4 \| 1 \| 2 \|/);
+});
+
 test('time: per-day and per-name rows split at UTC midnight and sum every window of the name', () => {
   const c = createCollector({ prices: PRICES });
   const w = (sessionId) => ({ sessionId, agent: null });
