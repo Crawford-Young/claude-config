@@ -373,6 +373,36 @@
    ]
   },
   {
+   "id": "hook:active-repo",
+   "kind": "hook",
+   "label": "active-repo",
+   "file": "hooks/active-repo.mjs",
+   "summary": "PostToolUse(Write|Edit|MultiEdit|NotebookEdit) — records the git checkout the session is editing, for the statusline (#77).",
+   "rules": [
+    "Records the toplevel only; branch and worktree are read live at render",
+    "Never blocks"
+   ]
+  },
+  {
+   "id": "script:statusline",
+   "kind": "script",
+   "label": "statusline",
+   "file": "statusline/statusline.mjs",
+   "summary": "statusLine entry point: session name, repo@branch, model, effort, cost, day spend / ctx, cache, 5h, 7d (#77).",
+   "rules": [
+    "Render spawns no process (50 ms budget)",
+    "Fails open to the [statusline] sentinel"
+   ]
+  },
+  {
+   "id": "store:active-repo",
+   "kind": "store",
+   "label": "active-repo/",
+   "file": "~/.claude/active-repo/",
+   "summary": "Per-session { top, ts } of the checkout last edited; pruned after a week.",
+   "external": true
+  },
+  {
    "id": "agent:implementer",
    "kind": "agent",
    "label": "implementer",
@@ -1145,6 +1175,30 @@
    "to": "phase:qa",
    "kind": "gates",
    "label": "visible browser needs consent"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:active-repo",
+   "kind": "loads",
+   "label": "PostToolUse"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "script:statusline",
+   "kind": "loads",
+   "label": "statusLine"
+  },
+  {
+   "from": "hook:active-repo",
+   "to": "store:active-repo",
+   "kind": "writes",
+   "label": "edited checkout"
+  },
+  {
+   "from": "script:statusline",
+   "to": "store:active-repo",
+   "kind": "reads",
+   "label": "repo@branch"
   }
  ]
 }

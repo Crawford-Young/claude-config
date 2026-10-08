@@ -2,13 +2,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fillBar, formatTokens, gitInfo, historySample, render } from '../../statusline/statusline.mjs';
+import { record } from '../../hooks/active-repo.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../statusline/statusline.mjs', import.meta.url));
+const HOOK = fileURLToPath(new URL('../../hooks/active-repo.mjs', import.meta.url));
 const FIX = fileURLToPath(new URL('../../statusline/tests/fixtures/', import.meta.url));
 const fixture = (name) => readFileSync(join(FIX, name), 'utf8');
 const json = (name) => JSON.parse(fixture(name));
@@ -29,7 +31,10 @@ const at = (name, dir) => {
   return s;
 };
 // render() reads the real registry by default; tests point it at an empty dir
-const NOREG = { CLAUDE_SESSIONS_DIR: join(tmpdir(), 'statusline-no-registry') };
+const NOREG = {
+  CLAUDE_SESSIONS_DIR: join(tmpdir(), 'statusline-no-registry'),
+  CLAUDE_ACTIVE_REPO_DIR: join(tmpdir(), 'statusline-no-active-repo'),
+};
 const SID = '4ebbd908-ff44-4647-a06b-2f807203d3b8';
 
 function runScript(input, env = {}) {
@@ -126,6 +131,60 @@ test('gitInfo: a linked worktree names its owning repo', () => {
     assert.equal(g.worktree, 'wt-dir');
     assert.equal(g.owner.toLowerCase(), dir.toLowerCase());
     assert.deepEqual({ ...gitInfo(dir), top: '' }, { top: '', branch: 'main', worktree: '', owner: '' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('active repo: the hook records the edited checkout; the row names its owning repo + wt', () => {
+  const root = tmp();
+  const active = join(root, 'active');
+  try {
+    const { dir, git } = gitRepo(root, 'owner-repo', 'main');
+    git('worktree', 'add', '-q', '-b', 'feat/77-x', join(root, 'owner-repo-77-x'));
+    mkdirSync(join(root, 'launch'));
+    const payload = { session_id: SID, tool_name: 'Write', tool_input: { file_path: join(root, 'owner-repo-77-x', 'new', 'file.mjs') } };
+    // the file's directory does not exist yet: the hook resolves upward
+    mkdirSync(join(root, 'owner-repo-77-x', 'new'));
+    const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify(payload), env: { ...process.env, CLAUDE_ACTIVE_REPO_DIR: active }, encoding: 'utf8' });
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, '');
+    const env = { ...NOREG, CLAUDE_ACTIVE_REPO_DIR: active };
+    const row1 = render(at('no-rate-limits.json', join(root, 'launch')), env).split('\n')[0];
+    assert.ok(row1.startsWith('owner-repo@feat/77-x \x1b[2mwt\x1b[0m · '), JSON.stringify(row1));
+    // the primary checkout on main: yellow, no wt marker
+    record({ ...payload, tool_input: { file_path: join(dir, 'a.txt') } }, active);
+    const main = render(at('no-rate-limits.json', join(root, 'launch')), env).split('\n')[0];
+    assert.ok(main.startsWith('\x1b[33mowner-repo@main\x1b[0m · '), JSON.stringify(main));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('active repo: no write outside git, for a bad session id, or without a path', () => {
+  const root = tmp();
+  try {
+    mkdirSync(join(root, 'plain'));
+    assert.equal(record({ session_id: SID, tool_input: { file_path: join(root, 'plain', 'x') } }, join(root, 'a')), null);
+    assert.equal(record({ session_id: '../evil', tool_input: { file_path: SCRIPT } }, join(root, 'a')), null);
+    assert.equal(record({ session_id: SID, tool_input: {} }, join(root, 'a')), null);
+    assert.ok(!existsSync(join(root, 'a')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('active repo: records older than a week are pruned on a new session\'s first write', () => {
+  const root = tmp();
+  const active = join(root, 'a');
+  try {
+    mkdirSync(active);
+    writeFileSync(join(active, 'old.json'), '{}');
+    const old = (Date.now() - 8 * 24 * 3600 * 1000) / 1000;
+    utimesSync(join(active, 'old.json'), old, old);
+    record({ session_id: SID, tool_input: { file_path: SCRIPT } }, active);
+    assert.ok(!existsSync(join(active, 'old.json')));
+    assert.ok(existsSync(join(active, `${SID}.json`)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
