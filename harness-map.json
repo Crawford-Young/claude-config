@@ -632,6 +632,28 @@
    "label": "harness-map.json",
    "file": "harness-map.json",
    "summary": "This map. Read it before sweeping files; update it in the same change as any wiring change."
+  },
+  {
+   "id": "store:transcripts",
+   "kind": "store",
+   "label": "transcripts",
+   "file": "~/.claude/projects/**/*.jsonl",
+   "summary": "Claude Code session + subagent transcripts; kept cleanupPeriodDays.",
+   "external": true
+  },
+  {
+   "id": "script:audit",
+   "kind": "script",
+   "label": "audit.mjs",
+   "file": "scripts/audit.mjs",
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings."
+  },
+  {
+   "id": "script:audit-lib",
+   "kind": "script",
+   "label": "audit-lib.mjs",
+   "file": "scripts/audit-lib.mjs",
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state cross-check."
   }
  ],
  "edges": [
@@ -1178,6 +1200,16 @@
    "to": "agent:recon",
    "kind": "dispatches",
    "label": "report shape: NOT CHECKED first"
+  },
+  {
+   "from": "script:audit",
+   "to": "script:audit-lib",
+   "kind": "reads"
+  },
+  {
+   "from": "script:audit-lib",
+   "to": "store:transcripts",
+   "kind": "reads"
   }
  ]
 }
