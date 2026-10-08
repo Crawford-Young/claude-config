@@ -1,6 +1,6 @@
 # Motion — Crawford Young
 
-Living reference for all motion: page transitions, scroll choreography, arrival, loading, micro-interactions. Re-verified against code and updated in place. Decision record: [`specs/2026-06-10-motion-language-design.md`](./specs/2026-06-10-motion-language-design.md).
+Living reference for all motion: page transitions, scroll choreography, arrival, loading, micro-interactions. Re-verified against code and updated in place. Decision record: `docs@5740fed:brand-design/specs/2026-06-10-motion-language-design.md`.
 
 **Code source of truth:** `component-library/src/styles/tokens.css` (CSS vars) + `component-library/src/lib/motion.ts` (TS constants) — if doc and code disagree, code wins; fix the doc.
 
@@ -152,7 +152,7 @@ Content arrives, it doesn't snap. Hero text: SplitText 30ms word stagger, `trans
 
 ### Known divergence — `Spinner`
 
-Resolved 2026-06-09: `Spinner` is deprecated in favor of `BorderTrace` / `TraceBorder` (see `docs/component-library/specs/2026-06-09-loading-indicator-design.md`); removal scheduled for the next major. `BorderTrace` traces a border stroke rather than spinning a ring, satisfying the "no spinners" rule while covering inline / button-level pending states.
+Resolved 2026-06-09: `Spinner` is deprecated in favor of `BorderTrace` / `TraceBorder` (see `docs@5740fed:web/component-library/specs/2026-06-09-loading-indicator-design.md`); removal scheduled for the next major. `BorderTrace` traces a border stroke rather than spinning a ring, satisfying the "no spinners" rule while covering inline / button-level pending states.
 
 ### Arrival is universal
 

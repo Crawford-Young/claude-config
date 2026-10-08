@@ -58,8 +58,8 @@ fixed false verdict; change them only with a test:
 | `post-model-switch.mjs` | PostModelSwitch | Records which model each session is on to `~/.claude/current-model.json`, keyed by `session_id`, newest 50 kept. Not a gate — it is the data `agent-model-guard.mjs` reads to catch a fork on a live fable session. Fires on Claude Code's own switches too (e.g. session resume), which is why records are never expired by age. |
 | `permission-denied.mjs` | PermissionDenied | Logs denials to `~/.claude/permission-denials.log`. **This event cannot block** — its exit code and stderr are ignored by Claude Code and the denial stands regardless. |
 | `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before auto-compact can silently compact a wave boundary. Bands are fractions of the **live window** — note at 0.40, louder at 0.70 (once each), **blocks at 0.94**; 400k / 700k / 940k on today's 1M window, and silent when no source can name the window (thresholds section below). Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Tune with `CLAUDE_CTX_WINDOW`, or per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
-| `stop-reflect-gate.mjs` | Stop | **Relaxed (2026-08-21):** when a recently-touched active checklist is all-ticked except reflect, blocks ONCE with "prompt the user to run reflect", then lets the retry pass (`stop_hook_active`). Reflect is prompted, never forced. |
-| `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then active checklists (+ first unchecked task) into context; after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
+| `stop-reflect-gate.mjs` | Stop | After a successful `gh pr merge` (Bash or PowerShell, parsed by `bash-guard.mjs`, so `gh -R x pr merge` counts; `--auto` only queues and doesn't) in the session's transcript, blocks ONCE per merge with "prompt the user to run reflect". Handled tool_use ids are a set (newest 200) in `~/.claude/stop-reflect-gate.json`, so parallel sessions don't re-fire each other; retries and later turn ends pass. Reflect is prompted, never forced. |
+| `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then open `in-progress` issues across owner Crawford-Young (one `gh search issues` call, at most 10, 3 s cap, silent on failure; `SESSION_START_GH` stubs it in tests); after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
 | `precompact-archive.mjs` | PreCompact | Copies the transcript to `~/.claude/compact-archives/` before every compaction. |
 | `subagentstop-log.mjs` | SubagentStop | One line per stop to `~/.claude/subagent-stops.log` (self-trims: 512KB → last 200 lines). |
 | `otel-receiver-spawn.mjs` | SessionStart | Lazy-spawns `telemetry/otel-receiver.mjs` on :4318 when nothing is listening. |
@@ -110,7 +110,7 @@ Keep the settings `deny` rules for `git add -A` forms — the two layers
 - Exit-code semantics: 0 = proceed, 2 = block (stderr is the reason), other = non-blocking error. A hook allow does NOT skip deny rules.
 - Unit-test by piping JSON to stdin: `echo '{"tool_input":{"command":"git add -A"}}' | node hooks/bash-guard.mjs` — tests live in `scripts/test/`, run `node --test scripts/test/*.test.mjs`.
 - Hook wiring reloads live — no session restart needed to verify new wiring.
-- Env overrides for tests/remotes: `CLAUDE_WORKSPACE_ROOT`, `CLAUDE_CONFIG_REPO`, `STOP_GATE_DOCS_ROOT`.
+- Env overrides for tests/remotes: `CLAUDE_WORKSPACE_ROOT`, `CLAUDE_CONFIG_REPO`.
 - A hook that a test imports must guard its `run()` behind an `import.meta.url === pathToFileURL(process.argv[1]).href` check — an unguarded import blocks forever reading stdin.
 
 ## Context-gauge thresholds

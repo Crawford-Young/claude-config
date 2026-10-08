@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// session-start.mjs — SessionStart hook. Replaces the prose duty "scan
-// checklists at session start" with mechanism (extends the old
-// sessionstart-compact-reminder.ps1, which only fired post-compact).
+// session-start.mjs — SessionStart hook.
 //
 // Emits to stdout (which SessionStart adds as context):
 //   - the skill index (skills/INDEX.md, on every source) — skills carry
@@ -9,22 +7,33 @@
 //     model Reads the SKILL.md the index names (issue #64). SessionStart does
 //     not fire for subagents (no SessionStart hook_success in any of 46 subagent
 //     transcripts, 2026-10-08), so there is no agent_id guard here.
-//   - every active checklist with its first unchecked task
+//   - open issues labelled `in-progress` across the owner (issue #72) — one
+//     `gh search` call, at most 10, 3 s cap, silent on any failure (no gh, offline, auth).
+//     SESSION_START_GH (a JSON argv prefix) replaces `gh` in tests.
 //   - after a compaction: the re-orientation reminders that compaction drops
 //     (domain CLAUDE.md reload, marker discipline)
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findActiveChecklists } from '../scripts/lib.mjs';
 import { run } from './_hooklib.mjs';
 
-run('session-start', (payload) => {
-  const docsRoot =
-    process.env.STOP_GATE_DOCS_ROOT ||
-    join(process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code'), 'docs');
+function inProgressIssues() {
+  try {
+    const [cmd, ...pre] = process.env.SESSION_START_GH ? JSON.parse(process.env.SESSION_START_GH) : ['gh'];
+    const out = execFileSync(
+      cmd,
+      [...pre, 'search', 'issues', '--owner', 'Crawford-Young', '--label', 'in-progress', '--state', 'open', '--limit', '10', '--json', 'repository,number,title'],
+      { encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    return JSON.parse(out).map((i) => `- ${i.repository.name}#${i.number} ${i.title}`);
+  } catch {
+    return [];
+  }
+}
 
+run('session-start', (payload) => {
   const lines = [];
   try {
     const index = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'INDEX.md');
@@ -33,35 +42,12 @@ run('session-start', (payload) => {
     // no index — verify-frontmatter.mjs fails CI on that; never break a session start
   }
 
-  let checklists = [];
-  try {
-    checklists = findActiveChecklists(docsRoot);
-  } catch {
-    checklists = [];
-  }
-  if (checklists.length > 0) {
-    lines.push('Active checklists (in-flight phases — resume at the first unchecked task):');
-    for (const f of checklists) {
-      let next = null;
-      try {
-        let fenced = false;
-        for (const l of readFileSync(f, 'utf8').split(/\r?\n/)) {
-          if (/^\s*(```|~~~)/.test(l)) fenced = !fenced;
-          if (!fenced && /^\s*- \[ \]/.test(l)) {
-            next = l.replace(/^\s*- \[ \]\s*/, '').slice(0, 100);
-            break;
-          }
-        }
-      } catch {
-        // unreadable checklist — still list it
-      }
-      lines.push(`- ${f}${next ? ` — next: ${next}` : ' — all ticked'}`);
-    }
-  }
+  const issues = inProgressIssues();
+  if (issues.length) lines.push('In progress:', ...issues);
 
   if (payload?.source === 'compact') {
     lines.push(
-      'Post-compaction: re-read the domain CLAUDE.md for the cwd (compaction drops it) and Read again a SKILL.md you were mid-way through only if its body exceeds ~5k tokens (none here does today). The checklist is the source of truth — re-orient from it, not the summary.',
+      "Post-compaction: re-read the domain CLAUDE.md for the cwd (compaction drops it) and Read again a SKILL.md you were mid-way through only if its body exceeds ~5k tokens (none here does today). Re-orient from the issue's Done-when and the last commit's Next: line, not the summary.",
     );
   }
 

@@ -52,7 +52,7 @@ Final text = raw report to your spawner: what changed (file list), test results 
 
 ## Reporting issues
 
-Never write to issue log files. Trigger conditions (wrong assumption in the task, missing behavior found mid-build, design rethink from test failure):
+Never edit GitHub issues or comment on them; report ISSUE: lines upward instead. Trigger conditions (wrong assumption in the task, missing behavior found mid-build, design rethink from test failure):
 
 ```
 ISSUE: <assumption|missing-feature|bug|coverage> | <title> | <what went wrong>

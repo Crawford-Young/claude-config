@@ -2,20 +2,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { needsReflect } from '../../hooks/stop-reflect-gate.mjs';
+import { lastMerge } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
-function runHook(payload, docsRoot) {
+const call = (id, command, name = 'Bash') => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: { command } }] } });
+const result = (id, is_error = false) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error, content: 'x' }] } });
+
+/** A transcript file holding `records`, one JSON object per line. */
+function transcript(...records) {
+  const p = join(mkdtempSync(join(tmpdir(), 'gate-tx-')), 't.jsonl');
+  writeFileSync(p, `${records.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  return p;
+}
+
+function runHook(payload, home) {
   try {
     execFileSync(process.execPath, [hook], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
-      env: { ...process.env, STOP_GATE_DOCS_ROOT: docsRoot },
+      env: { ...process.env, HOME: home, USERPROFILE: home },
     });
     return { code: 0 };
   } catch (e) {
@@ -23,30 +33,49 @@ function runHook(payload, docsRoot) {
   }
 }
 
-test('needsReflect: all ticked except reflect → true', () => {
-  assert.equal(needsReflect('- [x] Task 1\n- [ ] **Reflect** — run the reflect skill'), true);
-  assert.equal(needsReflect('- [ ] Task 1\n- [ ] Reflect'), false); // real work open
-  assert.equal(needsReflect('- [x] Task 1\n- [x] Reflect'), false); // reflect done
-  assert.equal(needsReflect('no tasks here'), false);
+test('lastMerge: the newest successful gh pr merge call, else null', () => {
+  const lines = [call('a', 'gh pr merge 5 --rebase'), result('a'), call('b', 'git status'), result('b')].map((r) => JSON.stringify(r));
+  assert.equal(lastMerge(lines.join('\n')), 'a');
+  assert.equal(lastMerge([call('c', 'gh pr merge 6'), result('c', true)].map((r) => JSON.stringify(r)).join('\n')), null);
+  assert.equal(lastMerge([call('d', 'gh pr view 6')].map((r) => JSON.stringify(r)).join('\n')), null);
 });
 
-test('reminds once, then lets the stop pass', () => {
-  const docs = mkdtempSync(join(tmpdir(), 'gate-'));
-  const active = join(docs, 'proj', 'checklists', 'active');
-  mkdirSync(active, { recursive: true });
-  writeFileSync(join(active, 'w1.md'), '- [x] Task 1 <!-- done 2026-08-21T00:00:00Z -->\n- [ ] Reflect\n');
+test('reminds once per merged PR, then stays quiet', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(call('m1', 'gh pr merge 72 --rebase'), result('m1'));
 
-  const first = runHook({}, docs);
-  assert.equal(first.code, 2, 'first stop attempt should block with the reminder');
+  const first = runHook({ transcript_path }, home);
+  assert.equal(first.code, 2, 'first stop after the merge blocks with the reminder');
   assert.match(first.stderr, /prompt the user/i);
-  // #64: skills are not Skill-tool invocable — the gate points at the file to Read
   assert.match(first.stderr, /Read ~\/code\/claude-config\/skills\/reflect\/SKILL\.md/);
 
-  const second = runHook({ stop_hook_active: true }, docs);
-  assert.equal(second.code, 0, 'retry must pass — relaxed gate reminds once');
+  assert.equal(runHook({ transcript_path, stop_hook_active: true }, home).code, 0, 'the retry passes');
+  assert.equal(runHook({ transcript_path }, home).code, 0, 'a later turn end on the same merge passes');
 });
 
-test('quiet when no checklist needs reflect', () => {
-  const docs = mkdtempSync(join(tmpdir(), 'gate-'));
-  assert.equal(runHook({}, docs).code, 0);
+test('quiet with no merge, a failed merge, or no transcript', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  assert.equal(runHook({ transcript_path: transcript(call('x', 'git push'), result('x')) }, home).code, 0);
+  assert.equal(runHook({ transcript_path: transcript(call('y', 'gh pr merge 1'), result('y', true)) }, home).code, 0);
+  assert.equal(runHook({}, home).code, 0);
+});
+
+test('lastMerge: PowerShell merges and gh -R forms count; --auto only queues', () => {
+  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+  assert.equal(lastMerge(tx(call('p', 'gh pr merge 5 --rebase', 'PowerShell'), result('p'))), 'p');
+  assert.equal(lastMerge(tx(call('r', 'gh -R owner/repo pr merge 12 --rebase'), result('r'))), 'r');
+  assert.equal(lastMerge(tx(call('s', 'gh pr -R owner/repo merge 12'), result('s'))), 's');
+  assert.equal(lastMerge(tx(call('q', 'gh pr merge 5 --auto --rebase'), result('q'))), null);
+  assert.equal(lastMerge(tx(call('v', 'gh -R owner/repo pr view 12'), result('v'))), null);
+  assert.equal(lastMerge(tx(call('e', 'echo "gh pr merge 5"'), result('e'))), null);
+});
+
+test('parallel sessions each get their own reminder once, with no ping-pong', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const a = transcript(call('ma', 'gh pr merge 1 --rebase'), result('ma'));
+  const b = transcript(call('mb', 'gh pr merge 2 --rebase'), result('mb'));
+  assert.equal(runHook({ transcript_path: a }, home).code, 2);
+  assert.equal(runHook({ transcript_path: b }, home).code, 2);
+  assert.equal(runHook({ transcript_path: a }, home).code, 0, 'session A stays quiet after B fired');
+  assert.equal(runHook({ transcript_path: b }, home).code, 0, 'session B stays quiet after A ran again');
 });

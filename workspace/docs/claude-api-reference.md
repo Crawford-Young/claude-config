@@ -1,6 +1,6 @@
 # Claude API Reference — App-Side Capabilities
 
-> Claude-side companion to the AI-SDK stack docs; check current docs before adopting — statuses drift. (Compiled 2026-07-27 from platform.claude.com docs sweep; verified links + capability claims in `docs/claude-config/specs/2026-07-27-harness-upgrades-design.md`. Extended 2026-09-04 by P10 WS-E — every added entry is a fetched or skill-authoritative fact, not recall; claims that would not verify were left out rather than softened.)
+> Claude-side companion to the AI-SDK stack docs; check current docs before adopting — statuses drift. (Compiled 2026-07-27 from platform.claude.com docs sweep; verified links + capability claims in `docs@5740fed:claude-config/specs/2026-07-27-harness-upgrades-design.md`. Extended 2026-09-04 by P10 WS-E — every added entry is a fetched or skill-authoritative fact, not recall; claims that would not verify were left out rather than softened.)
 
 Use this when building AI features in app repos. Each entry: what it is, when to reach for it, docs URL.
 

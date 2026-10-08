@@ -96,31 +96,6 @@ export function parseWorktreeInclude(text) {
     .filter((l) => l && !l.startsWith('#'));
 }
 
-/** Recursively find checklists under any `checklists/active/` dir (depth-capped). */
-export function findActiveChecklists(docsRoot) {
-  const found = [];
-  const walk = (dir, depth) => {
-    if (depth > 4) return;
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      const p = join(dir, e.name);
-      if (e.name === 'active' && dir.endsWith('checklists')) {
-        for (const f of readdirSync(p)) if (f.endsWith('.md')) found.push(join(p, f));
-      } else if (!['node_modules', '.git', 'done', 'archive'].includes(e.name)) {
-        walk(p, depth + 1);
-      }
-    }
-  };
-  walk(docsRoot, 0);
-  return found;
-}
-
 /**
  * PID of the process LISTENING on `port`, from `netstat -ano` output.
  * Anchored to the local-address column on purpose: a substring test for
@@ -148,11 +123,6 @@ process.stdout.on?.('error', (e) => {
 export function die(msg, code = 1) {
   process.stderr.write(`error: ${msg}\n`);
   process.exit(code);
-}
-
-/** UTC timestamp in the checklist done-stamp format. */
-export function utcStamp(d = new Date()) {
-  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 /** Minimal argv parser: positional args plus --flag / --key value. */

@@ -1,9 +1,9 @@
 # telemetry/ — Claude Code OTel usage capture
 
-Local pipeline for per-phase/per-task token+cost attribution (OTel wave 2026-08-07).
+Local pipeline for token+cost attribution by time range (OTel wave 2026-08-07).
 Claude Code exports OTLP http/json to a minimal local receiver; the receiver writes
-flat NDJSON rows; the report CLI joins those rows against checklist tick stamps to
-produce per-task/phase/agent/source/skill usage tables. Everything is local-only and
+flat NDJSON rows; the report CLI buckets those rows over a time range into
+per-window/agent/source/skill usage tables. Per-task cost is `scripts/audit.mjs` (#62). Everything is local-only and
 fail-open — a dead receiver never blocks a session.
 
 ## Row schema v1
@@ -103,17 +103,13 @@ listens only when run as the main module.
 ## Report CLI
 
 ```
-node telemetry/usage-report.mjs <checklist.md> [--from <iso>]
 node telemetry/usage-report.mjs --from <iso> --to <iso>
 ```
 
-Joins checklist tick stamps (`<!-- done <ISO8601> -->` as last content on ticked
-`- [x]` lines, outside code fences — `scripts/checklist.mjs tick` writes them) against NDJSON rows. Task windows
-chain previous-done → done; the first window defaults to 4h before the first stamp
-(pass `--from` to widen — a stderr note fires). Outputs markdown tables: per-task,
-per-phase (COMPACT POINT markers delimit phases), per-agent (run-shaped, no cost —
+Buckets NDJSON rows in the range. Outputs markdown tables: per-window, per-agent (run-shaped, no cost —
 see **Per-agent attribution** above), per-source, per-skill
-(`skill_activated` events), plus gap warnings (no-rows vs events-without-cost).
+(`skill_activated` events), plus gap warnings (no-rows vs events-without-cost). The checklist
+done-stamp join retired with #72 (2026-10).
 
 ## Eval runner (G72)
 

@@ -7,21 +7,21 @@ with `node --test scripts/test/*.test.mjs`.
 | Script | Purpose |
 | --- | --- |
 | `worktree.mjs` | Create/remove/list feature worktrees — branch from `origin/main`, env copy per `.worktreeinclude`, Windows-safe removal |
-| `checklist.mjs` | Scaffold/tick/archive wave checklists (real UTC done-stamps keep OTel attribution working) |
 | `qa.mjs` | Run the repo's own gates foreground + unpiped; full logs to `~/.claude/qa-logs/`, compact honest summary to the console |
 | `land.mjs` | The claude-config commit lane — ephemeral worktree from `origin/main`, path-scoped diff, post-merge sync |
-| `cleanup.mjs` | End-of-wave sweep — dirty repos, worktrees, active checklists; `--kill-port`, `--remove-worktree` |
-| `reflect-gather.mjs` | One-pass reflect payload: checklist, issue logs, per-repo git activity |
-| `session-state.mjs` | Mechanical half of a continuation prompt: active checklists + repo states |
+| `cleanup.mjs` | End-of-wave sweep — dirty repos, worktrees; `--kill-port`, `--remove-worktree` |
+| `reflect-gather.mjs` | One-pass reflect payload: a unit's evidence via `audit.mjs --session <name>` plus per-repo git activity |
 | `audit.mjs` (+ `audit-lib.mjs`, `prices.json`) | Transcript-replay audit over `~/.claude/projects`: $ and context depth per day/session, per-agent-type cost, skill/slash/doc invocation counts (a Read of `skills/<name>/SKILL.md` counts as a skill invocation), hook blocks and timings, cross-checked against Claude Code's own `cost-state`. Re-verify `prices.json` when it warns |
-| `lib.mjs` | Shared helpers (workspace root, git, checklist discovery, argv) |
+| `lib.mjs` | Shared helpers (workspace root, git, argv) |
 | `harness-map.mjs` | `check` (CI): `harness-map.json` has a node for every skill, hook, agent, script and CLAUDE.md, and nothing dangles. `render <out>` builds the diagram page from `harness-map.template.html` |
 | `verify-frontmatter.mjs` | CI gate — every SKILL.md publishes a usable name + description (the unquoted `: ` YAML trap silently unpublishes a skill); also enforces resident-byte caps on descriptions (skills flagged `disable-model-invocation` excluded), `skills/INDEX.md` (which must list every skill, #64) and each `CLAUDE.md` (issue #63) so resident context can't silently re-bloat |
 | `export-harness.ps1` / `import-harness.ps1` | Move harness config between machines |
 | `open-admin-shells.ps1` | Elevated shells for junction work |
 
 Env overrides (tests/remotes): `CLAUDE_WORKSPACE_ROOT` (default `~/code`),
-`CLAUDE_CONFIG_REPO`, `STOP_GATE_DOCS_ROOT`.
+`CLAUDE_CONFIG_REPO`.
+
+Retired 2026-10 (#72, tracking moved to GitHub issues): `checklist.mjs`, `session-state.mjs`.
 
 Retired 2026-08: `verify-relocation.mjs` + `baseline/` (the relocation gate —
 byte-tracking of relocated prose ended with the restructure; text history

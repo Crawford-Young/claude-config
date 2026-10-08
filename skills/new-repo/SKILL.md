@@ -20,7 +20,7 @@ Step 3 (commit .gitignore) must happen before any other files are committed. Nev
 
 Ask the user:
 
-1. **Project name** — this becomes the repo name, package name, and docs folder name
+1. **Project name** — this becomes the repo name and package name
 2. **Type** — Next.js fullstack, Python/FastAPI, or published package library?
 3. **Database** — Neon/Drizzle (relational), MongoDB (non-relational), or none?
 4. **Auth** — Auth.js v5, Clerk, or none?
@@ -38,7 +38,6 @@ Skip services that are not needed — do not scaffold unused infrastructure.
 Work through these in order. Check each off as it completes.
 
 ### Foundation
-- [ ] Create `~/code/docs/<project-name>/` for planning docs
 - [ ] `git init` in the project directory
 - [ ] Create and switch to branch `feat/initial-setup`
 - [ ] Create `.gitignore` — commit this as the **very first commit** before any other files
@@ -89,6 +88,7 @@ Work through these in order. Check each off as it completes.
 ### CI & Publishing
 - [ ] `.github/workflows/ci.yml` — check job + e2e job, see TEMPLATES.md's 'GitHub Actions CI' section
 - [ ] `.github/dependabot.yml` — npm + github-actions, weekly schedule
+- [ ] `gh label create in-progress` once the GitHub repo exists — tracking runs on its issues
 - [ ] If published package: `tsup.config.ts`, Changesets init, `src/index.ts` barrel export
 
 ### Published Package Extra (if applicable)

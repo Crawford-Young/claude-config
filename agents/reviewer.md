@@ -46,7 +46,7 @@ Evidence contract: every claim carries the command that proved it, or is marked 
 
 ## Reporting issues
 
-Never write to issue log files. Trigger conditions (wrong assumption baked into the task, missing behavior discovered) go in your response:
+Never edit GitHub issues or comment on them; report ISSUE: lines upward instead. Trigger conditions (wrong assumption baked into the task, missing behavior discovered) go in your response:
 
 ```
 ISSUE: <assumption|missing-feature|bug|coverage> | <title> | <what went wrong>

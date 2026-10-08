@@ -1,66 +1,7 @@
-// telemetry/report-lib.mjs — joins checklist tick stamps with OTel NDJSON rows.
-const TASK_HEADING = /^###\s+(Task .+?)\s*$/;
-const TICK_LINE = /^\s*-\s*\[x\]/i; // cold-review C3: only ticked steps donate stamps
-const STAMP = /<!--\s*done\s+([0-9T:.+\-]+Z?)\s*-->\s*$/; // EOL-anchored — prose quoting a stamp mid-line never counts
-const FENCE = /^\s*(?:```|~~~)/;
-const PHASE_MARKER = /^<!--\s*COMPACT POINT/;
+// telemetry/report-lib.mjs — buckets OTel NDJSON rows by time window (per-task cost: scripts/audit.mjs).
 // T4 live adjudication 2026-08-08: type attr is camelCase (cacheRead/cacheCreation),
 // NOT the docs' snake_case — verified against live probe rows in 2026-08.ndjson.
 const TOKEN_TYPES = ['input', 'output', 'cacheRead', 'cacheCreation'];
-
-export function parseChecklist(markdown) {
-  const tasks = [];
-  let current;
-  let inFence = false;
-  let phase = 0;
-  for (const line of markdown.split('\n')) {
-    if (FENCE.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue; // cold-review C3: code fixtures quote stamps
-    if (PHASE_MARKER.test(line)) {
-      phase += 1;
-      continue;
-    }
-    const heading = line.match(TASK_HEADING);
-    if (heading) {
-      current = { name: heading[1], phase, done: undefined };
-      tasks.push(current);
-      continue;
-    }
-    if (!current || !TICK_LINE.test(line)) continue;
-    const stamp = line.match(STAMP);
-    if (!stamp) continue;
-    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(stamp[1]);
-    const when = new Date(stamp[1]);
-    if (!Number.isNaN(when.getTime()) && (!current.done || when > current.done)) {
-      current.done = when;
-      current.dateOnly = dateOnly;
-    }
-  }
-  return tasks.filter((task) => task.done !== undefined);
-}
-
-export function taskWindows(tasks, fallbackStart) {
-  const windows = [];
-  const warnings = [];
-  let from = fallbackStart;
-  for (const task of tasks) {
-    if (task.done <= from) {
-      const coversFrom = task.dateOnly && from.getTime() < task.done.getTime() + 86_400_000;
-      if (!coversFrom) {
-        // cold-review C3: an inverted window can never match a row; skip loudly instead
-        warnings.push(`${task.name}: non-monotonic stamp ${task.done.toISOString()} <= window start ${from.toISOString()} — task skipped`);
-        continue;
-      }
-      task.done = new Date(from.getTime() + 1); // date-only = "sometime this day": resolve monotonic, near-zero window
-    }
-    windows.push({ name: task.name, phase: task.phase, from, to: task.done });
-    from = task.done;
-  }
-  return { windows, warnings };
-}
 
 function emptyBucket() {
   return { tokens: Object.fromEntries(TOKEN_TYPES.map((t) => [t, 0])), cost: 0 };
@@ -76,8 +17,7 @@ function addRow(bucket, rowItem) {
 }
 
 export function summarize(rows, windows, skillEventName = 'skill_activated') {
-  const tasks = windows.map((window) => ({ name: window.name, phase: window.phase, ...emptyBucket(), rowsAny: 0, events: 0, durationMin: Math.round((window.to - window.from) / 60000) }));
-  const phases = {};
+  const buckets = windows.map((window) => ({ name: window.name, ...emptyBucket(), rowsAny: 0, events: 0, durationMin: Math.round((window.to - window.from) / 60000) }));
   const agents = {};
   const sources = {};
   const skills = {};
@@ -86,11 +26,10 @@ export function summarize(rows, windows, skillEventName = 'skill_activated') {
     const when = new Date(rowItem.ts);
     const index = windows.findIndex((w) => when > w.from && when <= w.to);
     if (index >= 0) {
-      const task = tasks[index];
-      task.rowsAny += 1;
-      if (rowItem.kind === 'event') task.events += 1;
-      addRow(task, rowItem);
-      addRow((phases[String(task.phase)] ??= emptyBucket()), rowItem);
+      const bucket = buckets[index];
+      bucket.rowsAny += 1;
+      if (rowItem.kind === 'event') bucket.events += 1;
+      addRow(bucket, rowItem);
     }
     // D1 live probe 2026-09-14: `agent.name` on the cost/token metric rows is ALWAYS
     // the literal "custom" (82/82 historical rows, plus both probe dispatches — a
@@ -119,17 +58,17 @@ export function summarize(rows, windows, skillEventName = 'skill_activated') {
       skills[skill].triggers[trigger] = (skills[skill].triggers[trigger] ?? 0) + 1;
     }
   }
-  // cold-review M4: two gap classes — a doc-only task window with genuinely no
+  // cold-review M4: two gap classes — a window with genuinely no
   // session traffic reports "no rows" (candidate gap), not a false cost warning.
   const gaps = [];
-  for (const task of tasks) {
-    if (task.rowsAny === 0) gaps.push(`${task.name}: no rows in window — receiver down, sessions predating env config, or unmetered work`);
-    else if (task.events > 0 && task.cost === 0) gaps.push(`${task.name}: session events present but zero cost rows — metrics pipeline suspect`);
+  for (const w of buckets) {
+    if (w.rowsAny === 0) gaps.push(`${w.name}: no rows in window — receiver down, sessions predating env config, or unmetered work`);
+    else if (w.events > 0 && w.cost === 0) gaps.push(`${w.name}: session events present but zero cost rows — metrics pipeline suspect`);
   }
   // D1: subagent traffic that produced no subagent_completed event is unattributable —
   // its metric rows say "custom" and nothing else on them recovers the agent type.
   if (subagentRows > 0 && Object.keys(agents).length === 0) gaps.push(`${subagentRows} subagent rows but no subagent_completed events — per-agent table unavailable (agent.name is redacted to "custom")`);
-  return { tasks, phases, agents, sources, skills, gaps };
+  return { windows: buckets, agents, sources, skills, gaps };
 }
 
 const fmt = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(4));
@@ -142,11 +81,10 @@ function bucketTable(lines, title, header, entries) {
 }
 
 export function renderMarkdown(report) {
-  const lines = ['## Per-task', '', '| Task | input | output | cacheRead | cacheCreation | cost USD | duration min |', '|---|---|---|---|---|---|---|'];
-  for (const task of report.tasks) {
-    lines.push(`| ${task.name} | ${TOKEN_TYPES.map((t) => fmt(task.tokens[t])).join(' | ')} | ${fmt(task.cost)} | ${task.durationMin} |`);
+  const lines = ['## Per-window', '', '| Window | input | output | cacheRead | cacheCreation | cost USD | duration min |', '|---|---|---|---|---|---|---|'];
+  for (const w of report.windows) {
+    lines.push(`| ${w.name} | ${TOKEN_TYPES.map((t) => fmt(w.tokens[t])).join(' | ')} | ${fmt(w.cost)} | ${w.durationMin} |`);
   }
-  bucketTable(lines, 'Per-phase', 'Phase', Object.fromEntries(Object.entries(report.phases).map(([k, v]) => [`Phase ${k}`, v])));
   // Per-agent is deliberately NOT a bucketTable: no cost is attributable to an agent type (D1).
   lines.push('', '## Per-agent', '', '| Agent | runs | tokens | tool uses | duration sec | models |', '|---|---|---|---|---|---|');
   for (const [name, bucket] of Object.entries(report.agents)) {

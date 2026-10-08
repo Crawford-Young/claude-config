@@ -2,7 +2,7 @@
 
 Single source for how everything Crawford Young ships looks, moves, and speaks. Three living references below are re-verified against code and updated in place.
 
-> **Reference docs only.** This directory is junctioned from the `claude-config` repo. Brand project working artifacts — specs, checklists, issues, screenshots, continuation handoffs, assets — live in `~/code/docs/brand-design/` (local-private docs repo), never here.
+> **Reference docs only.** This directory is junctioned from the `claude-config` repo. Brand project screenshots and assets live in `~/code/docs/brand-design/` (local-private docs repo); specs and tracking live in GitHub issues — never here.
 
 | Doc | Covers | Load when |
 |---|---|---|
@@ -14,6 +14,6 @@ Single source for how everything Crawford Young ships looks, moves, and speaks. 
 
 **Product brand layers** extend these docs, never replace them:
 
-- Cybond (naming, logo, voice, splash) → [`docs/scheduling-advisor/specs/2026-06-03-cybond-rebrand-design.md`](../scheduling-advisor/specs/2026-06-03-cybond-rebrand-design.md)
+- Cybond (naming, logo, voice, splash) → `docs@5740fed:web/scheduling-advisor/specs/2026-06-03-cybond-rebrand-design.md`
 
 **Assets:** `~/code/docs/brand-design/assets/` (profile photo, Cybond logo).

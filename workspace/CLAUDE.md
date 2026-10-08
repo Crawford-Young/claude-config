@@ -15,23 +15,21 @@ Governs every project in this workspace. Stack rules live in the domain file; th
 | `~/code/games/` | Games | Godot 4, GDScript, GUT | [`games/CLAUDE.md`](./games/CLAUDE.md) |
 | `~/code/apps/` | Apps | Expo (React Native), Tauri v2, Jest+RNTL, Maestro | [`apps/CLAUDE.md`](./apps/CLAUDE.md) |
 
-Workspace infrastructure: `claude-config/` (this file's source, skills, agents, hooks, scripts — canonical home, junctioned into `~/code` and `~/.claude`), `docs/` (private planning-docs repo).
+Workspace infrastructure: `claude-config/` (this file's source, skills, agents, hooks, scripts — canonical home, junctioned into `~/code` and `~/.claude`), `docs/` (private: screenshots, harness-evolution archive).
 
 ## Skills are the workflow
 
 The skills in `claude-config/skills/` are the actionable units (their `scripts/*.mjs` do the mechanical work); the session-start hook injects their index — Read the SKILL.md it names when its trigger matches.
 
-## Planning docs
+## Tracking
 
-Specs, checklists, and issue logs live in `~/code/docs/<domain>/<project>/` (`specs/`, `checklists/active|done/`, `issues/`, `screenshots/<slug>/`). Meta-projects sit at `docs/` root. The docs repo is pushed at wave close — never "eventually".
+GitHub issues, via plain `gh`: harness/cross-repo work in claude-config, project work in its own repo.
 
-**Order for any new feature:** spec (if the shape is open) → user approves → plan (plan mode; checklist via `checklist.mjs` for multi-session work) → user approves → execute without per-change approval → pause only when done, blocked, or the plan needs revision.
-
-**Issue log** — the orchestrator (never subagents) logs wrong assumptions, missing behaviors, and mid-wave bugs as they surface; reviewed at reflect, then → `done/`. Subagents report `ISSUE:` lines upward instead.
-
-**Checklist** — tick it in the same batch as the commit it records.
-
-**Follow-ups found mid-task** — a pre-existing bug or nearby improvement goes in the summary as a follow-up line, not into this wave's change, unless the requested behavior cannot work without it. The issue log is only for this wave's own work.
+- **Issue = spec:** body `## Goal` / `## Done when` (checkboxes) / `## Out of scope`. Active work carries the `in-progress` label; PRs carry `Closes #N`.
+- **Order:** issue (user approves its Done-when) → plan mode if the shape is open → execute without per-change approval → pause only when done, blocked, or the plan needs revision.
+- **Resume state = commit bodies:** `What:` / `Verified:` (cmd → rc) / `Next:` / `Ruled out:`. A cold session resumes from the last `Next:` plus Done-when. The user renames each unit session `/rename <repo>-<issue>`.
+- **Bugs and wrong assumptions** found mid-wave → a comment on the issue, or a new `bug` issue. Subagents report `ISSUE:` lines upward instead.
+- **Follow-ups found mid-task** — a pre-existing bug or nearby improvement goes in the summary as a follow-up line, not into this wave's change, unless the requested behavior cannot work without it.
 
 ## Git
 
@@ -45,7 +43,7 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md updated, 
 
 ## Context
 
-- Stop at `<!-- COMPACT POINT -->` markers: get state on disk (checklist ticked, issue log current), then hand a continuation prompt and suggest `/clear` — a wave boundary is a fresh window, not a compact.
+- At a wave boundary: get state on disk (commit body, issue comments), then run the continuation skill — a fresh window, not a compact.
 - Abandoning a wrong implementation path: use `/rewind`, not `/compact` — compacting a wrong path keeps the wrong path's content in the summary that survives.
 - After 2 failed correction attempts on one problem: stop, `/clear` with a continuation prompt, or read the provider's docs first when the fight is against an external service — it's a documented system, not a black box.
 - Before ending a turn, check the last paragraph you're about to write — if it's a plan, a promise, or a next-step list rather than the work itself, do the work now instead.
@@ -68,7 +66,7 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md updated, 
 
 ## Orchestration
 
-- Dispatch readily — this harness delegates by design, overriding the Opus-tier system-prompt bias against unasked Agent use (verified: 2026-09 on Opus 5; re-check on Opus 5.5). `agent-factory` carries the lanes; `agents/ROUTING.md` picks the model.
+- Dispatch readily — this harness delegates by design (verified: 2026-10, Opus 5.5). `agent-factory` carries the lanes; `agents/ROUTING.md` picks the model.
 - Live LLM rounds on the user's API keys need per-run clearance — present lane, turn count, expected writes first. Point at brief files instead of restating them.
 - Before a task that will need several deferred tools, batch every expected ToolSearch lookup into one call — any deferred-tool surface; binds subagents too.
 
@@ -78,4 +76,4 @@ Surface uncertainty before writing code. Before any multi-step feature, confirm 
 
 # Compact instructions
 
-When compacting, always preserve: the active checklist path and current task, open blockers and stated deviations, user-action handoffs not yet done, approaches tried and set aside (with why they were rejected), and the exact wording of user decisions and constraints — never a paraphrase. Prefer dropping: file contents already summarized, tool output already acted on, resolved QA rounds. Asymmetry: the model's own reasoning is the safest thing to condense; the user's own words are the least safe.
+When compacting, always preserve: the active issue number and current task, open blockers and stated deviations, user-action handoffs not yet done, approaches tried and set aside (with why they were rejected), and the exact wording of user decisions and constraints — never a paraphrase. Prefer dropping: file contents already summarized, tool output already acted on, resolved QA rounds. Asymmetry: the model's own reasoning is the safest thing to condense; the user's own words are the least safe.

@@ -6,8 +6,8 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 
 | Path | What | Linked to |
 |---|---|---|
-| `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops`, `reflect`, `continuation`, `cleanup`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
-| `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state`, `verify-frontmatter`, `harness-map` — all `.mjs`, tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
+| `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops` — includes the end-of-wave sweep via `cleanup.mjs`, `reflect`, `continuation`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
+| `scripts/` | Workflow scripts (`worktree`, `qa`, `land`, `cleanup`, `reflect-gather`, `audit`, `verify-frontmatter`, `harness-map` — all `.mjs`, tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
 | `hooks/` | Node hooks (guards, gates, logs — see `hooks/README.md` for the settings.json wiring) | `~/.claude/settings.json` `hooks` block |
 | `agents/` | Subagent defs (`implementer`, `reviewer`, `recon`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
 | `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
