@@ -576,6 +576,17 @@
    ]
   },
   {
+   "id": "script:guard-replay",
+   "kind": "script",
+   "label": "guard-replay.mjs",
+   "file": "scripts/guard-replay.mjs",
+   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106).",
+   "rules": [
+    "Run before a guard or approval-parser PR",
+    "Report only, exit 0; local transcripts, never CI"
+   ]
+  },
+  {
    "id": "script:export-harness",
    "kind": "script",
    "label": "export-harness.ps1",
@@ -1145,6 +1156,23 @@
    "to": "hook:_hooklib",
    "kind": "reads",
    "label": "shared shell SKILL.md read detector"
+  },
+  {
+   "from": "script:guard-replay",
+   "to": "store:transcripts",
+   "kind": "reads"
+  },
+  {
+   "from": "script:guard-replay",
+   "to": "hook:bash-guard",
+   "kind": "reads",
+   "label": "both checkouts' copies"
+  },
+  {
+   "from": "script:guard-replay",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "both checkouts' copies"
   },
   {
    "from": "hook:bash-guard",

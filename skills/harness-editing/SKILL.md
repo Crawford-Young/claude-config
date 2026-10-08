@@ -50,5 +50,6 @@ Stop at the first rung that fits. Each rung down is cheaper context than the nex
 - The `claude` CLI is `~/.local/bin/claude.exe`, which is not on Git Bash's PATH, and subagent shells lack it too. CLI probes (`--help`, `plugin eval`) call it by path from the orchestrator.
 - Hooks are fail-open: errors go to `~/.claude/hook-errors.log` — check it first when a hook seems silent. Unit-test hooks by piping JSON to stdin.
 - A change live for every session (hooks, settings.json, statusline, the CLAUDE.md chain) gets a fresh-context reviewer before push: green gates hid 5 majors in Phase 2 (#93) and 4 in #77 (b92ad8e).
+- A guard or approval change gets a guard-replay diff before the PR: `node scripts/guard-replay.mjs <main-checkout> <branch-worktree>` (#106).
 - Tests that spawn harness scripts set every `~/.claude` path override (or a temp `HOME`/`USERPROFILE`): #77's tests wrote fixture samples into the real usage-history, and a stale spend cache rendered "day $126".
 - Harness itself suspected: `claude --safe-mode` disables every harness customization at once to confirm the harness is the cause (it won't name the hook); `/doctor` runs a general checkup.
