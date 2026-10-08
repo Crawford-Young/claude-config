@@ -51,41 +51,39 @@ fixed false verdict; change them only with a test:
 
 ## settings.json wiring
 
-Invoke via `node` with a forward-slash absolute path (backslashes get eaten by
-JSON+shell). Adjust the repo path per machine:
+Every hook uses **exec form**: `command` is the program and `args` is an array.
+Claude Code then spawns it directly. A command *string* on Windows runs through
+`Git\bin\bash.exe -c`, which starts a second `usr\bin\bash.exe` and costs about 22 ms
+per hook firing; exec form is 38 ms vs 60 ms p50 for bash-guard
+(measured 2026-10-08, #78). Exec form has no shell quoting, so the paths are
+plain forward-slash absolute paths. Adjust the repo path per machine:
 
 ```json
 "hooks": {
   "PreToolUse": [
-    { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/bash-guard.mjs\"" }] },
-    { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs\"" }] }
+    { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/bash-guard.mjs"] }] },
+    { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs"] }] }
   ],
   "UserPromptSubmit": [ { "hooks": [
-    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs\"" },
-    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/context-gauge.mjs\"" }
+    { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs"] },
+    { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/context-gauge.mjs"] }
   ] } ],
-  "Stop": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs\"" }] } ],
+  "Stop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs"] }] } ],
   "SessionStart": [ { "hooks": [
-    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/session-start.mjs\"" },
-    { "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/otel-receiver-spawn.mjs\"" }
+    { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/session-start.mjs"] },
+    { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/otel-receiver-spawn.mjs"] }
   ] } ],
-  "PreCompact": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/precompact-archive.mjs\"" }] } ],
-  "SubagentStop": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/subagentstop-log.mjs\"" }] } ],
-  "Notification": [ { "hooks": [{ "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/young/code/claude-config/hooks/notification-toast.ps1\"" }] } ]
+  "PreCompact": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/precompact-archive.mjs"] }] } ],
+  "SubagentStop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/subagentstop-log.mjs"] }] } ],
+  "Notification": [ { "hooks": [{ "type": "command", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/young/code/claude-config/hooks/notification-toast.ps1"] }] } ],
+  "PermissionDenied": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/permission-denied.mjs"] }] } ],
+  "PreModelSwitch": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/pre-model-switch.mjs"] }] } ],
+  "PostModelSwitch": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/post-model-switch.mjs"] }] } ]
 }
 ```
 
-**Not yet wired** (director-owned `settings.json` — this table describes the
-target wiring, not necessarily what is live; check the live file before
-assuming these fire):
-
-```json
-"PermissionDenied": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/permission-denied.mjs\"" }] } ],
-"PostModelSwitch": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/post-model-switch.mjs\"" }] } ],
-"PreModelSwitch": [ { "hooks": [{ "type": "command", "command": "node \"C:/Users/young/code/claude-config/hooks/pre-model-switch.mjs\"" }] } ]
-```
-
-None of the three events take a matcher.
+PermissionDenied, PreModelSwitch and PostModelSwitch take no matcher. The
+`statusLine` command has no exec form; it always runs through `bash -c`.
 
 Keep the settings `deny` rules for `git add -A` forms — the two layers
 (deny rule + guard regex) deliberately overlap; change both or neither.
