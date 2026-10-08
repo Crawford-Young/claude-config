@@ -388,7 +388,7 @@
    "kind": "script",
    "label": "statusline",
    "file": "statusline/statusline.mjs",
-   "summary": "statusLine entry point: session name, repo@branch, model, effort, cost, day spend / ctx, cache, 5h, 7d (#77).",
+   "summary": "statusLine entry point: session name, repo@branch, model, effort, cost, day spend / ctx, cache, 5h, 7d; subagent.mjs renders the per-dispatch model/effort rows (#77).",
    "rules": [
     "Render reads caches only; spend.mjs refreshes ~/.claude/spend detached, at most once a minute",
     "Fails open to the [statusline] sentinel"
@@ -1186,7 +1186,7 @@
    "from": "store:settings-json",
    "to": "script:statusline",
    "kind": "loads",
-   "label": "statusLine"
+   "label": "statusLine + subagentStatusLine"
   },
   {
    "from": "hook:active-repo",
