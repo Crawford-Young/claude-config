@@ -9,8 +9,8 @@ else invokes it for you.
 A team lead, not a worker. **No worktree, no unit of your own.** Decompose the work, allocate
 shared singletons, write one paste-ready prompt per unit, run one closing audit at the end. Not a
 polling loop or re-verifier of a unit's own claims — each unit's human is already in its session
-and owns its own push/PR consent. Consent never travels between sessions: that's why the human
-pastes each prompt rather than you spawning the unit yourself.
+and owns its own push/PR consent. Consent never travels between sessions: each unit asks its
+human for every gated act, whichever way the unit was started.
 
 ## Decompose into units, one GitHub issue each
 
@@ -35,6 +35,11 @@ worktree command (`node ~/code/claude-config/scripts/worktree.mjs new <repo> <sl
 feat/<slug>`), states its allocated port/device/profile from the singleton table, and quotes its
 Done-when from the issue.
 
+**Or launch it yourself** (when the human asks): `claude --bg -n <repo>-<issue> --permission-mode
+<mode> "<prompt>"` from the repo root. `-n` writes the same `custom-title` record as `/rename`, so
+`audit --session` sees it (#97), and the human answers each unit through `claude agents`. Inline
+the batch rules in the prompt; a unit cannot rely on reading your scratchpad.
+
 ### Example unit prompt
 
 Human types first: `/rename web-142`
@@ -54,7 +59,12 @@ Report back when claimed, and again if blocked on anything.
 
 Only two: **`claimed`** and **`blocked on <X>`** (may reorder the batch). Everything else —
 gates green, review verdict, PR opening — goes to the unit's own human. Don't chase or
-transcribe it.
+transcribe it. When a unit merges, release its files to units still running and tell them to rebase. All 3
+`blocked` checkpoints in Phase 3 (#81) were file-ownership handoffs, not technical blocks.
+
+A worktree-lane unit finishes with `git -C <repo> pull --ff-only` (outside its worktree), then
+`worktree.mjs remove`. `land.mjs sync` is the land lane only; it refuses when main is merely
+behind.
 
 ## Shape: front-loaded, plus one closing audit
 
