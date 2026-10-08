@@ -13,6 +13,15 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 export const claudeDir = join(homedir(), '.claude');
+
+/** Skills read through the shell (#103): the names in `skills/<name>/SKILL.md`
+ *  (and `INDEX` for `skills/INDEX.md`) that a Bash/PowerShell command line
+ *  names, in either slash direction under any path prefix. A command that
+ *  merely says "skills" names no file and reads nothing. Deduped, in order. */
+export function shellSkillReads(command) {
+  const names = [...String(command ?? '').matchAll(/skills[\\/]+(?:([\w.-]+)[\\/]+SKILL\.md|(INDEX)\.md)(?![\w.-])/gi)].map((m) => m[1] ?? m[2]);
+  return [...new Set(names)];
+}
 export const errorLog = join(claudeDir, 'hook-errors.log');
 
 // ---- billed-model clearance (shared by every gate on a usage-billed act) ----

@@ -22,7 +22,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { block, claudeDir, readState, run, writeState } from './_hooklib.mjs';
+import { block, claudeDir, readState, run, shellSkillReads, writeState } from './_hooklib.mjs';
 import { clauses, gatedVerbs, scrub } from './bash-guard.mjs';
 
 const stateFile = join(claudeDir, 'stop-reflect-gate.json');
@@ -54,7 +54,7 @@ export function lastMerge(text) {
   return [...merges].filter(([, ok]) => ok).pop()?.[0] ?? null;
 }
 
-/** Epoch ms of the newest reflect SKILL.md Read or reflect Skill call, else null. */
+/** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), or reflect Skill call, else null. */
 export function lastReflectAt(text) {
   let at = null;
   for (const l of text.split('\n')) {
@@ -68,7 +68,9 @@ export function lastReflectAt(text) {
     const hit = (Array.isArray(o?.message?.content) ? o.message.content : []).some(
       (c) =>
         c.type === 'tool_use' &&
-        ((c.name === 'Read' && REFLECT_SKILL.test(c.input?.file_path || '')) || (c.name === 'Skill' && c.input?.skill === 'reflect')),
+        ((c.name === 'Read' && REFLECT_SKILL.test(c.input?.file_path || '')) ||
+          (c.name === 'Skill' && c.input?.skill === 'reflect') ||
+          (MERGE_TOOLS.has(c.name) && shellSkillReads(c.input?.command).includes('reflect'))),
     );
     const t = Date.parse(o?.timestamp);
     if (hit && !Number.isNaN(t)) at = Math.max(at ?? 0, t);

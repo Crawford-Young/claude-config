@@ -139,7 +139,7 @@ test('a shell command naming skills/<name>/SKILL.md counts as reading that skill
   const c = createCollector({ prices: PRICES, installedSkills: ['plan', 'qa', 'reflect', 'worktree'] });
   const cat = { type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'cd ~/code/claude-config && cat skills/worktree/SKILL.md skills/plan/SKILL.md skills/plan/SKILL.md' } };
   const sed = { type: 'tool_use', id: 'c2', name: 'PowerShell', input: { command: 'Get-Content "C:\\Users\\y\\code\\claude-config\\skills\\qa\\SKILL.md"' } };
-  const other = { type: 'tool_use', id: 'c3', name: 'Bash', input: { command: 'wc -c skills/INDEX.md skills/reflect/gotchas.md' } };
+  const other = { type: 'tool_use', id: 'c3', name: 'Bash', input: { command: 'cat skills/INDEX.md; wc -c skills/reflect/gotchas.md; echo skills' } };
   c.add(asst('r1', usage(), { content: [cat, sed, other] }), MAIN);
   c.add(asst('r1', usage({ output_tokens: 2 }), { content: [cat] }), MAIN); // partial repeat
   const r = c.report();
