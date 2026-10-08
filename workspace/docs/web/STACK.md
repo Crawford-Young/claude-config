@@ -27,7 +27,7 @@ Full tool list for all projects in `~/code`. Load this when scaffolding a new re
 | API layer | Server Actions (mutations) + RSC (queries) | API Routes only for externally-consumed endpoints |
 | Fonts | next/font | Self-hosted; eliminates layout shift; required on all projects |
 | Logging | Pino | Structured JSON logging; never `console.log` |
-| Package manager | pnpm | Never npm or yarn |
+| Package manager | Bun (pm+runtime) | `pnpm-lock.yaml`→pnpm til #110; never npm or yarn |
 | Task runner | Justfile | Required in every repo |
 | Path alias | `@/` → `src/` | Standard in every project; configured in `tsconfig.json` and `next.config.ts` |
 | Pre-commit hooks | Husky + lint-staged + commitlint | Lint, format, typecheck, enforce commit format |
