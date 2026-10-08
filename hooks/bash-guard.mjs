@@ -16,6 +16,13 @@
 //      --model=…, or a *MODEL env var set anywhere in the command) without a
 //      live FABLE OK marker — the same single-use clearance the Agent and
 //      /model gates spend (_hooklib.mjs), logged to the same dispatch log
+//   8. git push / gh pr create / gh pr merge without an approving answer in
+//      the transcript (CLAUDE.md: "No commit or push without explicit user
+//      approval"). `git push --dry-run` is exempt. Approval is read from the
+//      most recent user record carrying `toolUseResult.answers` — an
+//      AskUserQuestion answer the model cannot forge — and is single-use per
+//      verb, spent from a small state file keyed by that record's uuid, so
+//      one approving answer covers push → pr create → pr merge once each.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -32,10 +39,11 @@
 // checked nothing, and a silent allow is invisible — a loud block is not.
 
 import { spawnSync } from 'node:child_process';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { BILLED_MODEL, block, consumeClearance, logBilled, run } from './_hooklib.mjs';
+import { BILLED_MODEL, block, claudeDir, consumeClearance, logBilled, run } from './_hooklib.mjs';
 
 const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code');
 
@@ -248,6 +256,137 @@ export function gitCalls(raw, cwd) {
   return out;
 }
 
+/** Every `gh` call's subcommand pair (`gh pr create` → sub 'pr', action
+ *  'create'), parsed by command word the same way as a git call — never by
+ *  substring, so quoted text and commit messages never trigger it. */
+function ghCalls(raw, cwd) {
+  const out = [];
+  for (const { cmd, words: w } of commands(raw, cwd)) {
+    if (!/^gh(?:\.exe)?$/i.test(cmd)) continue;
+    const nonFlag = w.slice(1).filter((a) => !a.startsWith('-'));
+    out.push({ sub: nonFlag[0] || null, action: nonFlag[1] || null });
+  }
+  return out;
+}
+
+/** 8. The verb a command would spend a push/PR approval on, or null when
+ *  nothing here is gated — callers must check this FIRST and read nothing
+ *  else when it's null, so a non-gated command costs zero extra I/O.
+ *  `git push --dry-run` is exempt. */
+export function gatedVerb(raw, cwd) {
+  const cmd = scrub(raw);
+  for (const { sub, args } of gitCalls(cmd, cwd)) {
+    if (sub === 'push' && !args.includes('--dry-run')) return 'git push';
+  }
+  for (const { sub, action } of ghCalls(cmd, cwd)) {
+    if (sub === 'pr' && action === 'create') return 'gh pr create';
+    if (sub === 'pr' && action === 'merge') return 'gh pr merge';
+  }
+  return null;
+}
+
+/** Walk a transcript JSONL file backward for the most recent user record
+ *  carrying an AskUserQuestion answer (`toolUseResult.answers`: question text
+ *  -> answer text, alongside the record's own `uuid`/`timestamp`). Returns
+ *  null when the transcript holds none. Throws on a missing/unreadable file —
+ *  callers fail closed. */
+export function latestAnswer(transcriptPath) {
+  const lines = readFileSync(transcriptPath, 'utf8').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (!l || l[0] !== '{') continue;
+    let o;
+    try {
+      o = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    const answers = o?.toolUseResult?.answers;
+    if (o?.type === 'user' && answers && typeof answers === 'object' && !Array.isArray(answers)) {
+      return { uuid: o.uuid, timestamp: o.timestamp, answers };
+    }
+  }
+  return null;
+}
+
+const APPROVE_RE = /\b(commit|push|pr|pull request|merge|ship|land)\b/i;
+const DENY_RE = /\b(hold|review first|don'?t|do not|not yet|wait|no)\b/i;
+
+/** Does some answer value read as approving (mentions the act) without also
+ *  reading as a refusal? Only the record's own answers are considered — the
+ *  caller already picked the single most recent record. */
+export function isApproving(answers) {
+  return Object.values(answers).some((v) => APPROVE_RE.test(v) && !DENY_RE.test(v));
+}
+
+export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
+
+function readApprovalState(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeApprovalState(file, state) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(state));
+  } catch {
+    // advisory persistence only — losing it costs a duplicate ask, nothing more
+  }
+}
+
+/** Has `verb` already been spent against approval `uuid`? Records it spent on
+ *  first use. Self-trims to the newest 200 approval uuids. */
+function spend(uuid, verb, file) {
+  const state = readApprovalState(file);
+  const entry = state[uuid] || [];
+  if (entry.includes(verb)) return true;
+  state[uuid] = [...entry, verb];
+  const keys = Object.keys(state);
+  if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete state[k];
+  writeApprovalState(file, state);
+  return false;
+}
+
+const askRemedy = (verb) =>
+  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry.`;
+
+/** 8. git push / gh pr create / gh pr merge need an approving answer in the
+ *  transcript, spent once per verb. `transcriptPath` is read lazily — a
+ *  non-gated command never touches disk here. */
+export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile()) {
+  const verb = gatedVerb(raw, cwd);
+  if (!verb) return null;
+
+  if (!transcriptPath || !existsSync(transcriptPath)) {
+    return `${verb} needs explicit user approval (CLAUDE.md: "No commit or push without explicit user approval"), but there is no transcript to read it from. ${askRemedy(verb)}`;
+  }
+
+  let record;
+  try {
+    record = latestAnswer(transcriptPath);
+  } catch {
+    return `${verb} needs explicit user approval, but the transcript could not be read. ${askRemedy(verb)}`;
+  }
+
+  if (!record) {
+    return `${verb} needs explicit user approval and no AskUserQuestion answer was found in the transcript. ${askRemedy(verb)}`;
+  }
+
+  if (!isApproving(record.answers)) {
+    return `${verb} needs explicit user approval; the most recent AskUserQuestion answer does not approve it. ${askRemedy(verb)}`;
+  }
+
+  if (spend(record.uuid, verb, stateFile)) {
+    return `${verb} already spent that approval — one push/PR per approving answer. ${askRemedy(verb)}`;
+  }
+
+  return null;
+}
+
 // ---- stateful rules ---------------------------------------------------------
 
 function currentBranch(repo) {
@@ -308,7 +447,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     (payload) => {
       const cmd = payload?.tool_input?.command || '';
       const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
-      const reason = staticCheck(cmd) || branchRules(cmd, cwd);
+      const reason = staticCheck(cmd) || branchRules(cmd, cwd) || pushGateReason(cmd, cwd, payload?.transcript_path);
       if (reason) block(reason);
       // Last, so a command another rule blocks never spends the clearance.
       const billed = billedLaunch(cmd);

@@ -6,7 +6,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { staticCheck, gitCalls, clauses, stripMessages, stripHeredocs, billedLaunch } from '../../hooks/bash-guard.mjs';
+import {
+  staticCheck,
+  gitCalls,
+  clauses,
+  stripMessages,
+  stripHeredocs,
+  billedLaunch,
+  gatedVerb,
+  pushGateReason,
+} from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
   assert.ok(staticCheck('git add -A'));
@@ -250,6 +259,22 @@ function guardRun(command, h, extraEnv = {}) {
   }
 }
 
+/** Same as guardRun, but through the real hook entrypoint with a transcript_path
+ *  in the payload (rule 8 reads it from there, not from an argument). */
+function guardRunT(command, h, transcriptPath, extraEnv = {}) {
+  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code'), ...extraEnv };
+  try {
+    execFileSync(process.execPath, [hookPath], {
+      input: JSON.stringify({ tool_input: { command }, cwd: h, transcript_path: transcriptPath }),
+      env,
+      encoding: 'utf8',
+    });
+    return 0;
+  } catch (e) {
+    return e.status;
+  }
+}
+
 test('a billed shell launch spends the single-use marker and logs it', () => {
   const h = tmpHome();
   const marker = join(h, '.claude', 'fable-clearance.json');
@@ -321,4 +346,112 @@ test('commit words in quoted or heredoc text never trip commit-on-main', () => {
   assert.equal(guardRun(`cd ${app} && git log --grep commit`, h), 0);
   // ...but a quoted command a shell will run is still judged.
   assert.equal(guardRun(`cd ${app} && bash -c "git commit -m x"`, h), 2);
+});
+
+// --- rule 8: push / gh pr create / gh pr merge need an approving answer -----
+
+test('gatedVerb finds git push and gh pr create/merge, parsed by command word', () => {
+  assert.equal(gatedVerb('git push', '/repo'), 'git push');
+  assert.equal(gatedVerb('git push -u origin feat/x', '/repo'), 'git push');
+  assert.equal(gatedVerb('cd /repo && git push', '/cwd'), 'git push');
+  assert.equal(gatedVerb('gh pr create --fill', '/repo'), 'gh pr create');
+  assert.equal(gatedVerb('gh pr merge --rebase', '/repo'), 'gh pr merge');
+});
+
+test('gatedVerb exempts dry-run pushes and non-gated gh/git calls', () => {
+  assert.equal(gatedVerb('git push --dry-run', '/repo'), null);
+  assert.equal(gatedVerb('git push --dry-run origin main', '/repo'), null);
+  assert.equal(gatedVerb('gh pr view 12', '/repo'), null);
+  assert.equal(gatedVerb('git status', '/repo'), null);
+  assert.equal(gatedVerb('git pull', '/repo'), null);
+});
+
+test('gatedVerb never trips on quoted text or a commit message', () => {
+  assert.equal(gatedVerb('echo "git push"', '/repo'), null);
+  assert.equal(gatedVerb('git commit -m "git push later"', '/repo'), null);
+  assert.equal(gatedVerb('grep -rn "gh pr create" docs', '/repo'), null);
+});
+
+/** A throwaway transcript with one AskUserQuestion answer record. */
+function transcriptWith(dir, answers, { uuid = 'uuid-1', timestamp = new Date().toISOString() } = {}) {
+  const path = join(dir, `t-${Math.random().toString(36).slice(2)}.jsonl`);
+  writeFileSync(path, `${JSON.stringify({ type: 'user', uuid, timestamp, toolUseResult: { questions: [], answers } })}\n`);
+  return path;
+}
+
+function pushGateTmp() {
+  const h = mkdtempSync(join(tmpdir(), 'pg-'));
+  return { h, stateFile: join(h, 'state.json') };
+}
+
+test('push is allowed after an approving answer, then blocked on reuse', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Commit, push and open a PR?': 'Commit + PR (Recommended)' });
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile));
+});
+
+test('one approval covers push, pr create and pr merge exactly once each', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr merge --rebase', '/repo', t, stateFile), null);
+  // Each verb is single-use even under the same approval.
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile));
+  assert.ok(pushGateReason('gh pr merge --rebase', '/repo', t, stateFile));
+});
+
+test('the latest answer blocks even when an older answer in the same transcript approved', () => {
+  const { h, stateFile } = pushGateTmp();
+  const path = join(h, 'two.jsonl');
+  const older = { type: 'user', uuid: 'u-old', timestamp: '2026-10-01T00:00:00.000Z', toolUseResult: { questions: [], answers: { 'Push?': 'Push + open PR' } } };
+  const newer = { type: 'user', uuid: 'u-new', timestamp: '2026-10-02T00:00:00.000Z', toolUseResult: { questions: [], answers: { 'Push?': 'Review first' } } };
+  writeFileSync(path, `${JSON.stringify(older)}\n${JSON.stringify(newer)}\n`);
+  assert.ok(pushGateReason('git push', '/repo', path, stateFile));
+});
+
+test('free-text approval allows, deny wording blocks', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t1 = transcriptWith(h, { 'Should I proceed?': 'yes go ahead and push it' });
+  assert.equal(pushGateReason('git push', '/repo', t1, stateFile), null);
+
+  const { stateFile: stateFile2 } = pushGateTmp();
+  const t2 = transcriptWith(h, { 'Should I proceed?': "hold off, don't push yet" });
+  assert.ok(pushGateReason('git push', '/repo', t2, stateFile2));
+});
+
+test('a missing or unreadable transcript blocks (fail-closed)', () => {
+  const { h, stateFile } = pushGateTmp();
+  assert.ok(pushGateReason('git push', '/repo', join(h, 'does-not-exist.jsonl'), stateFile));
+  assert.ok(pushGateReason('git push', '/repo', undefined, stateFile));
+});
+
+test('a transcript with no answer record blocks', () => {
+  const { h, stateFile } = pushGateTmp();
+  const path = join(h, 'empty.jsonl');
+  writeFileSync(path, `${JSON.stringify({ type: 'assistant', uuid: 'a1' })}\n`);
+  assert.ok(pushGateReason('git push', '/repo', path, stateFile));
+});
+
+test('a non-gated command never consults pushGateReason input at all (gatedVerb short-circuits)', () => {
+  // No transcript/state file given at all — if this read the transcript it would throw.
+  assert.equal(pushGateReason('gh pr view 12', '/repo', '/no/such/transcript.jsonl', '/no/such/state.json'), null);
+  assert.equal(pushGateReason('echo "git push"', '/repo', '/no/such/transcript.jsonl', '/no/such/state.json'), null);
+});
+
+test('end-to-end through the real hook: git push is gated and spends its approval once', () => {
+  const h = tmpHome();
+  const transcriptPath = join(h, 'transcript.jsonl');
+  writeFileSync(
+    transcriptPath,
+    `${JSON.stringify({ type: 'user', uuid: 'e2e-1', timestamp: new Date().toISOString(), toolUseResult: { questions: [], answers: { 'Push it?': 'Push + open PR' } } })}\n`,
+  );
+  // No approval reachable yet (bad path) — fails closed.
+  assert.equal(guardRunT('git push', h, join(h, 'missing.jsonl')), 2);
+  // Approving transcript: first push passes, second is blocked (spent).
+  assert.equal(guardRunT('git push', h, transcriptPath), 0);
+  assert.equal(guardRunT('git push', h, transcriptPath), 2);
+  // A non-gated command with the very same transcript is untouched.
+  assert.equal(guardRunT('git status', h, transcriptPath), 0);
 });
