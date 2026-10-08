@@ -18,6 +18,19 @@ description: Use before editing the workspace harness — the CLAUDE.md chain, c
 
 **Wiring map:** `claude-config/harness-map.json` names every part and what it calls, gates or feeds — read it before sweeping files. Adding, removing or rewiring a skill, hook, agent or script means updating its node and edges in the same change, or CI (`scripts/harness-map.mjs check`) fails.
 
+## Where a rule lives — the ladder
+
+Stop at the first rung that fits. Each rung down is cheaper context than the next.
+
+1. **Already covered** by a hook, script or resident rule → add nothing. A recurrence despite a rule means pruning or mechanizing it, not restating it.
+2. **Deterministic** → a hook or script (with a test), not prose.
+3. **Rare procedure or fact** → an on-demand doc, with a one-line pointer at the trigger that needs it.
+4. **Must hold on every turn** → a resident line in a CLAUDE.md. This is the last resort.
+
+- **Every resident line carries evidence or goes.** Evidence means a transcript count (`node scripts/audit.mjs`: invocations, blocks, $), a cited incident, or a measurement. Anything without evidence is a deletion candidate at the next trim.
+- **Every pinned tool, model or vendor choice carries `verified: YYYY-MM`.** A stale stamp gets re-checked against current docs, not trusted.
+- **Resident bytes are capped in CI** (#63). Growing past a cap means cutting elsewhere first.
+
 ## Edit rules
 
 - **Junctions load the MAIN checkout only.** Live edits land on its disk (Edit tool needs the real `claude-config/...` path — it refuses symlinks); commits go through `git-ops` (`land.mjs` — ephemeral worktree from `origin/main`, path-scoped diff). Never commit on the main checkout (hook-enforced).

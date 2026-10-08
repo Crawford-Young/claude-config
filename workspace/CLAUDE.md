@@ -2,6 +2,11 @@
 
 Governs every project in this workspace. Stack rules live in the domain file — Claude Code loads every `CLAUDE.md` from cwd upward, root first; the more specific file wins on conflict. Mechanical rules are enforced by hooks (`claude-config/hooks/`), not restated here. Incident history lives in `docs/harness-evolution/archive/` — cite it, don't reload it.
 
+## Philosophy
+
+**The simplest way to complete the task: lowest cost, tokens and time.** Every resident line is paid on every turn and dilutes recall. So it stays only with evidence (an `audit.mjs` count, an incident or a measurement), placed per the `harness-editing` ladder.
+**No outdated-tech bias:** pinned tools, models and vendors carry `verified: YYYY-MM` and are re-checked on evidence, migrated when it says so.
+
 ## Domains
 
 | Folder | Domain | Stack | Rules |
