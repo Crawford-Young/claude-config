@@ -8,10 +8,11 @@
 // Render budget is 50 ms including Node's ≈36 ms startup, so the hot path spawns
 // nothing: git state is read from .git files directly, not via `git`.
 
+import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ESC = '\x1b';
 const RST = `${ESC}[0m`;
@@ -170,6 +171,40 @@ function locationPiece(status, env) {
   return info.worktree ? `${shown} ${ESC}[2mwt${RST}` : shown;
 }
 
+// ---- day spend -----------------------------------------------------------------
+// statusline/spend.mjs prices today's transcripts into day-<date>.json; the render
+// only reads that file, and spawns the worker detached when it is stale.
+
+const SPEND_STALE_MS = 60_000;
+const LOCK_STALE_MS = 120_000; // a crashed worker's lock stops blocking after this
+
+export const localDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+export const spendDir = (env = process.env) => env.CLAUDE_SPEND_DIR || join(homedir(), '.claude', 'spend');
+export const spendLock = (dir) => join(dir, 'refresh.lock');
+
+function kickRefresh(dir, env, now) {
+  const lock = spendLock(dir);
+  try {
+    if (now - statSync(lock).mtimeMs < LOCK_STALE_MS) return;
+  } catch {
+    /* no lock */
+  }
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(lock, String(now));
+  const worker = fileURLToPath(new URL('./spend.mjs', import.meta.url));
+  spawn(process.execPath, [worker], { detached: true, stdio: 'ignore', windowsHide: true, env }).unref();
+}
+
+/** `day $48` — today's spend across sessions; absent until the first refresh. */
+function dayPiece(env, now = Date.now()) {
+  const dir = spendDir(env);
+  const cache = JSON.parse(readText(join(dir, `day-${localDay(new Date(now))}.json`)) || 'null');
+  if (!env.CLAUDE_SPEND_NO_REFRESH && !(now - (cache?.ts || 0) < SPEND_STALE_MS)) kickRefresh(dir, env, now);
+  const usd = num(cache?.usd);
+  if (usd === null) return null;
+  return `day $${usd >= 10 ? usd.toFixed(0) : usd.toFixed(2)}`;
+}
+
 function contextPiece(cw) {
   const pct = num(cw?.used_percentage);
   if (pct === null) return null;
@@ -231,6 +266,8 @@ export function render(status, env = process.env) {
     if (status.effort?.level) top.push(String(status.effort.level));
     if (status.fast_mode === true) top.push('fast');
     if (num(status.cost?.total_cost_usd) !== null) top.push(`$${status.cost.total_cost_usd.toFixed(2)}`);
+    const day = piece(() => dayPiece(env));
+    if (day) top.push(day);
     const ctx = piece(() => contextPiece(status.context_window));
     if (ctx) bars.push(ctx);
     const cache = piece(() => cachePiece(status.prompt_cache));
