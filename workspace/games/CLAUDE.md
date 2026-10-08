@@ -4,7 +4,7 @@ Adds the Godot stack. Applies to every project under `~/code/games/`.
 
 > **Hand-load [`../docs/games/DIAGNOSTICS.md`](../docs/games/DIAGNOSTICS.md)** before any work touching movement, physics, or game feel — probe discipline and the tuning loop are wave-shape decisions.
 
-## Stack (key decisions)
+## Stack (verified: 2026-10, #80)
 
 | Concern | Tool |
 |---|---|

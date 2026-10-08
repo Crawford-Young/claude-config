@@ -12,18 +12,18 @@ Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (A
 > - [`../docs/web/TESTING-TRAPS.md`](../docs/web/TESTING-TRAPS.md) — **hand-load before writing tests or QA for interactive UI** (the unit-green/live-broken bug family)
 > - [`../docs/brand/`](../docs/brand/) — brand identity, design system, motion
 
-## Stack (key decisions)
+## Stack (verified: 2026-10, #80)
 
 | Concern | Tool |
 |---|---|
 | Framework | Next.js (App Router) — Server Components by default |
-| Language | TypeScript strict — no `any`, no `@ts-ignore` without justification |
+| Language | TypeScript 5→6 til #111; TS7 waits on typescript-eslint <6.1.0 strict — no `any`, no `@ts-ignore` without justification |
 | Styling | Tailwind CSS; UI primitives Radix UI + CVA (shadcn-inspired, owned) |
 | Dark mode | next-themes — `defaultTheme="dark"`, `darkMode: "class"` |
-| Package manager | pnpm · Task runner Justfile (required per repo) |
+| Package manager | Bun (pm+runtime); `pnpm-lock.yaml`→pnpm til #110 · Task runner Justfile (required per repo) |
 | Database | Neon + Drizzle (relational) or MongoDB native driver |
 | Auth | Auth.js v5 |
-| Testing | Vitest + Playwright E2E (`webServer: pnpm dev`) |
+| Testing | Vitest (`bun run test`, not `bun test` — its thresholds skip branches/statements) + Playwright E2E |
 | Logging / errors | Pino (never `console.log`) · Sentry in production |
 | Deploy | Vercel · Conventional Commits via commitlint |
 
@@ -52,7 +52,7 @@ Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (A
 
 ## Gates in practice
 
-- After any rebase touching `package.json`: `pnpm install` before gates.
+- After any rebase touching `package.json`: reinstall via the repo's package manager.
 - Browser e2e rendering time-sensitive UI pins `timezoneId` — CI runs UTC.
 
 ## TypeScript style (the four rules checked on every PR)
@@ -71,7 +71,7 @@ Prettier owns formatting. Full guide → TYPESCRIPT-STYLE.md.
 - SVG geometry attrs reject CSS `calc()` silently — `%`/numeric only, and visually verify SVG components.
 - OIDC scope overrides REPLACE the default set — re-include `openid`, and test that it survives.
 - CSP `form-action` covers the whole redirect chain and the console error names the wrong host — prefer client-side `signIn()`; verify the served header after any CSP edit.
-- Windows: killing a backgrounded `pnpm start` wrapper leaves the node child serving the stale build — kill the port holder.
+- Windows: killing a backgrounded dev-server wrapper leaves the child process serving the stale build — kill the port holder.
 
 ## Design system
 

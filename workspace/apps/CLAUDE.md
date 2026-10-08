@@ -2,13 +2,13 @@
 
 Adds the mobile/desktop stack. Applies to every project under `~/code/apps/`.
 
-## Stack (key decisions)
+## Stack (verified: 2026-10, #80)
 
 | Concern | Tool |
 |---|---|
 | Mobile | Expo (React Native) |
 | Desktop | Tauri v2 |
-| Language | TypeScript strict — no `any`, no `@ts-ignore` without justification |
+| Language | TypeScript 6 (#111; TS7 waits on typescript-eslint <6.1.0) strict — no `any`, no `@ts-ignore` without justification |
 | Navigation | Expo Router — file-based routing |
 | Styling | NativeWind — Tailwind class syntax compiled to native styles |
 | Client async state | TanStack Query |
@@ -18,7 +18,7 @@ Adds the mobile/desktop stack. Applies to every project under `~/code/apps/`.
 | E2E | Maestro |
 | Build/ship | EAS Build + EAS Submit |
 | Error monitoring | Sentry |
-| Package manager | pnpm — never npm or yarn |
+| Package manager | Bun (pm+runtime); `pnpm-lock.yaml`→pnpm til #110 — never npm or yarn |
 | Commits | Conventional Commits — enforced by commitlint |
 
 ## Differs From Web
