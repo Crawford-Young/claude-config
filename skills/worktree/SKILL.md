@@ -28,6 +28,10 @@ node ~/code/claude-config/scripts/worktree.mjs remove <path>
 
 Encodes the Windows-safe sequence (git remove → force → recursive delete → prune). Remove the worktree BEFORE deleting its branch — a checked-out branch can't be deleted.
 
+## Session name
+
+Right after creating the worktree, type `/rename <repo>-<issue>` (e.g. `claude-config-72`) — the human types it, since agents can't run slash commands. Lead the worktree slug with the issue number (`<issue>-<topic>`, e.g. `72-issues-tracker`) so `worktree.mjs new` can derive the expected session name and warn (never block) when it doesn't match.
+
 ## Rules
 
 - `claude agents --cwd <repo>` (or `claude.exe agents --cwd <repo>` on this Windows setup) answers "is another session already active on this repo?" — run it before starting concurrent/multi-session branch work, not just before land.
