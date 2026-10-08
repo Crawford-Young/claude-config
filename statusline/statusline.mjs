@@ -127,7 +127,7 @@ function namePiece(status, env) {
   let n = sessionName(status.session_id, dir);
   if (!n && typeof status.session_name === 'string') {
     const name = status.session_name.replace(UNSAFE, '').trim();
-    if (name) n = { name, auto: true }; // the payload's session_name is the auto title
+    if (name) n = { name, auto: true }; // its source is unknown here, so it stays marked
   }
   if (!n) return null;
   if (!n.auto) return `${ESC}[1m${n.name}${RST}`;

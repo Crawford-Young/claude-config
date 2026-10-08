@@ -8,11 +8,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fillBar, formatTokens, gitInfo, historySample, localDay, render, spendLock } from '../../statusline/statusline.mjs';
 import { refresh } from '../../statusline/spend.mjs';
+import { render as renderSubagents } from '../../statusline/subagent.mjs';
 import { priceUsage } from '../../scripts/audit-lib.mjs';
 import { record } from '../../hooks/active-repo.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../statusline/statusline.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../../hooks/active-repo.mjs', import.meta.url));
+const SUBAGENT = fileURLToPath(new URL('../../statusline/subagent.mjs', import.meta.url));
 const FIX = fileURLToPath(new URL('../../statusline/tests/fixtures/', import.meta.url));
 const fixture = (name) => readFileSync(join(FIX, name), 'utf8');
 const json = (name) => JSON.parse(fixture(name));
@@ -343,6 +345,42 @@ test('spend: a stale cache spawns the detached worker, which fills it and drops 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ---- subagent rows ----------------------------------------------------------------
+
+test('subagent: label · tier · effort · tokens · elapsed; red ! only for opus/fable at high+', () => {
+  const now = 1_800_000_000_000;
+  const base = { type: 'local_agent', status: 'running', description: 'review diff', label: 'review diff', startTime: now - 72_000 };
+  const lines = renderSubagents(
+    {
+      columns: 120,
+      tasks: [
+        { ...base, id: 'a', model: 'claude-sonnet-5-5', tokenCount: 42_000 },
+        { ...base, id: 'b', label: 'fix tests', model: 'claude-opus-5-5', effort: 'high', tokenCount: 180_000, startTime: now - 243_000 },
+        { ...base, id: 'c', model: 'claude-opus-5-5', effort: 'low', tokenCount: 0 },
+        { ...base, id: 'd', type: 'local_bash' }, // no model: keeps the default row
+        { ...base, id: 'e', label: 'x\x1b[2Jy', model: 'claude-fable-5-1', effort: 32000 },
+      ],
+    },
+    now,
+  )
+    .split('\n')
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => l.id), ['a', 'b', 'c', 'e']);
+  const p = Object.fromEntries(lines.map((l) => [l.id, plain(l.content)]));
+  assert.equal(p.a, 'review diff · sonnet · 42k · 1m12s');
+  assert.equal(p.b, '! fix tests · opus · high · 180k · 4m03s');
+  assert.equal(p.c, 'review diff · opus · low · 1m12s');
+  assert.equal(p.e, 'x [2Jy · fable · 32k · 1m12s');
+  assert.ok(lines[1].content.startsWith('\x1b[31m!\x1b[0m '));
+});
+
+test('subagent: malformed stdin prints nothing and exits 0', () => {
+  const r = spawnSync(process.execPath, [SUBAGENT], { input: '{nope', encoding: 'utf8' });
+  assert.deepEqual([r.stdout, r.status], ['', 0]);
+  const ok = spawnSync(process.execPath, [SUBAGENT], { input: JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }), encoding: 'utf8' });
+  assert.equal(plain(JSON.parse(ok.stdout.trim()).content), 'l · haiku');
 });
 
 test('history: one schema-complete sample, throttled per session', () => {
