@@ -45,7 +45,7 @@ claude plugin uninstall superpowers claude-md-management sentry stripe code-simp
 - requesting/receiving-code-review → built-in `/code-review`
 - code-simplifier → built-in `/simplify`
 - writing-skills → built-in `skill-creator` (leave it installed — it IS the replacement)
-- sentry / stripe knowledge → `web-recon` + provider docs (distill a one-pager
+- sentry / stripe knowledge → `recon` (WebFetch) + provider docs (distill a one-pager
   into `workspace/docs/web/` only if a real gap shows)
 
 Not replaced — decide before touching, and keep by default:

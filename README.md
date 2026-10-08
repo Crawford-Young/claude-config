@@ -9,7 +9,7 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 | `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops`, `reflect`, `continuation`, `cleanup`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
 | `scripts/` | Workflow scripts (`worktree`, `checklist`, `qa`, `land`, `cleanup`, `reflect-gather`, `session-state`, `verify-frontmatter`, `harness-map` — all `.mjs`, tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
 | `hooks/` | Node hooks (guards, gates, logs — see `hooks/README.md` for the settings.json wiring) | `~/.claude/settings.json` `hooks` block |
-| `agents/` | Subagent defs (`implementer`, `reviewer`, `recon`, `web-recon`, `docs-agent`, `Explore`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
+| `agents/` | Subagent defs (`implementer`, `reviewer`, `recon`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
 | `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
 | `workspace/<domain>/CLAUDE.md` | Web / games / apps standards | `~/code/<domain>/CLAUDE.md` |
 | `workspace/docs/` | Reference docs (web stack docs, `TESTING-TRAPS`, games `DIAGNOSTICS`, brand) | `~/code/docs/...` (file-by-file symlinks) |

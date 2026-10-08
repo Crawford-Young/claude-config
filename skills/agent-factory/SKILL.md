@@ -40,13 +40,13 @@ Agent teams went on globally 2026-09-21 (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 - One team per session, lead fixed, no nested teams; in-process teammates can't be resumed by `/resume` or `/rewind` — don't plan a teammate dispatch across a session boundary.
 - Teammates are NOT worktree-isolated — partition work by file, never by ticket, to avoid concurrent-write collisions.
 - Teammate permission prompts surface in the lead's session — expect to answer them yourself, not the teammate.
-- A named def keeps its `tools:`, `model:` and body but drops `effort:` — teammates inherit the lead's effort, so a named `recon`/`Explore`/`web-recon` runs at the lead's level, not `low`; teammates also spawn foreground subagents only. Final text still reaches the lead, in the idle notification.
+- A named def keeps its `tools:`, `model:` and body but drops `effort:` — teammates inherit the lead's effort, so a named `recon` runs at the lead's level, not `low`; teammates also spawn foreground subagents only. Final text still reaches the lead, in the idle notification.
 - Name an agent (make it a teammate) only when workers must exchange results mid-task via shared task list or direct messaging — independent work stays an unnamed subagent, cheaper and simpler.
 - Fable clearance is hook-enforced on every lane — teammates and subagents (Agent tool, `agent-model-guard.mjs`), `/model` switches (`pre-model-switch.mjs`), and shell-launched sessions (`claude -p`/`--bg`/`agents --model fable`, `bash-guard.mjs`) — all spending the same single-use marker and writing the same dispatch log.
 
 ## Model routing
 
-See [`agents/ROUTING.md`](../../agents/ROUTING.md) for the evidence-distilled table. Short form:
+Roster: `implementer` (code via TDD, and docs/prose edits), `reviewer` (read-only review), `recon` (read-only local and web lookups). See [`agents/ROUTING.md`](../../agents/ROUTING.md) for the evidence-distilled table. Short form:
 
 - **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort is silently dropped there, so those dispatches forfeited the axis this table is built on. Lower the effort, not the model.
 - **sonnet** — scoped implementation with a clear brief; verbatim/mechanical batches; adjudication-style reviews with enumerated probes.
@@ -76,6 +76,7 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 - `CONFIDENCE:` high/medium/low, one clause why
 - `CONTRADICTIONS:` file:line pairs only, both sides actually read — else "none"
 - `ISSUE:` / `NEEDS_CONTEXT:` — existing conventions, unchanged
+- Evidence contract: every claim carries the command that proved it, or is marked `unverified`; ≤5 bullets unless the brief asks for more.
 
 - Never restate brief contents in dispatch prose — point at the brief.
 - No commit steps in implementer briefs — the orchestrator owns git.

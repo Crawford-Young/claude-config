@@ -364,9 +364,9 @@ test('descriptions each under the per-item cap can still blow the combined total
     const { status, out } = runSkillsCheck(root);
     assert.equal(status, 1);
     // 12 skill descriptions * 500 B + the fixed valid agent fixture's description, over the
-    // 5376 B total cap, with every individual description still under the 512 B per-item cap
+    // 4422 B total cap, with every individual description still under the 512 B per-item cap
     // — this must be the ONLY class of failure.
-    assert.match(out, /all descriptions combined: \d+ B, over the total cap of 5376 B/);
+    assert.match(out, /all descriptions combined: \d+ B, over the total cap of 4422 B/);
     assert.doesNotMatch(out, /over the per-description cap/);
   } finally {
     rmSync(root, { recursive: true, force: true });
