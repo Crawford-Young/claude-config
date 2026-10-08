@@ -390,7 +390,7 @@
    "file": "statusline/statusline.mjs",
    "summary": "statusLine entry point: session name, repo@branch, model, effort, cost, day spend / ctx, cache, 5h, 7d (#77).",
    "rules": [
-    "Render spawns no process (50 ms budget)",
+    "Render reads caches only; spend.mjs refreshes ~/.claude/spend detached, at most once a minute",
     "Fails open to the [statusline] sentinel"
    ]
   },
@@ -1199,6 +1199,18 @@
    "to": "store:active-repo",
    "kind": "reads",
    "label": "repo@branch"
+  },
+  {
+   "from": "script:statusline",
+   "to": "script:audit-lib",
+   "kind": "invokes",
+   "label": "spend.mjs prices today (priceUsage)"
+  },
+  {
+   "from": "script:statusline",
+   "to": "store:transcripts",
+   "kind": "reads",
+   "label": "day spend, detached worker"
   }
  ]
 }

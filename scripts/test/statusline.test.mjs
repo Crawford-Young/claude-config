@@ -2,11 +2,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fillBar, formatTokens, gitInfo, historySample, render } from '../../statusline/statusline.mjs';
+import { fillBar, formatTokens, gitInfo, historySample, localDay, render, spendLock } from '../../statusline/statusline.mjs';
+import { refresh } from '../../statusline/spend.mjs';
+import { priceUsage } from '../../scripts/audit-lib.mjs';
 import { record } from '../../hooks/active-repo.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../statusline/statusline.mjs', import.meta.url));
@@ -34,11 +36,13 @@ const at = (name, dir) => {
 const NOREG = {
   CLAUDE_SESSIONS_DIR: join(tmpdir(), 'statusline-no-registry'),
   CLAUDE_ACTIVE_REPO_DIR: join(tmpdir(), 'statusline-no-active-repo'),
+  CLAUDE_SPEND_DIR: join(tmpdir(), 'statusline-no-spend'),
+  CLAUDE_SPEND_NO_REFRESH: '1',
 };
 const SID = '4ebbd908-ff44-4647-a06b-2f807203d3b8';
 
 function runScript(input, env = {}) {
-  const r = spawnSync(process.execPath, [SCRIPT], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [SCRIPT], { input, env: { ...process.env, ...NOREG, ...env }, encoding: 'utf8' });
   return { out: r.stdout, code: r.status };
 }
 
@@ -239,6 +243,106 @@ test('session name: no registry entry falls back to the payload title as auto', 
   const s = json('no-rate-limits.json');
   delete s.session_name;
   assert.ok(!plain(render(s, NOREG)).startsWith('~'));
+});
+
+// ---- day spend ------------------------------------------------------------------
+
+const PRICES = JSON.parse(readFileSync(new URL('../../scripts/prices.json', import.meta.url), 'utf8'));
+const U = (out) => ({ input_tokens: 1000, output_tokens: out, cache_read_input_tokens: 50000, cache_creation_input_tokens: 2000 });
+const asst = (requestId, out, { model = 'claude-opus-5-5', ts = new Date().toISOString() } = {}) =>
+  JSON.stringify({ type: 'assistant', requestId, timestamp: ts, message: { model, usage: U(out) } }) + '\n';
+const cost = (out, model = 'claude-opus-5-5') => priceUsage(U(out), model, PRICES).usd;
+
+/** projects/<proj>/<sid>.jsonl plus one subagent transcript. */
+function projects(root) {
+  const proj = join(root, 'projects', 'C--code');
+  mkdirSync(join(proj, 'sess-a', 'subagents'), { recursive: true });
+  const yesterday = new Date(Date.now() - 36 * 3600 * 1000).toISOString();
+  writeFileSync(
+    join(proj, 'sess-a.jsonl'),
+    asst('r1', 10) + asst('r1', 50) + // streaming partials: one request, max output wins
+      asst('r0', 99, { ts: yesterday }) + // before local midnight
+      asst('r2', 5, { model: '<synthetic>' }) +
+      asst('r3', 5, { model: 'claude-unknown-9' }) + // unpriced, counted not folded in
+      '{"type":"user","message":{"content":"hi"}}\n',
+  );
+  writeFileSync(join(proj, 'sess-a', 'subagents', 'agent-x1.jsonl'), asst('r4', 20, { model: 'claude-sonnet-5-5' }));
+  writeFileSync(join(proj, 'sess-b.jsonl'), asst('r1', 50)); // resume replay of r1
+  return proj;
+}
+
+test('spend: today\'s requests priced once each, across files and subagents', async () => {
+  const root = tmp();
+  try {
+    const proj = projects(root);
+    const old = join(proj, 'old.jsonl');
+    writeFileSync(old, asst('r9', 10));
+    const t = (Date.now() - 48 * 3600 * 1000) / 1000;
+    utimesSync(old, t, t); // untouched today: never read
+    const r = await refresh({ root: join(root, 'projects'), dir: join(root, 'spend'), prices: PRICES });
+    const want = cost(50) + cost(20, 'claude-sonnet-5-5');
+    assert.ok(Math.abs(r.usd - want) < 1e-9, `${r.usd} vs ${want}`);
+    assert.equal(r.unpriced, 1);
+    assert.equal(r.files, 3);
+    const cache = JSON.parse(readFileSync(join(root, 'spend', `day-${localDay(new Date())}.json`), 'utf8'));
+    assert.ok(Math.abs(cache.usd - want) < 1e-9);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('spend: a refresh reads only appended bytes; a torn line waits for its newline', async () => {
+  const root = tmp();
+  try {
+    const proj = projects(root);
+    const opts = { root: join(root, 'projects'), dir: join(root, 'spend'), prices: PRICES };
+    const base = (await refresh(opts)).usd;
+    const line = asst('r5', 30);
+    appendFileSync(join(proj, 'sess-b.jsonl'), line.slice(0, 40)); // torn
+    assert.ok(Math.abs((await refresh(opts)).usd - base) < 1e-9);
+    appendFileSync(join(proj, 'sess-b.jsonl'), line.slice(40));
+    assert.ok(Math.abs((await refresh(opts)).usd - (base + cost(30))) < 1e-9);
+    // an earlier day's files are pruned
+    writeFileSync(join(root, 'spend', 'day-2000-01-01.json'), '{}');
+    await refresh(opts);
+    assert.ok(!existsSync(join(root, 'spend', 'day-2000-01-01.json')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('spend: row 1 shows day $X from the cache, nothing before the first refresh', () => {
+  const dir = tmp();
+  const env = { ...NOREG, CLAUDE_SPEND_DIR: dir };
+  try {
+    assert.ok(!plain(render(json('no-rate-limits.json'), env)).includes('day $'));
+    const write = (usd) => writeFileSync(join(dir, `day-${localDay(new Date())}.json`), JSON.stringify({ usd, ts: Date.now() }));
+    write(4.5);
+    assert.ok(plain(render(json('no-rate-limits.json'), env)).split('\n')[0].endsWith(' · $3.13 · day $4.50'));
+    write(48.4);
+    assert.ok(plain(render(json('no-rate-limits.json'), env)).split('\n')[0].endsWith(' · day $48'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('spend: a stale cache spawns the detached worker, which fills it and drops the lock', async () => {
+  const root = tmp();
+  try {
+    projects(root);
+    const spend = join(root, 'spend');
+    const env = { CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'projects') };
+    const t0 = performance.now();
+    assert.equal(runScript(fixture('no-rate-limits.json'), { ...env, CLAUDE_SPEND_NO_REFRESH: '' }).code, 0);
+    const day = join(spend, `day-${localDay(new Date())}.json`);
+    while (!existsSync(day) || existsSync(spendLock(spend))) {
+      assert.ok(performance.now() - t0 < 10000, 'worker never finished');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(Math.abs(JSON.parse(readFileSync(day, 'utf8')).usd - (cost(50) + cost(20, 'claude-sonnet-5-5'))) < 1e-9);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('history: one schema-complete sample, throttled per session', () => {
