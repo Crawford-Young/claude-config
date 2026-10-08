@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fillBar, formatTokens, gitInfo, historySample, localDay, render, spendLock } from '../../statusline/statusline.mjs';
-import { refresh } from '../../statusline/spend.mjs';
+import { readFrom, refresh } from '../../statusline/spend.mjs';
 import { render as renderSubagents } from '../../statusline/subagent.mjs';
 import { priceUsage } from '../../scripts/audit-lib.mjs';
 import { record } from '../../hooks/active-repo.mjs';
@@ -15,6 +15,7 @@ import { record } from '../../hooks/active-repo.mjs';
 const SCRIPT = fileURLToPath(new URL('../../statusline/statusline.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../../hooks/active-repo.mjs', import.meta.url));
 const SUBAGENT = fileURLToPath(new URL('../../statusline/subagent.mjs', import.meta.url));
+const SPEND = fileURLToPath(new URL('../../statusline/spend.mjs', import.meta.url));
 const FIX = fileURLToPath(new URL('../../statusline/tests/fixtures/', import.meta.url));
 const fixture = (name) => readFileSync(join(FIX, name), 'utf8');
 const json = (name) => JSON.parse(fixture(name));
@@ -40,6 +41,8 @@ const NOREG = {
   CLAUDE_ACTIVE_REPO_DIR: join(tmpdir(), 'statusline-no-active-repo'),
   CLAUDE_SPEND_DIR: join(tmpdir(), 'statusline-no-spend'),
   CLAUDE_SPEND_NO_REFRESH: '1',
+  CLAUDE_USAGE_HISTORY_DIR: join(tmpdir(), 'statusline-test-history'),
+  CLAUDE_USAGE_THROTTLE_DIR: join(tmpdir(), 'statusline-test-history'),
 };
 const SID = '4ebbd908-ff44-4647-a06b-2f807203d3b8';
 
@@ -135,8 +138,32 @@ test('gitInfo: a linked worktree names its owning repo', () => {
     const g = gitInfo(join(root, 'wt-dir'));
     assert.equal(g.branch, 'feat/x');
     assert.equal(g.worktree, 'wt-dir');
-    assert.equal(g.owner.toLowerCase(), dir.toLowerCase());
-    assert.deepEqual({ ...gitInfo(dir), top: '' }, { top: '', branch: 'main', worktree: '', owner: '' });
+    assert.equal(g.repo, 'owner-repo');
+    assert.deepEqual({ ...gitInfo(dir), top: '' }, { top: '', branch: 'main', worktree: '', repo: 'owner-repo' });
+    // a worktree of a bare repo names the repo, not the bare dir's parent
+    execFileSync('git', ['clone', '-q', '--bare', dir, join(root, 'foo.git')], { stdio: 'ignore' });
+    execFileSync('git', ['-C', join(root, 'foo.git'), 'worktree', 'add', '-q', '-b', 'feat/b', join(root, 'bare-wt')], { stdio: 'ignore' });
+    assert.equal(gitInfo(join(root, 'bare-wt')).repo, 'foo');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('gitInfo: submodule worktree names the submodule; reftable HEAD stub shows no branch', () => {
+  const root = tmp();
+  try {
+    // fs-shaped fixtures: a submodule's linked worktree, and a reftable repo's HEAD
+    const mod = join(root, 'super', '.git', 'modules', 'sub');
+    mkdirSync(join(mod, 'worktrees', 'subwt'), { recursive: true });
+    writeFileSync(join(mod, 'worktrees', 'subwt', 'HEAD'), 'ref: refs/heads/f\n');
+    writeFileSync(join(mod, 'worktrees', 'subwt', 'commondir'), '../..\n');
+    mkdirSync(join(root, 'subwt'));
+    writeFileSync(join(root, 'subwt', '.git'), `gitdir: ${join(mod, 'worktrees', 'subwt')}\n`);
+    assert.deepEqual({ ...gitInfo(join(root, 'subwt')), top: '' }, { top: '', branch: 'f', worktree: 'subwt', repo: 'sub' });
+    mkdirSync(join(root, 'rt', '.git'), { recursive: true });
+    writeFileSync(join(root, 'rt', '.git', 'HEAD'), 'ref: refs/heads/.invalid\n');
+    assert.equal(gitInfo(join(root, 'rt')).branch, '');
+    assert.ok(plain(render(at('full.json', join(root, 'rt')), NOREG)).startsWith('rt · '));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -210,7 +237,7 @@ test('session name: a chosen name leads row 1 in bold', () => {
   for (const nameSource of ['user', 'peer']) {
     const dir = registry({ name: 'claude-config-77', nameSource });
     try {
-      const out = render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: dir });
+      const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
       assert.ok(out.startsWith('\x1b[1mclaude-config-77\x1b[0m · '), JSON.stringify(out));
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -222,8 +249,8 @@ test('session name: an auto title is dim, ~-marked and cut to 24', () => {
   const dir = registry({ name: 'Agent orchestration app naming', nameSource: 'auto' });
   const bare = registry({ name: '872d7dd5' }); // spare bg session: no nameSource
   try {
-    assert.ok(render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: dir }).startsWith('\x1b[2m~Agent orchestration app…\x1b[0m · '));
-    assert.ok(plain(render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: bare })).startsWith('~872d7dd5 · '));
+    assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith('\x1b[2m~Agent orchestration app…\x1b[0m · '));
+    assert.ok(plain(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: bare })).startsWith('~872d7dd5 · '));
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(bare, { recursive: true, force: true });
@@ -231,9 +258,9 @@ test('session name: an auto title is dim, ~-marked and cut to 24', () => {
 });
 
 test('session name: control and bidi bytes are stripped', () => {
-  const dir = registry({ name: '\x1b[31mevil\x07\u009b2J‮name\n', nameSource: 'user' });
+  const dir = registry({ name: '\x1b[31mevil\x07\u009b2J\u202ename\n', nameSource: 'user' });
   try {
-    const row1 = render(json('no-rate-limits.json'), { CLAUDE_SESSIONS_DIR: dir }).split('\n')[0];
+    const row1 = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).split('\n')[0];
     assert.ok(row1.startsWith('\x1b[1m[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -344,6 +371,105 @@ test('spend: a stale cache spawns the detached worker, which fills it and drops 
     assert.ok(Math.abs(JSON.parse(readFileSync(day, 'utf8')).usd - (cost(50) + cost(20, 'claude-sonnet-5-5'))) < 1e-9);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('spend: a failed refresh keeps the lock, so renders back off instead of respawning', () => {
+  const root = tmp();
+  const spend = join(root, 'spend');
+  try {
+    mkdirSync(spend);
+    writeFileSync(spendLock(spend), String(Date.now()));
+    const r = spawnSync(process.execPath, [SPEND], { env: { ...process.env, CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'missing') } });
+    assert.equal(r.status, 0);
+    assert.ok(existsSync(spendLock(spend)), 'lock released on failure');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('spend: a corrupt day cache counts as stale and kicks a refresh', async () => {
+  const root = tmp();
+  try {
+    projects(root);
+    const spend = join(root, 'spend');
+    mkdirSync(spend);
+    const day = join(spend, `day-${localDay(new Date())}.json`);
+    writeFileSync(day, '{"usd":4');
+    const env = { ...NOREG, CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'projects'), CLAUDE_SPEND_NO_REFRESH: '' };
+    assert.ok(!plain(render(json('no-rate-limits.json'), env)).includes('day $'));
+    const t0 = performance.now();
+    while (existsSync(spendLock(spend)) || !readFileSync(day, 'utf8').endsWith('}')) {
+      assert.ok(performance.now() - t0 < 10000, 'corrupt cache never rewritten');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(plain(render(json('no-rate-limits.json'), { ...env, CLAUDE_SPEND_NO_REFRESH: '1' })).includes('day $'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('spend: chunked reads carry a line across chunk boundaries', () => {
+  const dir = tmp();
+  try {
+    const f = join(dir, 'x.jsonl');
+    const lines = ['{"a":"é😀"}', '{"b":2}', '{"c":"' + 'x'.repeat(40) + '"}'];
+    writeFileSync(f, lines.join('\n') + '\n{"torn"');
+    const got = [];
+    const size = readFileSync(f).length;
+    const offset = readFrom(f, 0, size, (l) => got.push(l), 7);
+    assert.deepEqual(got, lines);
+    assert.equal(offset, size - '{"torn"'.length);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('spend: a refresh keeps a later day\'s files (worker straddling midnight)', async () => {
+  const root = tmp();
+  try {
+    projects(root);
+    const spend = join(root, 'spend');
+    mkdirSync(spend);
+    writeFileSync(join(spend, 'day-2999-01-01.json'), '{}');
+    await refresh({ root: join(root, 'projects'), dir: spend, prices: PRICES });
+    assert.ok(existsSync(join(spend, 'day-2999-01-01.json')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('spend_limit renders when the payload carries it, dollars when present', () => {
+  const s = json('full.json');
+  s.rate_limits.spend_limit = { used_percentage: 42, resets_at: 1793548800, used_usd: 630.4, limit_usd: 1500 };
+  const p = plain(render(s, NOREG)).split('\n')[1];
+  assert.match(p, new RegExp(`spend ${bar(42)} 42% \\$630/\\$1500→[A-Z][a-z]{2} \\d{1,2}$`));
+  delete s.rate_limits.spend_limit.used_usd;
+  assert.match(plain(render(s, NOREG)).split('\n')[1], new RegExp(`spend ${bar(42)} 42%→`));
+});
+
+test('stdin with a BOM still renders; a session_id that is not a plain id writes no file', () => {
+  const BOM = String.fromCharCode(0xfeff);
+  assert.ok(runScript(BOM + fixture('no-rate-limits.json')).out.includes('ctx '));
+  const sub = spawnSync(process.execPath, [SUBAGENT], { input: BOM + JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }), encoding: 'utf8' });
+  assert.ok(sub.stdout.includes('"id":"z"'));
+  const hist = tmp();
+  try {
+    const s = { ...json('full.json'), session_id: '../../escaped' };
+    runScript(JSON.stringify(s), { CLAUDE_USAGE_HISTORY_DIR: join(hist, 'h'), CLAUDE_USAGE_THROTTLE_DIR: join(hist, 'a', 'b') });
+    assert.ok(!existsSync(join(hist, 'escaped.txt')) && !existsSync(join(hist, 'h')));
+  } finally {
+    rmSync(hist, { recursive: true, force: true });
+  }
+});
+
+test('auto-title cut never splits a surrogate pair', () => {
+  const dir = registry({ name: 'x'.repeat(22) + '😀😀😀', nameSource: 'auto' });
+  try {
+    const name = plain(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir })).split(' · ')[0];
+    assert.equal(name, '~' + 'x'.repeat(22) + '😀…');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

@@ -26,7 +26,7 @@ Pieces are joined with `·`, and an absent piece is dropped. A fully empty rende
   - A detached HEAD shows its short SHA. Outside git, the folder name shows.
 - **Model, effort, `fast`** (shown only when `fast_mode` is true), and **session cost**.
 - **`day $X`:** today's spend (local day) across every transcript, subagents included, at `scripts/prices.json` API rates. It has no target and no color (user decision, #77). It is absent until the first refresh.
-- **Row 2:** context (10-cell bar, token counts, %), prompt cache (`warm`/`cold`, hit ratio, `miss:<cause>`; absent until the first API response), and the five-hour and seven-day windows (bar, %, reset time).
+- **Row 2:** context (10-cell bar, token counts, %), prompt cache (`warm`/`cold`, hit ratio, `miss:<cause>`; absent until the first API response), the five-hour and seven-day windows (bar, %, reset time), and `spend_limit` when present (see Day spend).
   - Bars ceiling-round, so any nonzero usage shows at least one cell. Fill is green below 70%, yellow from 70%, red from 90%.
 
 ### Subagent rows
@@ -52,7 +52,8 @@ Each row shows label · model tier · effort · tokens · elapsed. Effort appear
 - Per-file byte offsets live in `~/.claude/spend/day-<date>.state.json`, so a refresh reads only appended bytes: cold 121 ms, warm 12 ms over 46 transcripts.
 - The render reads only `day-<date>.json`. When that file is over 60 s old, the render spawns the worker detached under `refresh.lock` (stale after 120 s), so a render never waits on it.
 - Earlier days' files are deleted on refresh.
-- **Credits:** no documented account-credits source exists. The documented `rate_limits.spend_limit` (Claude apps gateway only) has never appeared in this account's payloads, so it is not rendered.
+- **Locking:** a failed refresh keeps the lock, so its 120 s staleness window acts as the retry backoff. A worker exits after 60 s, whatever it was doing.
+- **Credits:** no documented account-credits source exists. The documented `rate_limits.spend_limit` (Claude apps gateway only) renders as a third window, `spend ▰▰▱ 42% $630/$1500→Nov 1`, whenever it appears. The dollar figures show only when present. It has never appeared in this account's payloads.
 
 ## History log
 
