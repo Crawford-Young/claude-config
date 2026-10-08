@@ -573,6 +573,16 @@ function currentBranch(repo) {
   return r.status === 0 ? (r.stdout || '').trim() : null;
 }
 
+/** True only for a repo with no commits at all: HEAD does not resolve AND no
+ *  local branch has a commit. Any other rev-parse failure stays "not unborn". */
+function isUnborn(repo) {
+  const opts = { encoding: 'utf8', timeout: 4000 };
+  const head = spawnSync('git', ['-C', repo, 'rev-parse', '--verify', '-q', 'HEAD'], opts);
+  if (head.status === null || head.status === 0) return false;
+  const refs = spawnSync('git', ['-C', repo, 'for-each-ref', '--count=1', 'refs/heads'], opts);
+  return refs.status === 0 && (refs.stdout || '').trim() === '';
+}
+
 export function branchRules(raw, cwd) {
   for (const g of gitCalls(scrub(raw), cwd)) {
     const reason = callRule(g);
@@ -612,6 +622,7 @@ function callRule({ sub, args, repo }) {
   if (isCommit && (branch === 'main' || branch === 'master')) {
     if (name === 'docs') return null;
     if (/[/\\]\.worktrees[/\\]/.test(resolve(repo))) return null;
+    if (isUnborn(repo)) return null; // root commit: no origin/main yet, so no worktree to cut
     return `"${repo}" is on ${branch} — never commit to the default branch. Cut a branch in a worktree (scripts/worktree.mjs new) first.`;
   }
 

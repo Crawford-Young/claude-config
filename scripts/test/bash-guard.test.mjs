@@ -325,14 +325,18 @@ test('file restores are blocked on the claude-config main checkout, not elsewher
 
 // --- rule 5: commit-on-main judges the repo each commit really runs in -----
 
+// A repo on main with one commit: commit-on-main only blocks once HEAD exists.
+function bornRepo(dir) {
+  mkdirSync(dir);
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']);
+}
+
 test('commit-on-main follows the cd to the segment holding the commit', () => {
   const h = tmpHome();
   const app = join(h, 'app');
   const docs = join(h, 'docs');
-  for (const r of [app, docs]) {
-    mkdirSync(r);
-    execFileSync('git', ['init', '-q', '-b', 'main', r]);
-  }
+  for (const r of [app, docs]) bornRepo(r);
   // Starts in a code repo, commits in docs — the docs lane is allowed.
   assert.equal(guardRun(`cd ${app}; git status; cd ${docs} && git commit -m x`, h), 0);
   // Starts in docs, commits in a code repo on main — blocked.
@@ -340,11 +344,27 @@ test('commit-on-main follows the cd to the segment holding the commit', () => {
   assert.equal(guardRun(`cd ${app} && git commit -m x`, h), 2);
 });
 
-test('commit words in quoted or heredoc text never trip commit-on-main', () => {
+test('commit-on-main allows the root commit in an unborn repo, blocks once HEAD exists', () => {
   const h = tmpHome();
   const app = join(h, 'app');
   mkdirSync(app);
   execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  // No commits yet: the root commit (.gitignore first) may land on main.
+  assert.equal(guardRun(`cd ${app} && git commit -m root`, h), 0);
+  execFileSync('git', ['-C', app, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']);
+  // HEAD exists now: blocked again.
+  assert.equal(guardRun(`cd ${app} && git commit -m next`, h), 2);
+  // Same for an unborn master.
+  const master = join(h, 'm');
+  mkdirSync(master);
+  execFileSync('git', ['init', '-q', '-b', 'master', master]);
+  assert.equal(guardRun(`cd ${master} && git commit -m root`, h), 0);
+});
+
+test('commit words in quoted or heredoc text never trip commit-on-main', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  bornRepo(app);
   assert.equal(guardRun(`cd ${app} && echo "then git commit -m x" >> notes.md`, h), 0);
   assert.equal(guardRun(`cd ${app} && grep -rn "git commit" .`, h), 0);
   assert.equal(guardRun(`cd ${app} && cat > n.md <<'EOF'\ngit commit -m x\nEOF`, h), 0);
