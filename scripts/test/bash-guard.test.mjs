@@ -15,6 +15,7 @@ import {
   billedLaunch,
   gatedVerb,
   gatedVerbs,
+  isApproving,
   isDeletePush,
   pushGateReason,
   browserCommand,
@@ -649,6 +650,37 @@ test('#88: "delete" wording is still subject to the deny words', () => {
   const { h, stateFile } = pushGateTmp();
   const t = transcriptWith(h, { 'Delete the merged branches?': "No, don't delete them yet" });
   assert.ok(pushGateReason('git push origin --delete feat/a', '/repo', t, stateFile));
+});
+
+// --- #96: a negator refuses only the act it negates -----------------------------
+
+test('#96 incident: "…push and pr but … dont know if…" approves the push', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, {
+    'Ready?': 'looks good commit push and pr but we need to ... dont know if you could cli it ...',
+  });
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+});
+
+test('#96: negated acts, leading "no" and hold words still refuse', () => {
+  for (const v of [
+    "don't push yet",
+    'dont push',
+    'don’t merge this',
+    'do not open a pull request',
+    'never push to main',
+    'No — found a problem',
+    'no, push later',
+    'push it, but wait for CI',
+    'Review first',
+    'Hold the PR',
+    "Don't push yet, just commit",
+  ]) {
+    assert.equal(isApproving({ q: v }), false, v);
+  }
+  for (const v of ['push, no rush', 'Push + open PR, not sure about the title', 'yes go ahead and push it']) {
+    assert.equal(isApproving({ q: v }), true, v);
+  }
 });
 
 test('#92: the other rules read substitution bodies too', () => {

@@ -56,11 +56,11 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   BILLED_MODEL,
-  DENY_RE,
   block,
   browserGateReason,
   claudeDir,
   consumeClearance,
+  denies,
   latestAnswer,
   logBilled,
   readState,
@@ -427,7 +427,8 @@ const DELETE_RE = /\bdelet(?:e|es|ed|ing)\b/i;
  *  caller already picked the single most recent record. A remote branch delete
  *  also accepts "delete" wording ("Delete all 3"). */
 export function isApproving(answers, { deletes = false } = {}) {
-  return Object.values(answers).some((v) => (APPROVE_RE.test(v) || (deletes && DELETE_RE.test(v))) && !DENY_RE.test(v));
+  const act = deletes ? new RegExp(`${APPROVE_RE.source}|${DELETE_RE.source}`, 'i') : APPROVE_RE;
+  return Object.values(answers).some((v) => act.test(v) && !denies(v, act));
 }
 
 export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');

@@ -132,7 +132,19 @@ export function latestAnswer(transcriptPath) {
   return null;
 }
 
-export const DENY_RE = /\b(hold|review first|don'?t|do not|not yet|wait|no)\b/i;
+const HOLD_RE = /\b(hold|review first|not yet|wait)\b/i;
+const NEGATOR_RE = /^(?:no|not|never|don['’]?t)$/i;
+
+/** Does answer text refuse the act `actRe` names? A hold word refuses anywhere.
+ *  A negator (no/not/never/don't) refuses only the act it negates — one named
+ *  within the next four words — or the whole answer when it opens with "no",
+ *  so "push and pr but dont know if…" approves (#96) while "don't push" and
+ *  "No — found a problem" refuse. */
+export function denies(text, actRe) {
+  if (HOLD_RE.test(text) || /^\W*no\b/i.test(text)) return true;
+  const w = text.match(/[\w'’]+/g) || [];
+  return w.some((x, i) => NEGATOR_RE.test(x) && actRe.test(w.slice(i + 1, i + 5).join(' ')));
+}
 
 /** A small JSON state file; absent or corrupt reads as empty. */
 export function readState(file) {
@@ -158,7 +170,7 @@ const BROWSER_RE = /\b(browser|chrome|launch|playwright|headed)\b/i;
 
 /** Does some answer value read as approving a visible browser? */
 export function isBrowserApproving(answers) {
-  return Object.values(answers).some((v) => BROWSER_RE.test(v) && !DENY_RE.test(v));
+  return Object.values(answers).some((v) => BROWSER_RE.test(v) && !denies(v, BROWSER_RE));
 }
 
 export const browserGateStateFile = () => process.env.CLAUDE_BROWSER_GATE_STATE || join(claudeDir, 'browser-gate-sessions.json');
