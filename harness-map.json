@@ -384,6 +384,18 @@
    ]
   },
   {
+   "id": "hook:inline-edit-nudge",
+   "kind": "hook",
+   "label": "inline-edit-nudge",
+   "file": "hooks/inline-edit-nudge.mjs",
+   "summary": "PostToolUse(Edit|Write|NotebookEdit) — one reminder when the main session has edited 6 distinct files since its last Agent dispatch (#99).",
+   "rules": [
+    "Main session only: a hook input with agent_id is a subagent call and is skipped",
+    "Once per run; a new Agent dispatch re-arms it",
+    "Never blocks"
+   ]
+  },
+  {
    "id": "script:statusline",
    "kind": "script",
    "label": "statusline",
@@ -1215,6 +1227,18 @@
    "to": "hook:active-repo",
    "kind": "loads",
    "label": "PostToolUse"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:inline-edit-nudge",
+   "kind": "loads",
+   "label": "PostToolUse"
+  },
+  {
+   "from": "hook:inline-edit-nudge",
+   "to": "store:transcripts",
+   "kind": "reads",
+   "label": "backward, to the last dispatch"
   },
   {
    "from": "store:settings-json",
