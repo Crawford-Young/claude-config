@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { spawnHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -41,7 +42,7 @@ function fixture() {
 test('gathers every window of the unit through the audit filter, with repo activity since its first window', () => {
   const f = fixture();
   try {
-    const r = spawnSync(process.execPath, [cli, 'repo-7', '--root', f.root, '--repo', f.repo], { encoding: 'utf8' });
+    const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /## Per session name[\s\S]*\| repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
     assert.match(r.stdout, /## Audit — 2 window\(s\) named repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
@@ -61,7 +62,7 @@ test('a renamed window with no priced requests reports, not crashes', () => {
   const f = fixture();
   try {
     writeFileSync(join(f.proj, 'w4.jsonl'), lines({ type: 'custom-title', sessionId: 'w4', customTitle: 'repo-9' }));
-    const r = spawnSync(process.execPath, [cli, 'repo-9', '--root', f.root, '--repo', f.repo], { encoding: 'utf8' });
+    const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, /TypeError/);
     assert.match(r.stdout, /no priced requests in windows named repo-9/);
@@ -79,7 +80,7 @@ test('auditFailure: a failed spawn (null stderr) still yields text and a non-zer
 test('an unknown session name fails with the audit filter\'s message', () => {
   const f = fixture();
   try {
-    const r = spawnSync(process.execPath, [cli, 'repo-404', '--root', f.root], { encoding: 'utf8' });
+    const r = spawnHarness(cli, ['repo-404', '--root', f.root]);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /no session named repo-404/);
   } finally {

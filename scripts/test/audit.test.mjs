@@ -1,7 +1,7 @@
 // scripts/test/audit.test.mjs — the audit.mjs CLI's --session filter
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -30,7 +30,7 @@ function fixture() {
 test('--session keeps only the windows renamed to that name, subagents included', () => {
   const root = fixture();
   try {
-    const r = spawnSync(process.execPath, [cli, '--root', root, '--session', 'repo-7', '--json'], { encoding: 'utf8' });
+    const r = spawnHarness(cli, ['--root', root, '--session', 'repo-7', '--json']);
     assert.equal(r.status, 0, r.stderr);
     const j = JSON.parse(r.stdout);
     assert.equal(j.files, 3);
@@ -52,7 +52,7 @@ test('--session --json carries the time dimension for the named windows; --idle-
       message: { id: `m-e${m}`, model: 'claude-opus-5', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, content: [] } });
     // prompts at :00 and :20 (a 19-min think), answers a minute later
     writeFileSync(join(proj, 'e.jsonl'), lines(ask(0, 'human'), say(1), ask(20, 'human'), say(21), { type: 'custom-title', sessionId: 'e', customTitle: 'repo-8' }));
-    const run = (...extra) => JSON.parse(spawnSync(process.execPath, [cli, '--root', root, '--session', 'repo-8', '--json', ...extra], { encoding: 'utf8' }).stdout).time;
+    const run = (...extra) => JSON.parse(spawnHarness(cli, ['--root', root, '--session', 'repo-8', '--json', ...extra]).stdout).time;
     const dflt = run();
     assert.equal(dflt.idleGapMin, 10);
     assert.deepEqual([dflt.totals.wallMs, dflt.totals.activeMs, dflt.totals.modelMs], [21 * 60e3, 2 * 60e3, 2 * 60e3]);
@@ -60,7 +60,7 @@ test('--session --json carries the time dimension for the named windows; --idle-
     for (const k of ['days', 'sessions', 'agents', 'agentRuns', 'tools', 'commands', 'retry']) assert.ok(k in dflt, k);
     const lenient = run('--idle-gap', '30');
     assert.deepEqual([lenient.idleGapMin, lenient.totals.activeMs, lenient.totals.userMs], [30, 21 * 60e3, 19 * 60e3]);
-    const bad = spawnSync(process.execPath, [cli, '--root', root, '--idle-gap', '0'], { encoding: 'utf8' });
+    const bad = spawnHarness(cli, ['--root', root, '--idle-gap', '0']);
     assert.notEqual(bad.status, 0);
     assert.match(bad.stderr, /--idle-gap wants minutes > 0/);
   } finally {
@@ -71,7 +71,7 @@ test('--session --json carries the time dimension for the named windows; --idle-
 test('--session with no matching window exits 1 and says so', () => {
   const root = fixture();
   try {
-    const r = spawnSync(process.execPath, [cli, '--root', root, '--session', 'repo-404'], { encoding: 'utf8' });
+    const r = spawnHarness(cli, ['--root', root, '--session', 'repo-404']);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /no session named repo-404/);
   } finally {

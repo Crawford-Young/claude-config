@@ -1,7 +1,7 @@
 // node --test scripts/test/inline-edit-nudge.test.mjs — #99's main-session nudge.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -22,9 +22,8 @@ function setup(lines) {
 }
 
 function fire(ctx, extra = {}, file = 'cur.ts') {
-  const env = { ...process.env, HOME: ctx.h, USERPROFILE: ctx.h, CLAUDE_INLINE_NUDGE_STATE: join(ctx.h, '.claude', 'n.json') };
   const payload = { session_id: 's1', transcript_path: ctx.transcript, tool_input: { file_path: file }, ...extra };
-  const stdout = execFileSync(process.execPath, [hook], { input: JSON.stringify(payload), encoding: 'utf8', env });
+  const stdout = execHarness(hook, [], { input: JSON.stringify(payload), home: ctx.h });
   return stdout ? JSON.parse(stdout) : null;
 }
 

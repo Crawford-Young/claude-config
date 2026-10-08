@@ -2,7 +2,8 @@
 // against a temp repo standing in for the main checkout.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { execHarness, spawnHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -34,8 +35,8 @@ test('start lands only the named path in an ephemeral worktree', () => {
   appendFileSync(join(cfg, 'mine.md'), 'my change\n');
   appendFileSync(join(cfg, 'theirs.md'), 'foreign in-flight edit\n');
 
-  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg };
-  const out = execFileSync(process.execPath, [script, 'start', 'demo', '-m', 'chore: mine only', '--', 'mine.md'], {
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg };
+  const out = execHarness(script, ['start', 'demo', '-m', 'chore: mine only', '--', 'mine.md'], {
     encoding: 'utf8',
     env,
   });
@@ -48,7 +49,7 @@ test('start lands only the named path in an ephemeral worktree', () => {
   assert.doesNotMatch(show, /theirs\.md/);
 
   // finish removes the worktree
-  execFileSync(process.execPath, [script, 'finish', 'demo'], { encoding: 'utf8', env });
+  execHarness(script, ['finish', 'demo'], { encoding: 'utf8', env });
   assert.ok(!existsSync(wt));
 });
 
@@ -71,7 +72,7 @@ test('start lands a file whose last line is blank (patch ends in a lone-space co
   assert.ok(rawDiff.endsWith(' \n'), 'fixture must produce a patch ending in a lone-space context line');
   assert.notEqual(rawDiff, `${rawDiff.trim()}\n`, 'and trimming it must actually change it');
 
-  execFileSync(process.execPath, [script, 'start', 'blankline', '-m', 'chore: blank-line tail', '--', 'doc.md'], {
+  execHarness(script, ['start', 'blankline', '-m', 'chore: blank-line tail', '--', 'doc.md'], {
     encoding: 'utf8',
     env,
   });
@@ -110,10 +111,10 @@ function initOrigin(root) {
 test('finish deletes a rebase-merged branch locally and on the remote', () => {
   const root = mkdtempSync(join(tmpdir(), 'land-'));
   const { origin, cfg } = initOrigin(root);
-  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
   appendFileSync(join(cfg, 'a.md'), 'my change\n');
-  execFileSync(process.execPath, [script, 'start', 'demo', '-m', 'chore: my change', '--', 'a.md'], {
+  execHarness(script, ['start', 'demo', '-m', 'chore: my change', '--', 'a.md'], {
     encoding: 'utf8',
     env,
   });
@@ -130,7 +131,7 @@ test('finish deletes a rebase-merged branch locally and on the remote', () => {
   sh(up, 'git', ['cherry-pick', 'FETCH_HEAD']);
   sh(up, 'git', ['push', 'origin', 'HEAD:main']);
 
-  const out = execFileSync(process.execPath, [script, 'finish', 'demo'], { encoding: 'utf8', env });
+  const out = execHarness(script, ['finish', 'demo'], { encoding: 'utf8', env });
   assert.ok(!existsSync(wt), 'worktree removed');
   assert.match(out, /deleted local branch chore\/demo/);
   assert.match(out, /deleted remote branch origin\/chore\/demo/);
@@ -147,17 +148,17 @@ test('finish deletes a rebase-merged branch locally and on the remote', () => {
 test('finish keeps an unmerged branch, locally and on the remote, and says so', () => {
   const root = mkdtempSync(join(tmpdir(), 'land-'));
   const { cfg } = initOrigin(root);
-  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
   appendFileSync(join(cfg, 'a.md'), 'unmerged change\n');
-  execFileSync(process.execPath, [script, 'start', 'unmerged', '-m', 'chore: unmerged', '--', 'a.md'], {
+  execHarness(script, ['start', 'unmerged', '-m', 'chore: unmerged', '--', 'a.md'], {
     encoding: 'utf8',
     env,
   });
   const wt = join(root, '.worktrees', 'claude-config-unmerged');
   sh(wt, 'git', ['push', '-u', 'origin', 'chore/unmerged']);
 
-  const out = execFileSync(process.execPath, [script, 'finish', 'unmerged'], { encoding: 'utf8', env });
+  const out = execHarness(script, ['finish', 'unmerged'], { encoding: 'utf8', env });
   assert.ok(!existsSync(wt), 'worktree still removed regardless of branch merge state');
   assert.match(out, /kept local branch chore\/unmerged/);
   assert.match(out, /kept remote branch origin\/chore\/unmerged/);
@@ -177,10 +178,10 @@ test('finish removes a leftover worktree directory that got unregistered without
   // finish must clean that up rather than refuse.
   const root = mkdtempSync(join(tmpdir(), 'land-'));
   const { cfg } = initOrigin(root);
-  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
   appendFileSync(join(cfg, 'a.md'), 'leftover dir change\n');
-  execFileSync(process.execPath, [script, 'start', 'leftover', '-m', 'chore: leftover', '--', 'a.md'], {
+  execHarness(script, ['start', 'leftover', '-m', 'chore: leftover', '--', 'a.md'], {
     encoding: 'utf8',
     env,
   });
@@ -194,7 +195,7 @@ test('finish removes a leftover worktree directory that got unregistered without
   assert.doesNotMatch(sh(cfg, 'git', ['worktree', 'list']), /claude-config-leftover/);
   assert.ok(existsSync(wt), 'directory survives the unregister, per the bug being reproduced');
 
-  const out = execFileSync(process.execPath, [script, 'finish', 'leftover'], { encoding: 'utf8', env });
+  const out = execHarness(script, ['finish', 'leftover'], { encoding: 'utf8', env });
   assert.ok(!existsSync(wt), 'leftover directory removed rather than refused');
   assert.match(out, /leftover|removed/i);
 });
@@ -207,10 +208,10 @@ test('finish carries on to the branch steps when a locked worktree dir survives 
   // Windows, cwd does not lock and this exercises the normal remove.
   const root = mkdtempSync(join(tmpdir(), 'land-'));
   const { cfg } = initOrigin(root);
-  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
   appendFileSync(join(cfg, 'a.md'), 'locked dir change\n');
-  execFileSync(process.execPath, [script, 'start', 'locked', '-m', 'chore: locked', '--', 'a.md'], {
+  execHarness(script, ['start', 'locked', '-m', 'chore: locked', '--', 'a.md'], {
     encoding: 'utf8',
     env,
   });
@@ -220,7 +221,7 @@ test('finish carries on to the branch steps when a locked worktree dir survives 
   await new Promise((r) => holder.once('spawn', r));
   let res;
   try {
-    res = spawnSync(process.execPath, [script, 'finish', 'locked'], { encoding: 'utf8', env });
+    res = spawnHarness(script, ['finish', 'locked'], { encoding: 'utf8', env });
   } finally {
     holder.kill();
     await new Promise((r) => holder.once('exit', r));
@@ -258,9 +259,9 @@ test('start refuses when the main checkout is off main', () => {
   sh(cfg, 'git', ['push', '-u', 'origin', 'main']);
   sh(cfg, 'git', ['checkout', '-b', 'stray']);
 
-  const env = { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg };
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg };
   assert.throws(() =>
-    execFileSync(process.execPath, [script, 'start', 'x', '-m', 'm', '--', 'a.md'], { encoding: 'utf8', env }),
+    execHarness(script, ['start', 'x', '-m', 'm', '--', 'a.md'], { encoding: 'utf8', env }),
   );
 });
 
@@ -304,7 +305,7 @@ function scratchRepo(seedFiles = {}) {
   sh(root, 'git', ['clone', '--branch', 'main', '-c', 'core.autocrlf=true', origin, cfg]);
   sh(cfg, 'git', ['config', 'user.email', 't@t']);
   sh(cfg, 'git', ['config', 'user.name', 't']);
-  return { root, origin, cfg, env: { ...process.env, CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg } };
+  return { root, origin, cfg, env: { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg } };
 }
 
 /** Land commits on origin/main from a throwaway clone — stands in for a merged PR. */
@@ -325,7 +326,7 @@ function pushUpstream(root, origin, files, msg) {
 }
 
 const runSync = (env, files) =>
-  execFileSync(process.execPath, [script, 'sync', '--', ...files], { encoding: 'utf8', env });
+  execHarness(script, ['sync', '--', ...files], { encoding: 'utf8', env });
 
 const headsMatch = (cfg) =>
   sh(cfg, 'git', ['rev-parse', 'HEAD']).trim() === sh(cfg, 'git', ['rev-parse', 'origin/main']).trim();

@@ -1,7 +1,7 @@
 // node --test scripts/test/session-start.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -26,10 +26,9 @@ const failingGh = ghStub('process.exit(1);').cmd;
 
 /** Run the hook with `gh` stubbed (never the network); default stub fails. */
 function runHook(payload, gh = failingGh) {
-  return execFileSync(process.execPath, [hook], {
+  return execHarness(hook, [], {
     input: JSON.stringify(payload),
-    encoding: 'utf8',
-    env: { ...process.env, SESSION_START_GH: gh },
+    env: { SESSION_START_GH: gh },
   }).replace(/\r\n/g, '\n');
 }
 

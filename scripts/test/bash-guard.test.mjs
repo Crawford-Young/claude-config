@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -255,9 +256,8 @@ function tmpHome() {
 }
 
 function guardRun(command, h, extraEnv = {}) {
-  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code'), ...extraEnv };
   try {
-    execFileSync(process.execPath, [hookPath], { input: JSON.stringify({ tool_input: { command }, cwd: h }), env, encoding: 'utf8' });
+    execHarness(hookPath, [], { input: JSON.stringify({ tool_input: { command }, cwd: h }), home: h, env: extraEnv });
     return 0;
   } catch (e) {
     return e.status;
@@ -267,12 +267,11 @@ function guardRun(command, h, extraEnv = {}) {
 /** Same as guardRun, but through the real hook entrypoint with a transcript_path
  *  in the payload (rule 8 reads it from there, not from an argument). */
 function guardRunT(command, h, transcriptPath, extraEnv = {}) {
-  const env = { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code'), ...extraEnv };
   try {
-    execFileSync(process.execPath, [hookPath], {
+    execHarness(hookPath, [], {
       input: JSON.stringify({ tool_input: { command }, cwd: h, transcript_path: transcriptPath }),
-      env,
-      encoding: 'utf8',
+      home: h,
+      env: extraEnv,
     });
     return 0;
   } catch (e) {
@@ -558,10 +557,10 @@ test('end-to-end: a headed playwright run needs a browser answer, then the sessi
   const stateEnv = { CLAUDE_BROWSER_GATE_STATE: join(h, 'browser.json') };
   const run = (command, transcriptPath, session_id) => {
     try {
-      execFileSync(process.execPath, [hookPath], {
+      execHarness(hookPath, [], {
         input: JSON.stringify({ tool_input: { command }, cwd: h, transcript_path: transcriptPath, session_id }),
-        env: { ...process.env, HOME: h, USERPROFILE: h, CLAUDE_WORKSPACE_ROOT: join(h, 'code'), ...stateEnv },
-        encoding: 'utf8',
+        home: h,
+        env: stateEnv,
       });
       return 0;
     } catch (e) {

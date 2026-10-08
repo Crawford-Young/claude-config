@@ -2,7 +2,7 @@
 // through the real hook process (payload on stdin, exit code out).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -25,10 +25,9 @@ function transcript(dir, answers, uuid = 'u1') {
 
 function gate(tool_name, { transcriptPath, session_id, state }) {
   try {
-    execFileSync(process.execPath, [hookPath], {
+    execHarness(hookPath, [], {
       input: JSON.stringify({ tool_name, tool_input: {}, transcript_path: transcriptPath, session_id }),
-      env: { ...process.env, CLAUDE_BROWSER_GATE_STATE: state },
-      encoding: 'utf8',
+      env: { CLAUDE_BROWSER_GATE_STATE: state },
     });
     return 0;
   } catch (e) {

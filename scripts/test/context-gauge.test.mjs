@@ -1,7 +1,7 @@
 // node --test scripts/test/context-gauge.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -270,11 +270,7 @@ function runHook(prompt, transcript, { window = 1_000_000, env = {} } = {}) {
     transcript_path: t,
   });
   try {
-    const stdout = execFileSync(process.execPath, [HOOK], {
-      input: payload,
-      encoding: 'utf8',
-      env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_USAGE_HISTORY_DIR: '', ...env },
-    });
+    const stdout = execHarness(HOOK, [], { input: payload, home, env });
     return { code: 0, stdout, stderr: '' };
   } catch (e) {
     return { code: e.status, stdout: e.stdout || '', stderr: e.stderr || '' };
@@ -330,6 +326,6 @@ test('with no window source the hook stays silent rather than guessing a band', 
 
 test('a broken transcript path fails open rather than wedging the session', () => {
   const payload = JSON.stringify({ prompt: 'hi', session_id: 'x', transcript_path: '/no/such/file' });
-  const out = execFileSync(process.execPath, [HOOK], { input: payload, encoding: 'utf8' });
+  const out = execHarness(HOOK, [], { input: payload });
   assert.equal(out.trim(), '');
 });
