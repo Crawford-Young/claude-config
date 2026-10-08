@@ -62,7 +62,6 @@ fixed false verdict; change them only with a test:
 | `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then open `in-progress` issues across owner Crawford-Young (one `gh search issues` call, at most 10, 3 s cap, silent on failure; `SESSION_START_GH` stubs it in tests); after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
 | `precompact-archive.mjs` | PreCompact | Copies the transcript to `~/.claude/compact-archives/` before every compaction. |
 | `subagentstop-log.mjs` | SubagentStop | One line per stop to `~/.claude/subagent-stops.log` (self-trims: 512KB → last 200 lines). |
-| `otel-receiver-spawn.mjs` | SessionStart | Lazy-spawns `telemetry/otel-receiver.mjs` on :4318 when nothing is listening. |
 | `notification-toast.ps1` | Notification | Windows WinRT toast (WezTerm has no native notifications). Stays PowerShell — Windows-only integration. |
 
 ## settings.json wiring
@@ -86,10 +85,7 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
     { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/context-gauge.mjs"] }
   ] } ],
   "Stop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs"] }] } ],
-  "SessionStart": [ { "hooks": [
-    { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/session-start.mjs"] },
-    { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/otel-receiver-spawn.mjs"] }
-  ] } ],
+  "SessionStart": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/session-start.mjs"] }] } ],
   "PreCompact": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/precompact-archive.mjs"] }] } ],
   "SubagentStop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/subagentstop-log.mjs"] }] } ],
   "Notification": [ { "hooks": [{ "type": "command", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/young/code/claude-config/hooks/notification-toast.ps1"] }] } ],
