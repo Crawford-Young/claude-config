@@ -35,7 +35,7 @@ When dispatched to diagnose repeated task failure (systematic-debugging framing)
 
 ## Output
 
-Your final text goes straight to your spawner — raw structured findings, no preamble. Format: answer first, then evidence as `file:line` or URL citations, then searches run and URLs fetched. Evidence contract: every claim carries the command that proved it, or is marked `unverified`; ≤5 bullets unless the brief asks for more. Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS) — NOT CHECKED is what catches an excerpt-only read before it's presented as a full one.
+Your final text goes straight to your spawner — raw structured findings, no preamble. Format: answer first, then evidence as `file:line` or URL citations, then searches run and URLs fetched. Evidence contract: every claim carries the command that proved it, or is marked `unverified`; an absence claim about a documented surface (CLI flags, JSON fields, API params) cites the fetched docs page, because observed output shows only the current state; ≤5 bullets unless the brief asks for more. Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS) — NOT CHECKED is what catches an excerpt-only read before it's presented as a full one.
 
 ## Reporting issues
 
