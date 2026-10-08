@@ -46,7 +46,7 @@ These held across every dispatch, so they live here instead of being restated in
 
 ## Output
 
-Quality gates first: run the gate list from your domain's `CLAUDE.md` Definition of Done — never a remembered one. Universal minimum: tests green at the repo's coverage threshold, the language's type/lint check clean, no dead code or debug logging left behind.
+Quality gates first: run the gate list from your domain's `CLAUDE.md` Definition of Done — never a remembered one. Universal minimum: tests green at the repo's coverage threshold, the language's type/lint check clean, no dead code or debug logging left behind. Run gates unpiped — redirect to a file and read it — because bash-guard blocks a pipe after a gate.
 
 Final text = raw report to your spawner: what changed (file list), test results (paste the summary line, not the full output), deviations from the dispatch, and any ISSUE/NEEDS_CONTEXT lines. Evidence contract: every claim carries the command that proved it, or is marked `unverified`; ≤5 bullets unless the brief asks for more. Wrap it in the "Report shape" from `~/code/claude-config/skills/agent-factory/SKILL.md` (RESULT/NOT CHECKED/CONFIDENCE/CONTRADICTIONS).
 
