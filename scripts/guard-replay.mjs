@@ -4,7 +4,7 @@
 // Replays unique Bash/PowerShell commands through staticCheck, gatedVerbs and browserCommand,
 // and unique AskUserQuestion answers through isApproving (plain and deletes) and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
-// Transcripts: <CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/*.jsonl, newest --files (default 30) or last --days.
+// Transcripts: <CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/*.jsonl and projects/*/<session>/subagents/*.jsonl, last --days (default 7) or newest --files.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -12,14 +12,23 @@ import { pathToFileURL } from 'node:url';
 
 const MAX_SHOWN = 120;
 
+function num(v, o) {
+  const n = Number(v);
+  if (v === undefined || v === '' || !Number.isFinite(n) || n < 0) o.bad = true;
+  return n;
+}
+
 function parseArgs(argv) {
-  const o = { files: 30, days: null, root: null, paths: [] };
+  const o = { files: null, days: null, root: null, paths: [] };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--files') o.files = Number(argv[++i]);
-    else if (argv[i] === '--days') o.days = Number(argv[++i]);
+    if (argv[i] === '--files') o.files = num(argv[++i], o);
+    else if (argv[i] === '--days') o.days = num(argv[++i], o);
     else if (argv[i] === '--root') o.root = argv[++i];
     else o.paths.push(argv[i]);
   }
+  // Default: the last 7 days, main + subagent transcripts. A newest-N count skews
+  // toward many small subagent files (30 files held 930 commands; 7 days held 2118).
+  if (o.files == null && o.days == null) o.days = 7;
   return o;
 }
 
@@ -31,11 +40,20 @@ function projectsRoot(override) {
 
 function transcripts(root, { files, days }) {
   const all = [];
+  const add = (p) => {
+    try {
+      all.push({ p, mtime: statSync(p).mtimeMs });
+    } catch {
+      // vanished mid-scan
+    }
+  };
   for (const d of safeDir(root)) {
     for (const f of safeDir(join(root, d))) {
-      if (!f.endsWith('.jsonl')) continue;
-      const p = join(root, d, f);
-      all.push({ p, mtime: statSync(p).mtimeMs });
+      if (f.endsWith('.jsonl')) add(join(root, d, f));
+      else {
+        const sub = join(root, d, f, 'subagents');
+        for (const g of safeDir(sub)) if (g.endsWith('.jsonl')) add(join(sub, g));
+      }
     }
   }
   all.sort((a, b) => b.mtime - a.mtime);
@@ -102,7 +120,7 @@ const oneLine = (s, n = MAX_SHOWN) => {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.paths.length !== 2) {
+  if (args.paths.length !== 2 || args.bad) {
     console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--files N] [--days D] [--root <projects-dir>]');
     return;
   }

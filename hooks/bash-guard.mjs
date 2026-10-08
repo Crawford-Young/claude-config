@@ -574,12 +574,12 @@ function currentBranch(repo) {
 }
 
 /** True only for a repo with no commits at all: HEAD does not resolve AND no
- *  local branch has a commit. Any other rev-parse failure stays "not unborn". */
+ *  local branch or remote-tracking ref exists. Any other rev-parse failure stays "not unborn". */
 function isUnborn(repo) {
   const opts = { encoding: 'utf8', timeout: 4000 };
   const head = spawnSync('git', ['-C', repo, 'rev-parse', '--verify', '-q', 'HEAD'], opts);
   if (head.status === null || head.status === 0) return false;
-  const refs = spawnSync('git', ['-C', repo, 'for-each-ref', '--count=1', 'refs/heads'], opts);
+  const refs = spawnSync('git', ['-C', repo, 'for-each-ref', '--count=1', 'refs/heads', 'refs/remotes'], opts);
   return refs.status === 0 && (refs.stdout || '').trim() === '';
 }
 

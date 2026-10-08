@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,4 +71,32 @@ test('--files limits scanning to the newest N transcripts', () => {
   const cfg = config({ 'a.jsonl': [bash('one')], 'b.jsonl': [bash('two')] });
   const co = checkout('return null;');
   assert.match(run(cfg, co, co, '--files', '1').trim(), /1 commands, 0 answers from 1 files/);
+});
+
+test('subagent transcripts (projects/*/<session>/subagents/*.jsonl) are scanned too', () => {
+  const cfg = config({ 's.jsonl': [bash('one')] });
+  const sub = join(cfg, 'projects', 'p', 'sess', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, 'agent-a.jsonl'), JSON.stringify(bash('two')) + '\n');
+  const co = checkout('return null;');
+  assert.match(run(cfg, co, co).trim(), /2 commands, 0 answers from 2 files/);
+});
+
+test('--files selects the newest N across top-level and subagent transcripts', () => {
+  const cfg = config({ 'old.jsonl': [bash('old1'), bash('old2')] });
+  const sub = join(cfg, 'projects', 'p', 'sess', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  const f = join(sub, 'agent-a.jsonl');
+  writeFileSync(f, JSON.stringify(bash('newer')) + '\n');
+  utimesSync(join(cfg, 'projects', 'p', 'old.jsonl'), new Date(Date.now() - 5000), new Date(Date.now() - 5000));
+  const co = checkout('return null;');
+  assert.match(run(cfg, co, co, '--files', '1').trim(), /1 commands, 0 answers from 1 files/);
+});
+
+test('--files and --days with a missing or non-numeric value print usage', () => {
+  const cfg = config({ 's.jsonl': [bash('one')] });
+  const co = checkout('return null;');
+  for (const args of [['--files'], ['--files', 'abc'], ['--days'], ['--days', 'x']]) {
+    assert.match(run(cfg, co, co, ...args).trim(), /^usage:/, args.join(' '));
+  }
 });

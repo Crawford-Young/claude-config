@@ -126,3 +126,10 @@ test('parallel sessions each get their own reminder once, with no ping-pong', ()
   assert.equal(runHook({ transcript_path: a }, home).code, 0, 'session A stays quiet after B fired');
   assert.equal(runHook({ transcript_path: b }, home).code, 0, 'session B stays quiet after A ran again');
 });
+
+test('lastReflectAt: heredoc bodies and commit messages naming the path are not reads; mixed case is', () => {
+  const tx = (command) => JSON.stringify({ type: 'assistant', timestamp: ago(4), message: { content: [{ type: 'tool_use', id: 'u', name: 'Bash', input: { command } }] } });
+  assert.equal(lastReflectAt(tx("cat > n.md <<'EOF'\nsee skills/reflect/SKILL.md\nEOF")), null, 'heredoc body');
+  assert.equal(lastReflectAt(tx('git commit -m "edit skills/reflect/SKILL.md"')), null, 'commit message');
+  assert.ok(lastReflectAt(tx('cat skills/Reflect/skill.md')), 'mixed case');
+});
