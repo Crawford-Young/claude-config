@@ -116,16 +116,46 @@ test('a stale (>30min) or corrupt marker blocks', () => {
   assert.match(readFileSync(ledger(h2), 'utf8'), /BLOCK/, 'corrupt marker still writes a ledger line');
 });
 
-test('model omitted on a def-less type blocks; frontmatter-model type passes', () => {
+/** Runs the guard and parses its stdout decision (null when it printed none). */
+function runGuardOut(payload, h) {
+  const out = execFileSync(process.execPath, [guard], { input: JSON.stringify(payload), encoding: 'utf8', env: envFor(h) });
+  return out.trim() ? JSON.parse(out) : null;
+}
+
+test('model omitted on a def-less type, non-billed session: fills the routing default instead of blocking (#74)', () => {
   const h = home();
-  const r = runHook(guard, { tool_input: { subagent_type: 'general-purpose' } }, h);
-  assert.equal(r.code, 2, 'no model + no frontmatter default = block');
+  settingsModel(h, 'opus');
+  const input = { subagent_type: 'general-purpose', description: 'd', prompt: 'p', run_in_background: true };
+  const o = runGuardOut({ session_id: 's1', tool_input: input }, h)?.hookSpecificOutput;
+  assert.equal(o?.hookEventName, 'PreToolUse');
+  assert.equal(o.permissionDecision, 'allow', 'updatedInput is only documented with allow');
+  assert.deepEqual(o.updatedInput, { ...input, model: 'sonnet' }, 'updatedInput replaces the whole input, so every field is echoed');
+  assert.match(o.additionalContext, /sonnet/, 'the model learns a default was filled');
+  assert.match(readFileSync(ledger(h), 'utf8'), /FILL type=general-purpose model=sonnet/);
+});
+
+test('model omitted on a def-less type still blocks when the session model is billed or unknown', () => {
+  // If Claude Code ever ignored updatedInput, the child would inherit the
+  // session model — so the fill is only safe where inheriting is not billed.
+  const h = home();
+  liveModel(h, { s1: { model: 'claude-fable-5-1', from: null, at: new Date().toISOString() } });
+  const r = runHook(guard, { session_id: 's1', tool_input: { subagent_type: 'general-purpose' } }, h);
+  assert.equal(r.code, 2, 'a billed session must not rely on the fill');
   assert.match(r.stderr, /ROUTING\.md/);
 
+  const h2 = home();
+  const r2 = runHook(guard, { session_id: 's1', tool_input: { subagent_type: 'claude-code-guide' } }, h2);
+  assert.equal(r2.code, 2, 'no record and no settings model = unknown, and unknown must not rely on the fill');
+});
+
+test('a frontmatter-model type or an explicit model passes untouched', () => {
+  const h = home();
+  settingsModel(h, 'opus');
   const agents = join(h, '.claude', 'agents');
   mkdirSync(agents, { recursive: true });
   writeFileSync(join(agents, 'recon.md'), '---\nname: recon\nmodel: haiku\n---\n');
-  assert.equal(runHook(guard, { tool_input: { subagent_type: 'recon' } }, h).code, 0);
+  assert.equal(runGuardOut({ tool_input: { subagent_type: 'recon' } }, h), null, 'no decision printed');
+  assert.equal(runGuardOut({ tool_input: { subagent_type: 'general-purpose', model: 'opus' } }, h), null);
 });
 
 test('non-fable explicit model passes with no ledger line', () => {
