@@ -1,83 +1,68 @@
 #!/usr/bin/env node
-// reflect-gather.mjs — collect a wave's reflect inputs in one pass.
+// reflect-gather.mjs — a unit's reflect evidence in one pass (#67).
 //
-//   node reflect-gather.mjs <project-docs-dir> [--repo <path>]... [--since <date|rev>]
+//   node reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>]
 //
-// Prints a single markdown payload: the wave checklist (active, or the newest
-// in done/), the open issue log, and per-repo git log + diffstat since the
-// wave started. The reflect skill reads this one payload instead of paying
-// for a directory crawl every time.
+// Prints one markdown payload: the transcript audit of every window renamed
+// <session-name> (audit.mjs --session), then per-repo git log + diffstat since
+// the unit's first window.
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { renderMarkdown } from './audit-lib.mjs';
 import { die, git, log, parseArgs } from './lib.mjs';
 
-const args = parseArgs(process.argv.slice(2));
-const projectDir = resolve(args._[0] || '');
-if (!projectDir || !existsSync(projectDir)) die('usage: reflect-gather.mjs <project-docs-dir> [--repo <path>]... [--since <date|rev>]');
-
-const repos = [];
-for (let i = 0; i < process.argv.length; i++) {
-  if (process.argv[i] === '--repo' && process.argv[i + 1]) repos.push(resolve(process.argv[i + 1]));
+/** What to print and exit with when the audit spawn failed — a spawn that never
+ *  started has null stderr and status, so fall back to its error. */
+export function auditFailure(r) {
+  return { text: r.stderr || `${r.error?.message || 'audit.mjs failed'}\n`, code: r.status || 1 };
 }
 
-// Checklist: newest file in active/, else newest in done/.
-const checklist = newestIn(join(projectDir, 'checklists', 'active')) || newestIn(join(projectDir, 'checklists', 'done'));
-log('## Checklist');
-if (checklist) {
-  log(`<!-- ${checklist} -->`);
-  log(readFileSync(checklist, 'utf8').trim());
-} else {
-  log('(none found)');
-}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
 
-// Issue logs still open (not in done/).
-const issuesDir = join(projectDir, 'issues');
-log('\n## Open issue logs');
-let anyIssues = false;
-if (existsSync(issuesDir)) {
-  for (const f of readdirSync(issuesDir)) {
-    const p = join(issuesDir, f);
-    if (f.endsWith('.md') && statSync(p).isFile()) {
-      anyIssues = true;
-      log(`<!-- ${p} -->`);
-      log(readFileSync(p, 'utf8').trim());
-      log('');
-    }
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const name = args._[0];
+  if (!name) die('usage: reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>]');
+
+  const repos = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--repo' && process.argv[i + 1]) repos.push(resolve(process.argv[i + 1]));
   }
-}
-if (!anyIssues) log('(none)');
 
-// Wave start: --since, else the checklist file's git add date, else 7 days.
-const since = args.since || checklistBirth(checklist) || '7 days ago';
-log(`\n## Repo activity since ${since}`);
-for (const repo of repos) {
-  const shortlog = git(repo, ['log', '--oneline', '--no-decorate', `--since=${since}`]);
-  const stat = git(repo, ['diff', '--stat', `HEAD@{${since}}`, 'HEAD']);
-  log(`\n### ${repo} (branch ${git(repo, ['branch', '--show-current']).out || 'detached'})`);
-  log(shortlog.out || '(no commits in window)');
-  if (stat.code === 0 && stat.out) {
-    const lines = stat.out.split('\n');
-    log(lines.slice(-1)[0].trim());
+  const auditArgs = [join(dirname(fileURLToPath(import.meta.url)), 'audit.mjs'), '--session', name, '--json'];
+  if (args.root) auditArgs.push('--root', args.root);
+  const audit = spawnSync(process.execPath, auditArgs, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (audit.status !== 0) {
+    const { text, code } = auditFailure(audit);
+    process.stderr.write(text);
+    process.exit(code);
   }
-  const dirty = git(repo, ['status', '--porcelain']).out;
-  if (dirty) log(`uncommitted: ${dirty.split('\n').filter(Boolean).length} file(s)`);
-}
-if (repos.length === 0) log('(no --repo given)');
+  const report = JSON.parse(audit.stdout);
+  const unit = report.names.find((g) => g.name === name);
+  if (unit) {
+    log(`## Audit — ${unit.windows} window(s) named ${name}, ${report.files} transcripts\n`);
+    log(renderMarkdown(report));
+  } else log(`## Audit — no priced requests in windows named ${name}, ${report.files} transcripts`);
 
-function newestIn(dir) {
-  if (!existsSync(dir)) return null;
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => join(dir, f))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  return files[0] || null;
-}
-
-function checklistBirth(p) {
-  if (!p) return null;
-  const repoRoot = git(p, ['rev-parse', '--show-toplevel']);
-  if (repoRoot.code !== 0) return null;
-  const r = git(repoRoot.out, ['log', '--diff-filter=A', '--format=%aI', '-1', '--follow', '--', p]);
-  return r.code === 0 && r.out ? r.out : null;
+  // A bare day (audit days are UTC) gets an explicit UTC midnight: git would
+  // otherwise fill in the current time of day and drop that day's earlier commits.
+  const day = args.since || unit?.first;
+  if (!day) {
+    log('\n(no --since given and no priced window to date the repo activity from)');
+    return;
+  }
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(day) ? `${day}T00:00:00Z` : day;
+  log(`\n## Repo activity since ${day}`);
+  for (const repo of repos) {
+    const shortlog = git(repo, ['log', '--oneline', '--no-decorate', `--since=${since}`]);
+    const stat = git(repo, ['diff', '--stat', `HEAD@{${since}}`, 'HEAD']);
+    log(`\n### ${repo} (branch ${git(repo, ['branch', '--show-current']).out || 'detached'})`);
+    log(shortlog.out || '(no commits in window)');
+    if (stat.code === 0 && stat.out) log(stat.out.split('\n').slice(-1)[0].trim());
+    const dirty = git(repo, ['status', '--porcelain']).out;
+    if (dirty) log(`uncommitted: ${dirty.split('\n').filter(Boolean).length} file(s)`);
+  }
+  if (repos.length === 0) log('(no --repo given)');
 }
