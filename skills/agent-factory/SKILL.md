@@ -49,7 +49,7 @@ Agent teams went on globally 2026-09-21 (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
 Roster: `implementer` (code via TDD, and docs/prose edits), `reviewer` (read-only review), `recon` (read-only local and web lookups). See [`agents/ROUTING.md`](../../agents/ROUTING.md) for the evidence-distilled table. Short form:
 
-- **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort is silently dropped there, so those dispatches forfeited the axis this table is built on. Lower the effort, not the model.
+- **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort was silently dropped on Haiku 4.5; Haiku 5.5 now documents effort support, so #112 re-tests this. Lower the effort, not the model.
 - **sonnet** — scoped implementation with a clear brief; verbatim/mechanical batches; adjudication-style reviews with enumerated probes.
 - **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations).
 - **fable** — usage-billed; per-run user clearance required (the Agent hook enforces it — user replies `FABLE OK`). Reserve for diagnostics after an opus failure or exceptional-stakes review.
