@@ -14,8 +14,10 @@ import {
   stripHeredocs,
   billedLaunch,
   gatedVerb,
+  gatedVerbs,
   pushGateReason,
   browserCommand,
+  substitutions,
 } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
@@ -554,4 +556,75 @@ test('end-to-end: a headed playwright run needs a browser answer, then the sessi
   assert.equal(run('npx playwright codegen', push, 's1'), 0);
   // A different session is not granted.
   assert.equal(run('npx playwright codegen', push, 's2'), 2);
+});
+
+// --- #92: gated verbs inside command substitution -------------------------------
+
+test('substitutions finds backtick, $(…) and <(…) bodies; single quotes stay literal', () => {
+  assert.deepEqual(substitutions('echo $(gh pr merge 5)'), ['gh pr merge 5']);
+  assert.deepEqual(substitutions('node -e "x = `gh pr merge 5`"'), ['gh pr merge 5']);
+  assert.deepEqual(substitutions('echo "$(a "b)" c)"'), ['a "b)" c']);
+  assert.deepEqual(substitutions('diff <(git show a) >(tee x)'), ['git show a', 'tee x']);
+  assert.deepEqual(substitutions("echo '$(gh pr merge 5)' '`x`'"), []);
+  assert.deepEqual(substitutions('node -e "x = \\`gh pr merge 5\\`"'), []); // escaped backticks are literal
+  assert.deepEqual(substitutions('echo $(gh pr merge 5'), ['gh pr merge 5']); // unclosed: rest of line
+  assert.deepEqual(substitutions("don't $(x)", true), ['x']); // heredoc body: quotes are text
+});
+
+test('clauses keeps a substitution body whole', () => {
+  assert.deepEqual(clauses('echo $(git status; gh pr view 5) && ls'), ['echo $(git status; gh pr view 5)', 'ls']);
+  assert.deepEqual(clauses('echo `a; b`; c'), ['echo `a; b`', 'c']);
+});
+
+test('#92 repro: gated verbs in backticks or $(…) are gated, quoted or not', () => {
+  for (const cmd of [
+    'node -e "x = `gh pr merge 5 --rebase`"',
+    'echo $(gh pr merge 5 --rebase)',
+    'echo "$(gh pr merge 5 --rebase)"',
+    'x=$(gh pr merge 5 --rebase)',
+    'x="$(gh pr merge 5 --rebase)"',
+    'echo $(echo $(gh pr merge 5 --rebase))',
+    'echo $(git status; gh pr merge 5 --rebase)',
+    'diff <(gh pr merge 5 --rebase) x',
+    'git commit -m "$(gh pr merge 5 --rebase)"',
+    "bash -c 'echo $(gh pr merge 5 --rebase)'",
+    'cat > f <<EOF\nline\n$(gh pr merge 5 --rebase)\nEOF',
+    "cat > f <<EOF\ndon't `gh pr merge 5 --rebase`\nEOF",
+  ]) {
+    assert.deepEqual(gatedVerbs(cmd, '/repo'), ['gh pr merge'], cmd);
+  }
+  assert.deepEqual(gatedVerbs('echo `git push`', '/repo'), ['git push']);
+});
+
+test('#92 negative controls: literal substitution text runs nothing', () => {
+  for (const cmd of [
+    "echo '$(gh pr merge 5 --rebase)'",
+    "node -e 'x = `gh pr merge 5 --rebase`'",
+    'node -e "x = \\`gh pr merge 5 --rebase\\`"',
+    "git commit -m 'fix $(gh pr merge 5)'",
+    "cat > f <<'EOF'\n$(gh pr merge 5 --rebase)\nEOF",
+    "git commit -m \"$(cat <<'EOF'\ndocs: run `gh pr merge` after review\nEOF\n)\"",
+  ]) {
+    assert.deepEqual(gatedVerbs(cmd, '/repo'), [], cmd);
+  }
+});
+
+test('#92: a shell command string is not double-counted', () => {
+  assert.deepEqual(gatedVerbs('bash -c "echo $(gh pr merge 5)"', '/repo'), ['gh pr merge']);
+  assert.deepEqual(gatedVerbs('eval "$(gh pr merge 5)"', '/repo'), ['gh pr merge']);
+});
+
+test('#92 end-to-end through the real hook: substitution forms block without approval', () => {
+  const h = tmpHome();
+  const missing = join(h, 'missing.jsonl');
+  assert.equal(guardRunT('gh pr merge 5 --rebase', h, missing), 2);
+  assert.equal(guardRunT('node -e "x = `gh pr merge 5 --rebase`"', h, missing), 2);
+  assert.equal(guardRunT('echo $(gh pr merge 5 --rebase)', h, missing), 2);
+  assert.equal(guardRunT("echo '$(gh pr merge 5 --rebase)'", h, missing), 0);
+});
+
+test('#92: the other rules read substitution bodies too', () => {
+  assert.ok(staticCheck('echo $(git add -A)'));
+  assert.ok(staticCheck('x=`git commit -am wip`'));
+  assert.equal(staticCheck("echo '$(git add -A)'"), null);
 });

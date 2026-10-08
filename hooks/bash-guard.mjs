@@ -38,7 +38,10 @@
 // through every cd/Set-Location/pushd clause before THAT call (`git -C` on
 // top) — so `cd a; git status; cd docs && git commit` commits in docs, and
 // `echo "git commit" >> notes` is an echo. A quoted command handed to a
-// shell (`bash -c`, `pwsh -Command`, `eval`) is parsed as the command it is.
+// shell (`bash -c`, `pwsh -Command`, `eval`) is parsed as the command it is,
+// and so is every command substitution the shell would run — `…`, $(…), <(…),
+// bare or inside double quotes or an unquoted-delimiter heredoc (#92);
+// single-quoted text stays literal.
 
 // Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
 // errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
@@ -67,17 +70,95 @@ const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(),
 
 // ---- pure rules (exported for tests) ----------------------------------------
 
+/** Index of the backtick closing a `…` body that starts at i, or -1. */
+function closeTick(s, i) {
+  for (; i < s.length; i++) {
+    if (s[i] === '\\') i++;
+    else if (s[i] === '`') return i;
+  }
+  return -1;
+}
+
+/** Index of the `)` closing a $(…)/<(…)/>(…) body that starts at i, or -1.
+ *  Quoted text and nested backticks inside the body can't close it. */
+function closeParen(s, i) {
+  let depth = 1;
+  let quote = null;
+  for (; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"') i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '\\') i++;
+    else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '`') {
+      i = closeTick(s, i + 1);
+      if (i === -1) return -1;
+    } else if (ch === '(') depth++;
+    else if (ch === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** The substitution opening at i — `…`, $(…), and outside double quotes
+ *  <(…)/>(…) — as { body, end } (end = index just past it), or null. One that
+ *  never closes runs to the end of the string: a guard reads too much, never
+ *  too little. */
+function substitutionAt(s, i, inDouble) {
+  let open = 0;
+  let close = -1;
+  if (s[i] === '`') [open, close] = [1, closeTick(s, i + 1)];
+  else if (s[i + 1] === '(' && (s[i] === '$' || (!inDouble && (s[i] === '<' || s[i] === '>')))) {
+    [open, close] = [2, closeParen(s, i + 2)];
+  } else return null;
+  return close === -1 ? { body: s.slice(i + open), end: s.length } : { body: s.slice(i + open, close), end: close + 1 };
+}
+
+/** The bodies of the command substitutions a shell would run in `s`: `…`,
+ *  $(…), <(…) and >(…), unquoted or inside double quotes. Single-quoted text
+ *  is literal (`'$(x)'` runs nothing), as is an escaped backtick. `\$(` still
+ *  counts: PowerShell, which this hook also guards, runs `"C:\x\$(…)"`. With
+ *  `quotesLiteral` (an unquoted heredoc body) quote characters are plain text.
+ *  Nested substitutions stay in their body for the caller's recursion. */
+export function substitutions(s, quotesLiteral = false) {
+  const out = [];
+  let inDouble = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '\\' && (s[i + 1] === '`' || (inDouble && s[i + 1] === '"'))) i++;
+    else if (!quotesLiteral && !inDouble && ch === "'") {
+      const e = s.indexOf("'", i + 1);
+      if (e === -1) break;
+      i = e;
+    } else if (!quotesLiteral && ch === '"') inDouble = !inDouble;
+    else {
+      const sub = substitutionAt(s, i, inDouble);
+      if (!sub) continue;
+      out.push(sub.body);
+      i = sub.end - 1;
+    }
+  }
+  return out;
+}
+
 /** Split a compound command into its individual clauses on unquoted
  *  separators, so a flag in one clause can't be attributed to a command in
- *  another and quoted text stays with the command that owns it. Unbalanced
- *  quotes fall back to the plain split — never swallow the rest of the line. */
+ *  another and quoted text stays with the command that owns it. A substitution
+ *  body stays whole (`echo $(a; b)` is one clause). Unbalanced quotes fall back
+ *  to the plain split — never swallow the rest of the line. */
 export function clauses(cmd) {
   const out = [];
   let cur = '';
   let quote = null;
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i];
-    if (quote) {
+    const sub = quote === "'" ? null : substitutionAt(cmd, i, quote === '"');
+    if (ch === '\\' && cmd[i + 1] === '`') {
+      cur += ch + cmd[++i];
+    } else if (sub) {
+      cur += cmd.slice(i, sub.end);
+      i = sub.end - 1;
+    } else if (quote) {
       cur += ch;
       if (ch === '\\' && quote === '"' && i + 1 < cmd.length) cur += cmd[++i];
       else if (ch === quote) quote = null;
@@ -112,18 +193,28 @@ function words(clause) {
   return out;
 }
 
+/** Re-wrap substitution bodies as `$(…)` text, so a scrubbed payload keeps
+ *  what the shell would still run in it. */
+const keepSubs = (bodies) => bodies.map((b) => `$(${b})`).join(' ');
+
 /** Replace quoted `-m`/`--message` payloads with a placeholder. Commit-message
- *  prose is not a command: `git commit -m "handle .env loading"` stages nothing. */
+ *  prose is not a command: `git commit -m "handle .env loading"` stages nothing.
+ *  A double-quoted payload's substitutions do run, so they are kept. */
 export function stripMessages(cmd) {
   return cmd
-    .replace(/(-m|--message)(=|\s+)"(?:[^"\\]|\\.)*"/g, '$1 "MSG"')
+    .replace(/(-m|--message)(=|\s+)("(?:[^"\\]|\\.)*")/g, (_, flag, __, q) => `${flag} "MSG${keepSubs(substitutions(q))}"`)
     .replace(/(-m|--message)(=|\s+)'(?:[^'\\]|\\.)*'/g, "$1 'MSG'");
 }
 
 /** Drop heredoc bodies: text written into a file is not a command, and a body
  *  that mentions `git commit` must not trip the branch rules. The opening line
  *  stays, so the command that consumes the heredoc is still checked. A body fed
- *  to an interpreter (`bash <<EOF`, `node - <<EOF`) can run commands and is kept. */
+ *  to a shell (`bash <<EOF`) runs as commands and is kept. A body fed to another
+ *  interpreter (`node - <<'EOF'`) is that language's code, not shell: its JS
+ *  template literals or markdown backticks are not substitutions. An unquoted
+ *  delimiter (`<<EOF`, not `<<'EOF'`) makes the shell expand the body's
+ *  substitutions before any consumer sees it, so those are kept as a line of
+ *  their own. */
 export function stripHeredocs(cmd) {
   const lines = cmd.split('\n');
   const out = [];
@@ -135,9 +226,11 @@ export function stripHeredocs(cmd) {
     // The heredoc's consumer is the command word of the clause holding the `<<`
     // (so `cat > run.sh <<EOF` is cat, not sh).
     const consumer = (clauses(line.slice(0, m.index)).pop() || '').split(/\s+/)[0].split(/[/\\]/).pop();
-    if (/^(bash|sh|zsh|dash|pwsh|powershell|cmd|node|python3?|deno|bun)(\.exe)?$/i.test(consumer)) continue;
+    if (/^(bash|sh|zsh|dash|pwsh|powershell|cmd)(\.exe)?$/i.test(consumer)) continue;
     const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
     if (end === -1) continue; // unterminated — leave it for the rules to read
+    const subs = m[2] ? [] : substitutions(lines.slice(i + 1, end).join('\n'), true);
+    if (subs.length) out.push(keepSubs(subs));
     out.push(lines[end]);
     i = end;
   }
@@ -230,7 +323,8 @@ const toDir = (dir, p) => {
 /** Every command a line runs, as { cmd, words, dir }: `cmd` is the command
  *  word's basename, `dir` the payload cwd walked through the cd clauses before
  *  it. cd clauses are consumed; a quoted command handed to a shell is expanded
- *  in place. Quoted text elsewhere is an argument, never a command. */
+ *  in place, and so is every substitution body (`…`, $(…), <(…)), which runs
+ *  before the clause holding it. Other quoted text is an argument, never a command. */
 function commands(raw, cwd) {
   const out = [];
   let dir = cwd || null;
@@ -238,8 +332,13 @@ function commands(raw, cwd) {
     const w = words(c);
     while (w.length && WRAPPER.test(w[0])) w.shift();
     if (w.length && /^[({]/.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
+    const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
+    const shellAt = !SHELL_C.test(cmd) ? -1 : /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
+    const shellCmd = shellAt !== -1 && w[shellAt + 1] !== undefined ? w.slice(shellAt + 1).join(' ') : null;
+    // A shell's own command string is parsed whole below; reading its
+    // substitutions here too would count each gated verb twice.
+    if (shellCmd === null) for (const body of substitutions(c)) out.push(...commands(body, dir));
     if (!w.length) continue;
-    const cmd = w[0].split(/[/\\]/).pop();
     if (CD.test(cmd)) {
       const arg = w.slice(1).find((a) => !/^-/.test(a) || a === '-');
       if (arg === undefined) dir = /^cd$/i.test(cmd) ? homedir() : dir;
@@ -247,8 +346,7 @@ function commands(raw, cwd) {
       continue;
     }
     if (SHELL_C.test(cmd)) {
-      const at = /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
-      if (at !== -1 && w[at + 1] !== undefined) out.push(...commands(w.slice(at + 1).join(' '), dir));
+      if (shellCmd !== null) out.push(...commands(shellCmd, dir));
       continue;
     }
     out.push({ cmd, words: w, dir });
