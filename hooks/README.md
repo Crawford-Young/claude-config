@@ -23,6 +23,7 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 | `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before auto-compact can silently compact a wave boundary. Bands are fractions of the **live window** — note at 0.40, louder at 0.70 (once each), **blocks at 0.94**; 400k / 700k / 940k on today's 1M window, and silent when no source can name the window (thresholds section below). Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Tune with `CLAUDE_CTX_WINDOW`, or per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
 | `stop-reflect-gate.mjs` | Stop | After a successful `gh pr merge` (Bash or PowerShell, parsed by `bash-guard.mjs`, so `gh -R x pr merge` counts; `--auto` only queues and doesn't) in the session's transcript, blocks ONCE per merge with "prompt the user to run reflect". Handled tool_use ids are a set (newest 200) in `~/.claude/stop-reflect-gate.json`, so parallel sessions don't re-fire each other; retries and later turn ends pass. A merge within 60 min of a reflect `SKILL.md` read (or reflect Skill call) is the reflect's own landing PR, so it is marked handled without blocking (#76). Reflect is prompted, never forced. |
 | `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then open `in-progress` issues across owner Crawford-Young (one `gh search issues` call, at most 10, 3 s cap, silent on failure; `SESSION_START_GH` stubs it in tests); after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
+| `active-repo.mjs` | PostToolUse (`Write\|Edit\|MultiEdit\|NotebookEdit`) | Records the git checkout of the edited file as `{ top, ts }` in `~/.claude/active-repo/<session_id>.json` (`CLAUDE_ACTIVE_REPO_DIR` overrides), so the statusline names the repo actually being edited, worktrees included, rather than the launch dir. Toplevel only — the statusline reads branch and worktree from `.git` at render. Prunes records older than a week. Never blocks (#77). |
 | `notification-toast.ps1` | Notification | Windows WinRT toast (WezTerm has no native notifications). Stays PowerShell — Windows-only integration. |
 
 ## bash-guard details
@@ -98,6 +99,7 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
     { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs"] },
     { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/context-gauge.mjs"] }
   ] } ],
+  "PostToolUse": [ { "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/active-repo.mjs"] }] } ],
   "Stop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs"] }] } ],
   "SessionStart": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/session-start.mjs"] }] } ],
   "Notification": [ { "hooks": [{ "type": "command", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/young/code/claude-config/hooks/notification-toast.ps1"] }] } ],
@@ -107,7 +109,8 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
 ```
 
 PreModelSwitch and PostModelSwitch take no matcher. The
-`statusLine` command has no exec form; it always runs through `bash -c`.
+`statusLine` and `subagentStatusLine` commands have no exec form; they always
+run through `bash -c` (wiring in `statusline/README.md`).
 
 Keep the settings `deny` rules for `git add -A` forms — the two layers
 (deny rule + guard regex) deliberately overlap; change both or neither.
@@ -131,8 +134,8 @@ window *is* 250k is gone.
 The window is resolved in this order: `CLAUDE_CTX_WINDOW`, then a
 `contextGaugeWindow` key in `settings.json`, then the newest
 `context_window_size` in `~/.claude/usage-history/<YYYY-MM>.jsonl` — the CLI's
-own statusline figure, written there by `statusline/usage-statusline.ps1` on
-every render (live value `1000000`; honours `CLAUDE_USAGE_HISTORY_DIR` the same
+own statusline figure, written there by `statusline/statusline.mjs` at
+most once a minute per session (live value `1000000`; honours `CLAUDE_USAGE_HISTORY_DIR` the same
 way the statusline does). If none of the three answers, the gauge stays **silent**
 rather than invent a window. It never hardcodes one; that hardcoded 250k is what
 made every band and every message wrong once the window became 1M.
