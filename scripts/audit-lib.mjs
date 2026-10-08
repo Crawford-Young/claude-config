@@ -201,6 +201,11 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     // session-start index names — that Read is the invocation
     const skillFile = b.name === 'Read' && /[\\/]skills[\\/]([^\\/]+)[\\/]SKILL\.md$/i.exec(b.input?.file_path || '');
     if (skillFile) bump(skillReads, skillFile[1]);
+    // …or by cat/sed/Get-Content in a shell, which reads it just the same
+    if (SHELLS.has(b.name)) {
+      const named = new Set([...String(b.input?.command || '').matchAll(/[\\/]?skills[\\/]+([\w.-]+)[\\/]+SKILL\.md/gi)].map((m) => m[1]));
+      for (const s of named) bump(skillReads, s);
+    }
     // docs only: Reads of source files are editing, not doc consumption
     if (b.name === 'Read' && /\.md$/i.test(b.input?.file_path || '') && prefixes.length) {
       const path = b.input.file_path.replace(/\\/g, '/');
