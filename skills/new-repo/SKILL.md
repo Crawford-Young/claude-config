@@ -33,6 +33,12 @@ Skip services that are not needed — do not scaffold unused infrastructure.
 
 ---
 
+## Who does what (#99)
+
+Scaffolding touches dozens of files, so it is dispatched, never typed inline. The orchestrator (this session) runs Step 0, then briefs an `implementer` (agent-factory dispatch block) per checklist section: Goal = the section's checkboxes, Scope = the files they name, Prior context = the Step 0 answers. Dependent sections run in checklist order; independent ones in parallel worktrees. Implementers create files and run the section's checks; they never commit or push.
+
+The orchestrator holds only the gates and git: the HARD-GATE `.gitignore` commit first, each section's commit, the final gate, and the push approval.
+
 ## Checklist
 
 Work through the chosen path in order. Check each off as it completes.
