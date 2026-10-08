@@ -5,7 +5,7 @@ Distilled 2026-08-21 from the retired per-type profiles (full text in
 `docs/harness-evolution/archive/`). Append one-liners with dates when a
 dispatch surprises; keep this file short.
 
-Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `reviewer` (read-only review), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) need an explicit `model:` on dispatch.
+Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `reviewer` (read-only review), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it (#74).
 
 | Situation | Model | Effort |
 |---|---|---|
@@ -22,7 +22,7 @@ Levels: `low` / `medium` / `high` / `xhigh` / `max`; the unset default is the *m
 
 Rules that survived the profile system:
 
-- Set `model:` explicitly on any dispatch of a type without a frontmatter default (hook-enforced) — an omitted model silently inherits the session default.
+- Set `model:` explicitly when sonnet isn't the pick for a type without a frontmatter default. An omitted one gets sonnet filled in (hook-enforced), or is blocked on a billed or unknown session, because a child that didn't get the fill would inherit the session model.
 - Raise effort before switching models — escalating within a model is cheaper than escalating across one; the exception is the Escalation rule's integration/architecture signals, which go straight to opus.
 - Subagent model precedence (since v2.1.251): dispatch parameter → agent frontmatter `model:` (`inherit` = the session's model) → `CLAUDE_CODE_SUBAGENT_MODEL` → session default. We do not use `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` — it pins every subagent to one model, overriding per-dispatch model selection, which is the entire mechanism this file describes.
 - A `fork` runs on the parent's model, with the parent's context, and the parent's exact tool pool (it skips the tool filters ordinary subagents get). Use only when the child needs the parent's full context or tools — not to spawn past the depth limit, where a fork's `Agent` call errors — **and** the session model is not fable — a fork inherits the session model, so a fork from a fable session *is* a fable dispatch: `agent-model-guard.mjs` resolves the live session model for forks (so `fork model: sonnet` cannot launder one) and blocks without `FABLE OK` clearance. The `Agent` tool is withheld by spawn depth, not by backgrounding — a background subagent below the depth limit keeps it.

@@ -4,8 +4,11 @@
 //
 // Three rules:
 //   1. A dispatch that omits `model:` on a type whose definition carries no
-//      frontmatter model would silently inherit the session default (which
-//      may be fable — usage-billed). Block and ask for an explicit model.
+//      frontmatter model would silently inherit the session model. When that
+//      model is known and not billed, fill in the routing default (sonnet,
+//      agents/ROUTING.md) via updatedInput instead of blocking. Each block cost
+//      a retry round, 7 of them by 2026-10-08 (#74). On a billed or unknown session it
+//      still blocks: if the fill were ever ignored, the child would inherit it.
 //   2. A fork runs on the *session's* model — the Agent tool ignores a fork's
 //      `model:` — so its effective model is read from ~/.claude/current-model.json
 //      (written by post-model-switch.mjs), falling back to the settings.json
@@ -30,6 +33,7 @@ import { BILLED_MODEL, block, claudeDir, consumeClearance, logBilled, run } from
 
 const modelFile = join(claudeDir, 'current-model.json');
 const settingsFile = join(claudeDir, 'settings.json');
+const DEFAULT_MODEL = 'sonnet';
 
 function typeHasFrontmatterModel(type) {
   if (!type || type.includes(':')) return false; // plugin-namespaced or unknown
@@ -95,9 +99,26 @@ run(
     }
 
     if (!isFork && !model && !typeHasFrontmatterModel(type)) {
-      block(
-        `Agent dispatch for type "${type || '(default)'}" omits model: and the type has no frontmatter default — it would silently inherit the session model. Set model: explicitly (see agents/ROUTING.md).`,
+      const session = liveModel(payload?.session_id);
+      if (!session || BILLED_MODEL.test(session.toLowerCase())) {
+        block(
+          `Agent dispatch for type "${type || '(default)'}" omits model: and the type has no frontmatter default — it would silently inherit the session model (${session || 'unknown'}). Set model: explicitly (see agents/ROUTING.md).`,
+        );
+      }
+      // updatedInput replaces the whole input, and is documented only with allow.
+      logLine('FILL', type, DEFAULT_MODEL);
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: `agent-model-guard filled model: ${DEFAULT_MODEL}`,
+            updatedInput: { ...input, model: DEFAULT_MODEL },
+            additionalContext: `agent-model-guard: this "${type || '(default)'}" dispatch omitted model:, so it runs on the routing default ${DEFAULT_MODEL}. Set model: explicitly when another model fits (agents/ROUTING.md).`,
+          },
+        }),
       );
+      return;
     }
 
     if (BILLED_MODEL.test(model)) {

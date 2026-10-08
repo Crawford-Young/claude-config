@@ -276,7 +276,7 @@
    "kind": "hook",
    "label": "agent-model-guard",
    "file": "hooks/agent-model-guard.mjs",
-   "summary": "PreToolUse:Agent — requires an explicit model, resolves a fork's real model, spends clearance for fable/mythos.",
+   "summary": "PreToolUse:Agent — fills model: sonnet when omitted (blocks on a billed/unknown session), resolves a fork's real model, spends clearance for fable/mythos.",
    "rules": [
     "Fails closed",
     "A rejected dispatch still spends the grant (accepted 2026-09-21)"
