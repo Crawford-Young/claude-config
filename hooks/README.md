@@ -20,8 +20,8 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `post-model-switch.mjs` | PostModelSwitch | Records which model each session is on to `~/.claude/current-model.json`, keyed by `session_id`, newest 50 kept. Not a gate — it is the data `agent-model-guard.mjs` reads to catch a fork on a live fable session. Fires on Claude Code's own switches too (e.g. session resume), which is why records are never expired by age. |
-| `context-gauge.mjs` | UserPromptSubmit | Reads the live context size from the transcript and forces a deliberate checkpoint before auto-compact can silently compact a wave boundary. Bands are fractions of the **live window** — note at 0.40, louder at 0.70 (once each), **blocks at 0.94**; 400k / 700k / 940k on today's 1M window, and silent when no source can name the window (thresholds section below). Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Tune with `CLAUDE_CTX_WINDOW`, or per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`. |
-| `stop-reflect-gate.mjs` | Stop | After a successful `gh pr merge` (Bash or PowerShell, parsed by `bash-guard.mjs`, so `gh -R x pr merge` counts; `--auto` only queues and doesn't) in the session's transcript, blocks ONCE per merge with "prompt the user to run reflect". Handled tool_use ids are a set (newest 200) in `~/.claude/stop-reflect-gate.json`, so parallel sessions don't re-fire each other; retries and later turn ends pass. A merge within 60 min of a reflect `SKILL.md` read (Read tool, or a Bash/PowerShell command such as `cat`/`Get-Content` naming it; or reflect Skill call) is the reflect's own landing PR, so it is marked handled without blocking (#76). Reflect is prompted, never forced. |
+| `context-gauge.mjs` | UserPromptSubmit, PostToolUse | Reads the live context size from the transcript and forces a deliberate checkpoint before the session gets costly. Bands are **absolute tokens** — note at 150k (stop at the next green commit), louder at 200k (checkpoint, then the continuation skill), **blocks at 250k** on UserPromptSubmit; a known window only floors the block (`min(250k, 0.94 × window)`). PostToolUse emits the same notes as `additionalContext` (a block is announced once, never enforced there; subagent calls skipped); both triggers share one state file so each band fires once per session. Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Tune per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`, or the floor with `CLAUDE_CTX_WINDOW`. |
+| `stop-reflect-gate.mjs` | Stop | After a successful `gh pr merge` (Bash or PowerShell, parsed by `bash-guard.mjs`, so `gh -R x pr merge` counts; `--auto` only queues and doesn't) in the session's transcript, blocks ONCE per merge with "prompt the user to run reflect". Handled tool_use ids are a set (newest 200) in `~/.claude/stop-reflect-gate.json`, so parallel sessions don't re-fire each other; retries and later turn ends pass. A merge within 60 min of a reflect `SKILL.md` read (Read tool, or a Bash/PowerShell command such as `cat`/`Get-Content` naming it; or reflect Skill call) is the reflect's own landing PR, so it is marked handled without blocking (#76). Reflect is prompted, never forced. Continuation gate (#122): once reflect has run for the newest merge (read after it, or the merge is reflect's own landing PR), the next Stop blocks once per merge until an AskUserQuestion after both the reflect read and the merge names both clear and continue (question or option text) — the continuation skill's ask; handled merges are a separate `cont` set in the same state file. |
 | `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then open `in-progress` issues across owner Crawford-Young (one `gh search issues` call, at most 10, 3 s cap, silent on failure; `SESSION_START_GH` stubs it in tests); after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). |
 | `active-repo.mjs` | PostToolUse (`Write\|Edit\|MultiEdit\|NotebookEdit`) | Records the git checkout of the edited file as `{ top, ts }` in `~/.claude/active-repo/<session_id>.json` (`CLAUDE_ACTIVE_REPO_DIR` overrides), so the statusline names the repo actually being edited, worktrees included, rather than the launch dir. Toplevel only — the statusline reads branch and worktree from `.git` at render. Prunes records older than a week. Never blocks (#77). |
 | `notification-toast.ps1` | Notification | Windows WinRT toast (WezTerm has no native notifications). Stays PowerShell — Windows-only integration. |
@@ -100,7 +100,8 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
     { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/context-gauge.mjs"] }
   ] } ],
   "PostToolUse": [ { "matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/active-repo.mjs"] }] },
-    { "matcher": "Edit|Write|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/inline-edit-nudge.mjs"] }] } ],
+    { "matcher": "Edit|Write|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/inline-edit-nudge.mjs"] }] },
+    { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/context-gauge.mjs"] }] } ],
   "Stop": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/stop-reflect-gate.mjs"] }] } ],
   "SessionStart": [ { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/session-start.mjs"] }] } ],
   "Notification": [ { "hooks": [{ "type": "command", "command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/young/code/claude-config/hooks/notification-toast.ps1"] }] } ],
@@ -126,30 +127,36 @@ Keep the settings `deny` rules for `git add -A` forms — the two layers
 
 ## Context-gauge thresholds
 
-The bands are **fractions of the live context window**, not fixed token counts:
-`0.40` nudge, `0.70` warn, `0.94` block. On the 1M window in use today that is
-400k / 700k / **940k**; on a 250k window it is the 100k / 175k / 235k this hook
-shipped with — the ratios are unchanged, only the baked-in assumption that the
-window *is* 250k is gone.
+The bands are **absolute tokens**, independent of the window: **150k** nudge
+(stop at the next green commit), **200k** warn (checkpoint: commit with the
+resume block, comment blockers on the issue, then run the continuation skill),
+**250k** block (UserPromptSubmit exit 2). Per-band overrides: `CLAUDE_CTX_NUDGE`
+/ `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`.
 
-The window is resolved in this order: `CLAUDE_CTX_WINDOW`, then a
-`contextGaugeWindow` key in `settings.json`, then the newest
-`context_window_size` in `~/.claude/usage-history/<YYYY-MM>.jsonl` — the CLI's
-own statusline figure, written there by `statusline/statusline.mjs` at
-most once a minute per session (live value `1000000`; honours `CLAUDE_USAGE_HISTORY_DIR` the same
-way the statusline does). If none of the three answers, the gauge stays **silent**
-rather than invent a window. It never hardcodes one; that hardcoded 250k is what
-made every band and every message wrong once the window became 1M.
+Why: cost and quality. The user works at a ~200k max per session, and
+$/request rises from $0.083 (100-200k) to $0.105-0.144 above 200k. The old
+fractions of a 1M window (400k / 700k / 940k) sat far above that, so the gauge
+was silent where it mattered. Scan of 30 days, 2026-10-08: of 27 sessions that
+peaked above 150k, **1** nudge fired, **0** warns, and **15** crossed 200k
+silently.
 
-Why the top band is the only real gate: auto-compact fires as the window fills
-and compacts silently, doing exactly what the doctrine forbids (a wave boundary
-is a `/clear`, never a compact). Re-derived from `~/.claude/usage-history` on
-2026-09-04 (10 sessions, the `2026-09` log, which starts 2026-09-02):
-peak-context p25 = 90k, p50 = 180k, max = 210k; 7 of 10 sessions cross 100k, 2
-cross 200k, **none cross 400k**. So under current habits the two advisory bands
-rarely fire and the block never does — right for a gate that exists for the
-outlier session actually approaching the window, not for a nag on every wave.
+The window is only a **floor**: when one is known, `blockAt = min(250k, 0.94 ×
+window)`, and warn and nudge are clamped to never exceed it, so the bands stay
+ordered on a small window (warn and nudge default to 0.8 and 0.6 of the hard stop when that is below 250k) and the hard stop still lands before it fills. An explicit `CLAUDE_CTX_BLOCK` overrides the floor. A
+window is not required — with none, the absolute bands stand. Resolution order:
+`CLAUDE_CTX_WINDOW`, then `contextGaugeWindow` in `settings.json`, then the
+newest `context_window_size` in `~/.claude/usage-history/<YYYY-MM>.jsonl`
+(written by `statusline/statusline.mjs`; honours `CLAUDE_USAGE_HISTORY_DIR`).
+Resolving the history source reads a 128 KB tail, so it is consulted lazily:
+only once the context has reached a band line (so a window under ~160k known only from history is not floored until 150k). Messages state tokens and name
+the window only when the floor applied.
 
-Re-derive from the history log before changing the fractions; the sample is
-small. Per-band absolute overrides (`CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` /
-`CLAUDE_CTX_BLOCK`) still win wherever they are set.
+PostToolUse: the same script runs on PostToolUse so a long autonomous turn sees
+the gauge. It emits `hookSpecificOutput.additionalContext` JSON with exit 0 (a
+tool that already ran can't be blocked, so the block band is announced once as
+context), and skips subagent calls (`agent_id`). Both triggers share
+`~/.claude/context-gauge/<sid>.json`, so a band announced by one is not
+repeated by the other; UserPromptSubmit still blocks at 250k even if
+PostToolUse already announced it. Overhead per PostToolUse call, p50 of 40
+spawns on a 300 KB transcript tail: 32.5 ms below the nudge line, 33.0 ms above
+it, versus 26.3 ms for a bare `node -e ""` (measured 2026-10-08, #122).

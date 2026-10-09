@@ -37,4 +37,4 @@ Apply agreed edits with the Edit tool, showing each diff. Place each per the `ha
 - Routing surprises go to `agents/ROUTING.md` as a dated one-liner.
 - claude-config edits land live on the main checkout and commit via `git-ops` (`land.mjs`).
 
-No ledger: the commits and the issue thread are the record. Then suggest `/clear`.
+No ledger: the commits and the issue thread are the record. Then Read `~/code/claude-config/skills/continuation/SKILL.md` and ask its clear-or-continue AskUserQuestion.

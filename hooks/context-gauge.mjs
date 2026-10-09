@@ -1,27 +1,34 @@
 #!/usr/bin/env node
-// context-gauge.mjs — UserPromptSubmit hook. Watches the session's context
-// size and forces a deliberate checkpoint before auto-compact can fire.
+// context-gauge.mjs — UserPromptSubmit + PostToolUse hook. Watches the
+// session's context size and forces a deliberate checkpoint before it gets
+// expensive and low-quality.
 //
-// Why a gauge at all: auto-compact compacts SILENTLY, which is precisely what
-// the doctrine forbids — a wave boundary is a /clear with a continuation
-// prompt, never a compact. Auto-compact is the failure mode, so the hard stop
-// sits just under the window rather than at some round number.
+// Why a gauge at all: cost and quality. The user works at a ~200k max per
+// session, and $/request rises from $0.083 (100-200k) to $0.105-0.144 above
+// 200k. A wave boundary is a /clear with a continuation prompt, not a drift.
 //
-// Bands are FRACTIONS of the live context window, never fixed token counts:
-// a hardcoded 250k made every band and every message wrong the day the window
-// became 1M. Fractions (of the window):
-//   0.40  nudge  quiet note into context, once
-//   0.70  warn   loud note naming /clear + continuation, once
-//   0.94  block  exit 2 — the last gate before the window fills
+// Bands are ABSOLUTE tokens, independent of the window size:
+//   150k  nudge  quiet note into context, once: stop at the next green commit
+//   200k  warn   loud note: checkpoint, then run the continuation skill, once
+//   250k  block  exit 2 on UserPromptSubmit — the last gate
+// Env overrides per band: CLAUDE_CTX_NUDGE / _WARN / _BLOCK.
 //
-// The window itself, first source that answers (see `contextWindow`):
+// The window is only a FLOOR: when one is known, blockAt = min(250k, 0.94 x
+// window), and warn/nudge are clamped so they never exceed it. Window, first
+// source that answers (see `contextWindow`):
 //   1. CLAUDE_CTX_WINDOW env
 //   2. `contextGaugeWindow` in ~/.claude/settings.json
-//   3. `context_window_size` in ~/.claude/usage-history/<YYYY-MM>.jsonl —
-//      the CLI's own statusline figure, written there by
-//      statusline/statusline.mjs, at most once a minute per session (live 1000000)
-//   4. nothing: the gauge stays silent. It never invents a window.
-// Absolute overrides per band stay available (CLAUDE_CTX_NUDGE / _WARN / _BLOCK).
+//   3. `context_window_size` in ~/.claude/usage-history/<YYYY-MM>.jsonl
+//      (statusline/statusline.mjs writes it). Resolving this reads a 128 KB
+//      tail, so it is consulted lazily: only once tokens reach a band line.
+//   4. nothing: the bands stand as they are. No window is required.
+//
+// Two triggers share ~/.claude/context-gauge/<sid>.json, so each band fires
+// once per session across both:
+//   * UserPromptSubmit — nudge/warn print to stdout; block exits 2.
+//   * PostToolUse — so long autonomous turns see the gauge. Emits
+//     additionalContext JSON (exit 0; a tool that already ran can't be
+//     blocked). Subagent calls (payload.agent_id) are skipped.
 //
 // Escape hatches, because a hard stop that can wedge a session is a bug:
 //   * any prompt starting with `/` passes (slash commands must always work)
@@ -49,9 +56,10 @@ import { block, claudeDir, run } from './_hooklib.mjs';
 
 const stateDir = join(claudeDir, 'context-gauge');
 
-/** Band lines as a share of the live window. 0.40/0.70/0.94 of 250k are the
- *  100k/175k/235k this hook shipped with, so the ratios are unchanged. */
-export const BANDS = { nudge: 0.4, warn: 0.7, blockAt: 0.94 };
+/** Absolute band lines in tokens; the window only ever lowers blockAt (see `thresholds`). */
+export const BANDS = { nudge: 150_000, warn: 200_000, blockAt: 250_000 };
+/** Share of a known window the hard stop may not exceed. */
+const WINDOW_FLOOR = 0.94;
 
 const positive = (v) => {
   const n = Number(v);
@@ -117,8 +125,12 @@ export function historyWindow(dir, sessionId, env = process.env) {
 }
 
 /** The live context window in tokens, or null when no source can say. */
-export function contextWindow({ dir = claudeDir, env = process.env, sessionId } = {}) {
-  return positive(env.CLAUDE_CTX_WINDOW) ?? settingsWindow(dir) ?? historyWindow(dir, sessionId, env);
+export function contextWindow({ dir = claudeDir, env = process.env, sessionId, skipHistory = false } = {}) {
+  return (
+    positive(env.CLAUDE_CTX_WINDOW) ??
+    settingsWindow(dir) ??
+    (skipHistory ? null : historyWindow(dir, sessionId, env))
+  );
 }
 
 /**
@@ -152,21 +164,29 @@ export function contextTokens(text) {
   return null;
 }
 
+/** Hard stop from the window floor, or null when no window is known. */
+const floorBlock = (w) => (w == null ? null : Math.round(w * WINDOW_FLOOR));
+
 /**
- * Band lines for `window`, env-overridable per band. Returns null when no band
- * can be justified — an unknown window plus a partial set of overrides is no
- * set at all, and a gauge that guesses its own thresholds is the bug this
- * function exists to prevent.
+ * Band lines: absolute tokens, env-overridable per band. A known window is a
+ * floor: blockAt = min(250k, 0.94 x window), and warn/nudge are clamped so the
+ * bands stay ordered under it.
  */
 export function thresholds(window, env = process.env) {
   const w = positive(window);
-  const pick = (name, frac) => positive(env[name]) ?? (w == null ? null : Math.round(w * frac));
-  const t = {
-    nudge: pick('CLAUDE_CTX_NUDGE', BANDS.nudge),
-    warn: pick('CLAUDE_CTX_WARN', BANDS.warn),
-    blockAt: pick('CLAUDE_CTX_BLOCK', BANDS.blockAt),
+  const floor = floorBlock(w);
+  const blockAt = positive(env.CLAUDE_CTX_BLOCK) ?? Math.min(BANDS.blockAt, floor ?? Infinity);
+  return {
+    nudge: positive(env.CLAUDE_CTX_NUDGE) ?? Math.min(BANDS.nudge, Math.round(0.6 * blockAt)),
+    warn: positive(env.CLAUDE_CTX_WARN) ?? Math.min(BANDS.warn, Math.round(0.8 * blockAt)),
+    blockAt,
   };
-  return t.nudge && t.warn && t.blockAt ? t : null;
+}
+
+/** True when the window floor (not the 250k band or an override) set the hard stop. */
+export function blockFloored(window, env = process.env) {
+  const floor = floorBlock(positive(window));
+  return floor != null && !positive(env.CLAUDE_CTX_BLOCK) && floor < BANDS.blockAt;
 }
 
 /** Which band `tokens` falls in. */
@@ -209,28 +229,31 @@ export function shouldFire(band, state) {
 
 const fmt = (n) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
 
-export function nudgeText(tokens, t, window) {
+/** Mention the window only when the floor applied (`window` is then non-null). */
+const floorNote = (window) => (window ? ` (the ${fmt(window)} window floors the bands)` : '');
+
+export function nudgeText(tokens, t, window = null) {
   return [
-    `[context-gauge] Session context is ~${fmt(tokens)} of the ~${fmt(window)} window (nudge line ${fmt(t.nudge)}).`,
-    `Never artificially stop a task early for this — the gate is auto-compact avoidance, not cost.`,
-    `Carry on, and stop at the next green commit deliberately rather than drifting past it. Hard stop at ${fmt(t.blockAt)}.`,
+    `[context-gauge] Session context is ~${fmt(tokens)} tokens (nudge line ${fmt(t.nudge)})${floorNote(window)}.`,
+    `Sessions get slower and costlier as context grows. Carry on, but stop at the next green commit rather than drifting past it.`,
+    `Hard stop at ${fmt(t.blockAt)}.`,
   ].join(' ');
 }
 
-export function warnText(tokens, t, window) {
+export function warnText(tokens, t, window = null) {
   return [
-    `[context-gauge] Session context is ~${fmt(tokens)} of the ~${fmt(window)} window (warn line ${fmt(t.warn)}).`,
-    `Checkpoint now: commit with the resume block (What/Verified/Next/Ruled out), comment open blockers on the issue, emit a paste-ready continuation prompt, then /clear.`,
-    `A wave boundary is a /clear, never a compact. Blocking at ${fmt(t.blockAt)}.`,
+    `[context-gauge] Session context is ~${fmt(tokens)} tokens (warn line ${fmt(t.warn)})${floorNote(window)}.`,
+    `Checkpoint now: commit with the resume block (What/Verified/Next/Ruled out) and comment open blockers on the issue.`,
+    `Then run the continuation skill: Read ~/code/claude-config/skills/continuation/SKILL.md and ask the clear-or-continue AskUserQuestion.`,
+    `Blocking at ${fmt(t.blockAt)}.`,
   ].join(' ');
 }
 
-export function blockText(tokens, t, window) {
+export function blockText(tokens, t, window = null) {
   return [
-    `Context is ~${fmt(tokens)} of the ~${fmt(window)} window — over the ${fmt(t.blockAt)} hard stop, and auto-compact fires as the window fills.`,
+    `Context is ~${fmt(tokens)} tokens — over the ${fmt(t.blockAt)} hard stop${floorNote(window)}.`,
     ``,
-    `Auto-compact would silently do the thing the doctrine forbids: compact a wave boundary instead of clearing it.`,
-    `Close out deliberately instead:`,
+    `Past ~200k a session costs more per request ($0.083 at 100-200k, $0.105-0.144 above) and its answers degrade. Close out deliberately:`,
     `  1. Commit with the resume block (What/Verified/Next/Ruled out); comment open blockers and deviations on the issue.`,
     `  2. Run the continuation skill (it asks clear-vs-continue).`,
     `  3. /clear  — or  /compact <focus for the NEXT task>  if unrecorded conversational state remains.`,
@@ -239,20 +262,39 @@ export function blockText(tokens, t, window) {
   ].join('\n');
 }
 
+/** Emit `text` to the model: additionalContext JSON on PostToolUse, plain stdout otherwise. */
+function announce(text, post) {
+  process.stdout.write(
+    post ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: text } }) : `${text}\n`,
+  );
+}
+
 export function main(payload) {
+  // A tool-call payload with no event name is PostToolUse too: never block a tool that already ran.
+  const post = payload?.hook_event_name === 'PostToolUse' || (!payload?.hook_event_name && !!payload?.tool_name);
+  if (post && payload.agent_id) return; // subagent tool calls: not the session's context
   const prompt = payload?.prompt || payload?.user_prompt || '';
   const sid = payload?.session_id || 'unknown';
   const path = payload?.transcript_path;
 
   if (!path || !existsSync(path)) return; // nothing to measure
 
-  // No window, no bands: a gauge that guesses is worse than a quiet one.
-  const window = contextWindow({ sessionId: payload?.session_id });
-  const t = thresholds(window);
-  if (!t) return;
-
   const tokens = contextTokens(readTail(path));
-  const band = classify(tokens, t);
+  if (tokens == null) return;
+
+  // The 128 KB usage-history tail is the expensive window source, so it is read
+  // only once tokens reach a band line. Assumption: a window known only from
+  // history and under ~160k is not floored until 150k (CLAUDE_CTX_WINDOW and
+  // settings floor at any token count).
+  let window = contextWindow({ sessionId: payload?.session_id, skipHistory: true });
+  let t = thresholds(window);
+  let band = classify(tokens, t);
+  if (band !== 'ok' && window == null) {
+    window = contextWindow({ sessionId: payload?.session_id });
+    t = thresholds(window);
+    band = classify(tokens, t);
+  }
+  const floored = blockFloored(window) ? window : null; // named in messages only then
 
   // Context fell back under the nudge line: a /clear or /compact landed, so
   // re-arm every band (and drop any bypass) for the fresh window.
@@ -265,16 +307,23 @@ export function main(payload) {
     }
     return;
   }
-  if (band === 'unknown') return;
 
   const state = readState(sid);
 
   if (band === 'block') {
     const bypassed = state.bypass || /\bCONTEXT OK\b/.test(prompt);
+    if (post) {
+      // A tool that already ran can't be blocked: announce once.
+      if (!state.bypass && shouldFire('block', state)) {
+        writeState(sid, { ...state, fired: 'block', lastTokens: tokens });
+        announce(blockText(tokens, t, floored), true);
+      }
+      return;
+    }
     // Slash commands must always reach the CLI — /clear is the way out.
     if (!bypassed && !prompt.trimStart().startsWith('/')) {
       writeState(sid, { ...state, fired: 'block', lastTokens: tokens });
-      block(blockText(tokens, t, window));
+      block(blockText(tokens, t, floored));
     }
     if (/\bCONTEXT OK\b/.test(prompt)) writeState(sid, { ...state, bypass: true, fired: 'block', lastTokens: tokens });
     return;
@@ -282,7 +331,7 @@ export function main(payload) {
 
   if (!shouldFire(band, state)) return;
   writeState(sid, { ...state, fired: band, lastTokens: tokens });
-  process.stdout.write(`${band === 'warn' ? warnText(tokens, t, window) : nudgeText(tokens, t, window)}\n`);
+  announce(band === 'warn' ? warnText(tokens, t, floored) : nudgeText(tokens, t, floored), post);
 }
 
 // Only act when executed as a hook. The test suite imports this module, and an
