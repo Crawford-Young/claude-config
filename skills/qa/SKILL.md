@@ -26,4 +26,4 @@ Gates come from the repo itself (justfile `check` recipe, else package.json scri
 
 ## Sign-off
 
-Fold sign-off into one `AskUserQuestion` with the next gated step (push/PR, next task) — never a separate prose ask. Labels `Signed off` / `No — found a problem`, neither `(Recommended)`; a `No` voids the next step's pick.
+Fold sign-off into one `AskUserQuestion` with the next gated step (push/PR, next task) — never a separate prose ask. Labels `Signed off — <next step, e.g. push/PR/merge>` / `No — found a problem`, neither `(Recommended)`; a `No` voids the next step's pick. Name the gated verb in the label: bash-guard reads only the answer text as approval, so a bare `Signed off` costs a re-ask (claude-config-123).
