@@ -72,6 +72,10 @@ test('blocks gate commands piped to tail/head', () => {
   assert.equal(staticCheck('ls | head'), null);
 });
 
+test('gate-pipe remedy names an absolute, repo-independent qa command', () => {
+  assert.match(staticCheck('pnpm test | tail -20'), /node \$HOME\/code\/claude-config\/scripts\/qa\.mjs/);
+});
+
 test('blocks PowerShell content cmdlets', () => {
   assert.ok(staticCheck('Set-Content -Path a.md -Value hi'));
   assert.ok(staticCheck('echo hi | Out-File b.txt'));

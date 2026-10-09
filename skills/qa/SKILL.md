@@ -14,7 +14,7 @@ node ~/code/claude-config/scripts/qa.mjs [repo] --list   # show what would run
 node ~/code/claude-config/scripts/qa.mjs [repo] --gate e2e
 ```
 
-Gates come from the repo itself (justfile `check` recipe, else package.json scripts). Each runs foreground and unpiped; full output goes to `~/.claude/qa-logs/`, the console gets `EXIT:<code>` per gate, failure lines on red, and all four coverage metrics on green.
+Gates come from the repo itself (justfile `check` recipe, else package.json scripts, else marker files such as claude-config's `scripts/test/*.test.mjs`). Each runs foreground and unpiped; full output goes to `~/.claude/qa-logs/`, the console gets `EXIT:<code>` per gate, failure lines on red, and all four coverage metrics on green.
 
 ## Rules
 

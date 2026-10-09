@@ -304,7 +304,7 @@ export function staticCheck(raw) {
   //    command after it in the same pipeline (tail, head, grep, tee… all mask it)
   const cmds = commands(cmd, null);
   if (cmds.some((g) => isGate(g) && cmds.some((t) => t.pipe === g.pipe && t.seg > g.seg))) {
-    return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use scripts/qa.mjs for compact output).';
+    return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use `node $HOME/code/claude-config/scripts/qa.mjs` for compact output).';
   }
 
   // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
