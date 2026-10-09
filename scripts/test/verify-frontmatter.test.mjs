@@ -90,8 +90,17 @@ function validAgentsRoot() {
  * reason — the checker falls back to the live repo's own workspace/CLAUDE.md files otherwise.
  * Returns { status, out }; never throws on non-zero exit.
  */
-function run(skillsRoot, agentsRoot, workspaceRoot) {
-  const args = ['--skills', skillsRoot, '--agents', agentsRoot];
+function run(skillsRoot, agentsRoot, workspaceRoot, synced = {}) {
+  // The synced listing roots (#124) are always passed explicitly (nonexistent unless a test
+  // supplies fixtures), so a result never depends on the default-path resolution; that is
+  // covered once, against a temp home, by its own test below.
+  const none = resolve(tmpdir(), 'definitely-not-a-synced-root-6153');
+  const args = [
+    '--skills', skillsRoot,
+    '--agents', agentsRoot,
+    '--synced-skills', synced.skills ?? none,
+    '--synced-plugins', synced.plugins ?? none,
+  ];
   if (workspaceRoot) args.push('--workspace', workspaceRoot);
   const r = spawnHarness(CHECK, args);
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
@@ -531,7 +540,89 @@ test('a new workspace/<domain>/CLAUDE.md with no CAPS entry fails, not silently 
 });
 
 test('the live repo itself passes every resident-byte cap with its real skills, agents and CLAUDE.md files', () => {
-  const r = spawnHarness(CHECK, []);
+  const none = resolve(tmpdir(), 'definitely-not-a-synced-root-6153');
+  const r = spawnHarness(CHECK, ['--synced-skills', none, '--synced-plugins', none]);
   assert.equal(r.status, 0);
   assert.match(`${r.stdout}${r.stderr}`, /resident bytes are within cap/);
+});
+
+// --- Synced listing bytes (issue #124) — report only, never a cap or a failure ---------------
+
+/** A third-party SKILL.md with a verbatim frontmatter `description:` line (quotes included). */
+function syncedSkill(descriptionLine, extra = '') {
+  return `---\nname: s\n${descriptionLine}\n${extra}---\n\n# S\n`;
+}
+
+/** Fixture mirroring both real layouts: skills/synced/<bucket>/<skill>/ and plugins/synced/<bucket>/<plugin>~g2/skills/<skill>/. */
+function syncedFixture() {
+  const skills = mkdtempSync(join(tmpdir(), 'synced-skills-'));
+  const plugins = mkdtempSync(join(tmpdir(), 'synced-plugins-'));
+  const put = (root, rel, contents) => {
+    const file = join(root, rel);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, contents, 'utf8');
+  };
+  put(skills, 'bucket-1/alpha/SKILL.md', syncedSkill('description: aaaaa')); // 5 B
+  put(skills, 'bucket-1/beta/SKILL.md', syncedSkill('description: "bbbbbbb"')); // quoted: 7 B
+  put(skills, 'bucket-1/gamma/SKILL.md', syncedSkill('description: gggggggggg', 'disable-model-invocation: true\n')); // flagged: skipped
+  put(skills, 'bucket-1/alpha/references/notes.md', syncedSkill('description: ignored ignored')); // not SKILL.md
+  put(skills, '.bucket-meta/hidden/SKILL.md', syncedSkill('description: hidden')); // dot-dir: skipped
+  put(plugins, 'bucket-2/plug~g2/skills/delta/SKILL.md', syncedSkill("description: 'ddd'")); // quoted: 3 B
+  put(plugins, 'bucket-2/plug~g2/skills/eps/SKILL.md', syncedSkill('description: éé')); // 4 B UTF-8
+  put(plugins, 'bucket-2/plug~g2/agents/helper.md', syncedSkill('description: ignored ignored')); // not SKILL.md
+  put(plugins, 'bucket-2/plug~g2/skills/broken/SKILL.md', 'no frontmatter at all\n'); // malformed: never fails the run
+  return { skills, plugins };
+}
+
+test('synced skills and plugin skills report description bytes, exit stays 0', () => {
+  const synced = syncedFixture();
+  const skillsRoot = validSkillsRoot();
+  const agentsRoot = validAgentsRoot();
+  try {
+    const { status, out } = run(skillsRoot, agentsRoot, undefined, synced);
+    assert.equal(status, 0, out);
+    assert.match(out, /synced skills \(.*\): 2 descriptions, 12 B/);
+    assert.match(out, /synced plugins \(.*\): 2 descriptions, 7 B/);
+    assert.match(out, /synced listing total: 19 B \(report only, no cap\)/);
+  } finally {
+    for (const d of [synced.skills, synced.plugins, skillsRoot, agentsRoot]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('without the synced flags, the roots default to <home>/.claude/{skills,plugins}/synced', () => {
+  const home = mkdtempSync(join(tmpdir(), 'synced-home-'));
+  const skillsRoot = validSkillsRoot();
+  const agentsRoot = validAgentsRoot();
+  const put = (rel, contents) => {
+    const file = join(home, '.claude', rel);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, contents, 'utf8');
+  };
+  put('skills/synced/bucket/alpha/SKILL.md', syncedSkill('description: aaaaa'));
+  put('plugins/synced/bucket/plug~g2/skills/delta/SKILL.md', syncedSkill('description: "ddd"'));
+  try {
+    const r = spawnHarness(CHECK, ['--skills', skillsRoot, '--agents', agentsRoot], { home });
+    const out = `${r.stdout}${r.stderr}`;
+    assert.equal(r.status, 0, out);
+    assert.match(out, /synced skills \(.*\): 1 descriptions, 5 B/);
+    assert.match(out, /synced plugins \(.*\): 1 descriptions, 3 B/);
+    assert.match(out, /synced listing total: 8 B/);
+  } finally {
+    for (const d of [home, skillsRoot, agentsRoot]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('a missing synced dir prints not present and exit stays 0', () => {
+  const skillsRoot = validSkillsRoot();
+  const agentsRoot = validAgentsRoot();
+  try {
+    const { status, out } = run(skillsRoot, agentsRoot);
+    assert.equal(status, 0, out);
+    assert.match(out, /synced skills \(.*\): not present/);
+    assert.match(out, /synced plugins \(.*\): not present/);
+    assert.match(out, /synced listing total: 0 B \(report only, no cap\)/);
+  } finally {
+    rmSync(skillsRoot, { recursive: true, force: true });
+    rmSync(agentsRoot, { recursive: true, force: true });
+  }
 });

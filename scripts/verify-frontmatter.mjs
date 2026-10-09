@@ -52,9 +52,13 @@
  * so INDEX.md is resident instead, under its own cap, and every skill must be listed in it by its
  * `<name>/SKILL.md` path. A flagged skill missing from the index is reachable only by `/name`,
  * the same unroutable-but-green class the frontmatter check above exists for.
+ *
+ * Synced listing (issue #124): description bytes of synced claude.ai skills and plugin skills
+ * under ~/.claude are printed for visibility only — third-party files, so no cap and no failure.
  */
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,6 +67,8 @@ const REPO_ROOT = resolve(HERE, '..');
 const DEFAULT_SKILLS = resolve(REPO_ROOT, 'skills');
 const DEFAULT_AGENTS = resolve(REPO_ROOT, 'agents');
 const DEFAULT_WORKSPACE = REPO_ROOT;
+const DEFAULT_SYNCED_SKILLS = join(homedir(), '.claude', 'skills', 'synced');
+const DEFAULT_SYNCED_PLUGINS = join(homedir(), '.claude', 'plugins', 'synced');
 
 const argv = process.argv.slice(2);
 const skillsIdx = argv.indexOf('--skills');
@@ -71,6 +77,12 @@ const agentsIdx = argv.indexOf('--agents');
 const AGENTS_ROOT = agentsIdx === -1 ? DEFAULT_AGENTS : resolve(argv[agentsIdx + 1] ?? '');
 const workspaceIdx = argv.indexOf('--workspace');
 const WORKSPACE_ROOT = workspaceIdx === -1 ? DEFAULT_WORKSPACE : resolve(argv[workspaceIdx + 1] ?? '');
+const syncedSkillsIdx = argv.indexOf('--synced-skills');
+const SYNCED_SKILLS_ROOT =
+  syncedSkillsIdx === -1 ? DEFAULT_SYNCED_SKILLS : resolve(argv[syncedSkillsIdx + 1] ?? '');
+const syncedPluginsIdx = argv.indexOf('--synced-plugins');
+const SYNCED_PLUGINS_ROOT =
+  syncedPluginsIdx === -1 ? DEFAULT_SYNCED_PLUGINS : resolve(argv[syncedPluginsIdx + 1] ?? '');
 
 for (const [label, root] of [
   ['skills', SKILLS_ROOT],
@@ -142,6 +154,27 @@ function enumerateAgents(root) {
   return entries;
 }
 
+/** Parse a file's frontmatter into `{ fields }` (key -> trimmed raw value), or `{ problem }` if it has none. */
+function parseFrontmatter(text) {
+  const lines = text.split(/\r?\n/);
+
+  if (lines[0]?.trim() !== '---') {
+    return { problem: 'no frontmatter — the file must open with a --- delimiter' };
+  }
+
+  const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  if (close === -1) {
+    return { problem: 'frontmatter is never closed — no second --- delimiter' };
+  }
+
+  const fields = new Map();
+  for (const line of lines.slice(1, close)) {
+    const m = /^([A-Za-z_][\w-]*):(.*)$/.exec(line);
+    if (m) fields.set(m[1], m[2].trim());
+  }
+  return { fields };
+}
+
 /**
  * Check one root's frontmatter. Every entry passed in is always counted and always required
  * to open with `---` and publish valid REQUIRED keys — there is no content-based skip here;
@@ -155,24 +188,12 @@ function checkRoot(entries) {
 
   for (const { file, rel } of entries) {
     checked++;
-    const lines = readFileSync(file, 'utf8').split(/\r?\n/);
-
-    if (lines[0]?.trim() !== '---') {
-      problems.push(`${rel}: no frontmatter — the file must open with a --- delimiter`);
+    const parsed = parseFrontmatter(readFileSync(file, 'utf8'));
+    if (parsed.problem) {
+      problems.push(`${rel}: ${parsed.problem}`);
       continue;
     }
-
-    const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
-    if (close === -1) {
-      problems.push(`${rel}: frontmatter is never closed — no second --- delimiter`);
-      continue;
-    }
-
-    const fields = new Map();
-    for (const line of lines.slice(1, close)) {
-      const m = /^([A-Za-z_][\w-]*):(.*)$/.exec(line);
-      if (m) fields.set(m[1], m[2].trim());
-    }
+    const { fields } = parsed;
 
     for (const key of REQUIRED) {
       if (!fields.has(key)) {
@@ -246,14 +267,10 @@ function checkSkillIndex(skillsRoot, skillEntries) {
 }
 
 /**
- * Recursively find every `CLAUDE.md` under `<workspaceRoot>/workspace`, so a new domain's
- * CLAUDE.md is caught the moment it exists — not only once someone remembers to add it to
- * CAPS.claudeMd. Returns paths relative to workspaceRoot (matching the CAPS.claudeMd key
- * shape, e.g. `workspace/web/CLAUDE.md`), sorted for deterministic output. Noise directories
+ * Recursively find every file named exactly `name` under `base`. Noise directories
  * (node_modules, dotdirs) are skipped; depth is capped, as a cheap guard against an accidental symlink loop.
  */
-function findAllClaudeMdFiles(workspaceRoot) {
-  const base = join(workspaceRoot, 'workspace');
+function findFilesNamed(base, name) {
   const found = [];
   const walk = (dir, depth) => {
     if (depth > 8) return;
@@ -268,12 +285,24 @@ function findAllClaudeMdFiles(workspaceRoot) {
       if (entry.isDirectory()) {
         if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
         walk(p, depth + 1);
-      } else if (entry.isFile() && entry.name === 'CLAUDE.md') {
+      } else if (entry.isFile() && entry.name === name) {
         found.push(p);
       }
     }
   };
   walk(base, 0);
+  return found;
+}
+
+/**
+ * Recursively find every `CLAUDE.md` under `<workspaceRoot>/workspace`, so a new domain's
+ * CLAUDE.md is caught the moment it exists — not only once someone remembers to add it to
+ * CAPS.claudeMd. Returns paths relative to workspaceRoot (matching the CAPS.claudeMd key
+ * shape, e.g. `workspace/web/CLAUDE.md`), sorted for deterministic output. Noise directories
+ */
+function findAllClaudeMdFiles(workspaceRoot) {
+  const base = join(workspaceRoot, 'workspace');
+  const found = findFilesNamed(base, 'CLAUDE.md');
   return found
     .map((file) => file.slice(workspaceRoot.length + 1).replace(/\\/g, '/'))
     .sort();
@@ -310,6 +339,35 @@ function checkClaudeMdCaps(workspaceRoot) {
   }
 
   return { problems, sizes };
+}
+
+/**
+ * Synced claude.ai skills and plugin skills (#124): third-party files that still sit in the
+ * skill listing, so their description bytes are reported — never capped, never a problem.
+ * Recursively finds every file named exactly `SKILL.md` (nested layouts differ: bucket/skill/ vs
+ * bucket/plugin~g2/skills/skill/), via findFilesNamed. Returns null when the root is absent;
+ * unparseable files are ignored.
+ */
+function measureSyncedRoot(root) {
+  if (!existsSync(root) || !statSync(root).isDirectory()) return null;
+  const files = findFilesNamed(root, 'SKILL.md');
+
+  let count = 0;
+  let bytes = 0;
+  for (const file of files) {
+    let parsed;
+    try {
+      parsed = parseFrontmatter(readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (parsed.problem || parsed.fields.get('disable-model-invocation') === 'true') continue;
+    const description = (parsed.fields.get('description') ?? '').replace(/^(["'])(.*)\1$/, '$2');
+    if (description === '') continue;
+    count++;
+    bytes += byteLength(description);
+  }
+  return { count, bytes };
 }
 
 const skillEntries = enumerateSkills(SKILLS_ROOT);
@@ -354,6 +412,21 @@ console.log(`skills/INDEX.md: ${skillIndexResult.bytes} B (cap ${CAPS.skillIndex
 for (const { rel, bytes, cap } of claudeMdCapResult.sizes) {
   console.log(`${rel}: ${bytes} B (cap ${cap} B)`);
 }
+
+let syncedTotal = 0;
+for (const [label, root] of [
+  ['synced skills', SYNCED_SKILLS_ROOT],
+  ['synced plugins', SYNCED_PLUGINS_ROOT],
+]) {
+  const measured = measureSyncedRoot(root);
+  if (measured === null) {
+    console.log(`${label} (${root}): not present`);
+    continue;
+  }
+  syncedTotal += measured.bytes;
+  console.log(`${label} (${root}): ${measured.count} descriptions, ${measured.bytes} B`);
+}
+console.log(`synced listing total: ${syncedTotal} B (report only, no cap)`);
 
 const residentProblems = [
   ...descriptionCapResult.problems,
