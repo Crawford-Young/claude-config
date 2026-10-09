@@ -11,8 +11,10 @@ The main checkout of every code repo never leaves `main` — all branch work hap
 ## Create
 
 ```
-node ~/code/claude-config/scripts/worktree.mjs new <repo> <slug> [--branch feat/x] [--install]
+node ~/code/claude-config/scripts/worktree.mjs new <repo-path> <slug> [--branch feat/x] [--install]
 ```
+
+`<repo-path>` resolves against the cwd (`claude-config` from `~/code`), not a repo name.
 
 Cuts `feat/<slug>` from `origin/main` (warns if the cut isn't clean), copies env files per the repo's `.worktreeinclude` (default `.env` + `.env.local`), and optionally runs `pnpm install`.
 
