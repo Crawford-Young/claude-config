@@ -17,7 +17,6 @@ import {
   gatedVerb,
   gatedVerbs,
   isApproving,
-  isDeletePush,
   pushGateReason,
   browserCommand,
   substitutions,
@@ -644,31 +643,39 @@ test('#92 end-to-end through the real hook: substitution forms block without app
   assert.equal(guardRunT("echo '$(gh pr merge 5 --rebase)'", h, missing), 0);
 });
 
-// --- #88: remote branch deletes accept "delete" wording ------------------------
+// --- remote branch deletes are ungated, like --dry-run ----------------------------
 
-test('isDeletePush sees --delete, -d and :branch refspecs only', () => {
-  assert.ok(isDeletePush('git push origin --delete feat/a feat/b', '/repo'));
-  assert.ok(isDeletePush('git push -d origin feat/a', '/repo'));
-  assert.ok(isDeletePush('git push origin :feat/a :feat/b', '/repo'));
-  assert.equal(isDeletePush('git push origin :feat/a feat/b', '/repo'), false); // also pushes feat/b
-  assert.equal(isDeletePush('git push -u origin feat/a', '/repo'), false);
-  assert.equal(isDeletePush('git push origin --delete x --dry-run', '/repo'), false);
+test('remote branch deletes (--delete, -d, all-:branch refspecs) are not gated', () => {
+  for (const cmd of [
+    'git push origin --delete feat/a feat/b',
+    'git push -d origin feat/a',
+    'git push origin :feat/a :feat/b',
+    'git push origin --delete x --dry-run',
+  ]) {
+    assert.deepEqual(gatedVerbs(cmd, '/repo'), [], cmd);
+  }
 });
 
-test('#88: a branch delete passes on "delete" wording; a plain push does not', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Delete the 3 merged remote branches?': 'Delete all 3' });
-  assert.equal(pushGateReason('git push origin --delete feat/a feat/b feat/c', '/repo', t, stateFile), null);
-  const { stateFile: s2 } = pushGateTmp();
-  assert.equal(pushGateReason('git push origin :feat/a', '/repo', t, s2), null);
-  const { stateFile: s3 } = pushGateTmp();
-  assert.ok(pushGateReason('git push -u origin feat/x', '/repo', t, s3));
+test('a push that also pushes something stays gated', () => {
+  assert.deepEqual(gatedVerbs('git push origin :feat/a feat/b', '/repo'), ['git push']);
+  assert.deepEqual(gatedVerbs('git push -u origin feat/a', '/repo'), ['git push']);
+  assert.deepEqual(gatedVerbs('git push origin --delete a && git push -u origin b', '/repo'), ['git push']);
+  // a ref-writing rider turns a delete into a real push
+  for (const c of ['git push --tags origin :x', 'git push origin :x --tags', 'git push --follow-tags origin --delete x', 'git push --all origin -d x']) {
+    assert.deepEqual(gatedVerbs(c, '/repo'), ['git push'], c);
+  }
+  // `-d` as another flag's value is not the delete flag
+  for (const c of ['git push -o -d origin main', 'git push --push-option -d origin main', 'git push --exec -d origin main']) {
+    assert.deepEqual(gatedVerbs(c, '/repo'), ['git push'], c);
+  }
 });
 
-test('#88: "delete" wording is still subject to the deny words', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Delete the merged branches?': "No, don't delete them yet" });
-  assert.ok(pushGateReason('git push origin --delete feat/a', '/repo', t, stateFile));
+test('a branch delete runs through the real hook with no approval in the transcript', () => {
+  const h = tmpHome();
+  const missing = join(h, 'missing.jsonl');
+  assert.equal(guardRunT('git push origin --delete feat/a', h, missing), 0);
+  assert.equal(guardRunT('git push origin :feat/a', h, missing), 0);
+  assert.equal(guardRunT('git push origin :feat/a feat/b', h, missing), 2);
 });
 
 // --- #98: the gate-pipe rule reads gate commands, not tool names ---------------

@@ -306,7 +306,7 @@
     "No commit on main in code repos (each git call judged in its own cd'd repo)",
     "claude-config main never switches branch or restores files",
     "claude --model fable needs FABLE OK",
-    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer in the transcript, single-use per verb (a branch delete also accepts \"delete\"; a negator refuses only the act it negates)",
+    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer in the transcript, single-use per verb; a remote branch delete (push --delete, -d, or :branch refspecs only) is exempt like --dry-run; a negator refuses only the act it negates",
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
     "One gated verb per Bash call — a compound with two is blocked unspent",
     "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated"

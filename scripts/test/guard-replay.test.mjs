@@ -56,9 +56,8 @@ test('prints exactly one line per changed verdict, deduped, plus a summary', () 
 test('an approval-parser change is reported per answer', () => {
   const cfg = config({ 's.jsonl': [answer({ q: 'Push it' })] });
   const lines = run(cfg, checkout('return null;', 'true'), checkout('return null;', 'false')).trim().split('\n');
-  assert.equal(lines.length, 3); // plain + deletes variants, then summary
+  assert.equal(lines.length, 2); // one changed verdict, then summary
   assert.match(lines[0], /^isApproving: true -> false \| Push it$/);
-  assert.match(lines[1], /^isApproving\(deletes\): true -> false/);
 });
 
 test('identical checkouts print only the summary with zero changes', () => {
