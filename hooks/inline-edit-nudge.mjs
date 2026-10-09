@@ -15,6 +15,7 @@
 // Fail-open: advisory, never blocks.
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { claudeDir, readState, run, writeState } from './_hooklib.mjs';
@@ -27,6 +28,8 @@ const CHUNK = 256 * 1024;
 export const MESSAGE = `${THRESHOLD} files edited inline since the last dispatch — agent-factory: dispatch multi-file work; inline is for ≤2-file docs/config.`;
 
 const norm = (p) => p.replaceAll('\\', '/').toLowerCase();
+// Scratchpad, commit-message and PR-body drafts live under the OS temp dir: not implementation.
+const TMP = norm(tmpdir()).replace(/\/?$/, '/');
 
 export const stateFile = () => process.env.CLAUDE_INLINE_NUDGE_STATE || join(claudeDir, 'inline-edit-nudge.json');
 
@@ -90,7 +93,7 @@ export function nudge(payload, file = stateFile()) {
   const { runId, files } = cur;
   const own = payload.tool_input?.file_path || payload.tool_input?.notebook_path;
   if (own) files.add(norm(own)); // the transcript may not hold the in-flight call yet
-  if (files.size < THRESHOLD) return null;
+  if ([...files].filter((f) => !f.startsWith(TMP)).length < THRESHOLD) return null;
   const state = readState(file);
   if (state[sid] === runId) return null;
   delete state[sid]; // re-insert last so the newest 200 survive the trim

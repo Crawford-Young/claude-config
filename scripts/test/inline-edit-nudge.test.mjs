@@ -87,3 +87,10 @@ test('one file spelled with backslashes, slashes and another case counts once', 
   assert.equal(fire(ctx, {}, 'C:\\a\\X.md'), null, '5 distinct files');
   assert.ok(fire(ctx, {}, 'c:/a/u.md'), '6 distinct files');
 });
+
+test('files under the OS temp dir (scratchpad, commit/PR drafts) never count', () => {
+  const tmp = (f) => join(tmpdir(), 'scratchpad', f);
+  const ctx = setup([...five.slice(0, 3), ...['m1.txt', 'm2.txt', 'm3.txt', 'm4.txt'].map((f) => edit(tmp(f)))]);
+  assert.equal(fire(ctx, {}, tmp('pr.md')), null, '3 real files + 5 temp files');
+  assert.equal(fire(ctx, {}, 'real4.ts'), null, '4 real files');
+});
