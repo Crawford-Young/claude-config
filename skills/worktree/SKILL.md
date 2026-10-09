@@ -28,7 +28,7 @@ After creating:
 node ~/code/claude-config/scripts/worktree.mjs remove <path>
 ```
 
-Encodes the Windows-safe sequence (git remove → force → recursive delete → prune). Remove the worktree BEFORE deleting its branch — a checked-out branch can't be deleted.
+Encodes the Windows-safe sequence (git remove → force → recursive delete → prune). Remove the worktree BEFORE deleting its branch — a checked-out branch can't be deleted. Move the session out first: a Bash call that `cd`s into the worktree makes it the session's tracked cwd, which holds the directory (EPERM/EBUSY) — run a separate `cd ~/code` call before `remove`. A re-run finishes a half-removed (empty, pointer-less) directory.
 
 ## Session name
 

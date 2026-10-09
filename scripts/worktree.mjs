@@ -9,9 +9,10 @@
 // copies env files per the repo's .worktreeinclude (default: .env, .env.local).
 // `remove` encodes the Windows-safe removal sequence (git remove → force →
 // recursive delete → prune) so node_modules lock/long-path failures never need
-// hand recovery.
+// hand recovery. Re-running `remove` on a half-removed worktree (registration gone,
+// directory left behind) deletes it if empty, or lists what remains if not.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, rmdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -135,13 +136,36 @@ function warnOnSessionName(repoName, slug, branch) {
 }
 
 function cmdRemove() {
-  const wtPath = resolve(args._[1] || '');
-  if (!wtPath || !existsSync(wtPath)) die(`worktree path not found: ${wtPath}`);
+  if (!args._[1]) die('usage: worktree.mjs remove <worktree-path> [--force]');
+  const wtPath = resolve(args._[1]);
+  if (!existsSync(wtPath)) die(`worktree path not found: ${wtPath}`);
 
   // The parent repo is named by the worktree's .git pointer file.
   const gitFile = readIfExists(join(wtPath, '.git'));
   const m = gitFile && gitFile.match(/gitdir:\s*(.+)/);
-  if (!m) die(`${wtPath} does not look like a linked worktree (.git pointer missing)`);
+  if (!m) {
+    // No pointer: either a half-removed worktree (git dropped the registration but the
+    // directory delete failed) or a mistyped path. Only an empty directory is safe to finish.
+    let left;
+    try {
+      if (!statSync(wtPath).isDirectory()) die(`${wtPath} is not a directory`);
+      left = readdirSync(wtPath);
+    } catch (e) {
+      die(`could not inspect ${wtPath}: ${e.message}`);
+    }
+    if (left.length === 0) {
+      try {
+        rmdirSync(wtPath); // only ever removes an empty directory
+      } catch (e) {
+        die(holderMessage(wtPath, e));
+      }
+      log(`removed ${wtPath} (half-removed worktree: no .git pointer, empty directory)`);
+      return;
+    }
+    const shown = left.slice(0, 10).map((n) => `  ${n}`).join('\n');
+    const more = left.length > 10 ? `\n  ...and ${left.length - 10} more` : '';
+    die(`${wtPath} does not look like a linked worktree (.git pointer missing) and is not empty; remove it by hand if intended. Contents:\n${shown}${more}`);
+  }
   // <repo>/.git/worktrees/<name> → <repo>
   const repo = resolve(m[1].trim(), '..', '..', '..');
 
@@ -153,11 +177,16 @@ function cmdRemove() {
     try {
       rmSync(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch (e) {
-      die(`could not delete ${wtPath}: ${e.message}\nClose any process holding files there and re-run.`);
+      die(holderMessage(wtPath, e));
     }
   }
   gitOrDie(repo, ['worktree', 'prune']);
   log(`removed ${wtPath} (pruned in ${repo})`);
+}
+
+/** Delete-failure message. The script can't see a session's tracked cwd, so it names the likely holder. */
+function holderMessage(wtPath, e) {
+  return `could not delete ${wtPath}: ${e.message}\nLikely holder: a Claude session or shell whose working directory is inside this worktree. Move it out first (a separate \`cd ~/code\` call), then re-run.`;
 }
 
 function cmdList() {
