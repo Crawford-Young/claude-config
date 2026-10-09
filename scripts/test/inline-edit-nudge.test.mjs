@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness } from './_spawn.mjs';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,4 +93,74 @@ test('files under the OS temp dir (scratchpad, commit/PR drafts) never count', (
   const ctx = setup([...five.slice(0, 3), ...['m1.txt', 'm2.txt', 'm3.txt', 'm4.txt'].map((f) => edit(tmp(f)))]);
   assert.equal(fire(ctx, {}, tmp('pr.md')), null, '3 real files + 5 temp files');
   assert.equal(fire(ctx, {}, 'real4.ts'), null, '4 real files');
+});
+
+// ---- #117 review minors ----
+const result = (id, isError) =>
+  JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'x', ...(isError ? { is_error: true } : {}) }] } });
+const editWith = (f, id, isError) => [use('Edit', { file_path: f }, id), result(id, isError)];
+
+test('edits whose tool_result is an error do not count toward the distinct files', () => {
+  const lines = [...five.slice(0, 3).flatMap((f, i) => editWith(f, `ok${i}`, false)), ...['x.ts', 'y.ts', 'z.ts'].flatMap((f, i) => editWith(f, `bad${i}`, true))];
+  assert.equal(fire(setup(lines), {}, 'cur.ts'), null, '3 ok + 1 current = 4 files; 3 errored ones ignored');
+  const ok = [...five.flatMap((f, i) => editWith(f, `k${i}`, false))];
+  assert.ok(fire(setup(ok)), '5 ok + current = 6 still fires');
+});
+
+test('a line longer than one read chunk is decoded once, not once per chunk', async () => {
+  const { currentRun } = await import('../../hooks/inline-edit-nudge.mjs');
+  const big = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'y'.repeat(1.5 * 1024 * 1024) }] } });
+  const ctx = setup([use('Agent', {}, 'd1'), big, edit('a.ts')]);
+  const size = Buffer.byteLength(readFileSync(ctx.transcript));
+  const orig = Buffer.prototype.toString;
+  let decoded = 0;
+  Buffer.prototype.toString = function (enc, ...rest) {
+    if (enc === 'utf8') decoded += this.length;
+    return orig.call(this, enc, ...rest);
+  };
+  let cur;
+  try {
+    cur = currentRun(ctx.transcript);
+  } finally {
+    Buffer.prototype.toString = orig;
+  }
+  assert.equal(cur.runId, 'd1');
+  assert.ok(decoded <= size * 1.2, `decoded ${decoded} bytes of a ${size}-byte transcript`);
+});
+
+test('subagent transcripts are separate files: an isSidechain flag does not hide a tool_use', async () => {
+  const { currentRun } = await import('../../hooks/inline-edit-nudge.mjs');
+  const line = JSON.stringify({ isSidechain: true, type: 'assistant', message: { content: [{ type: 'tool_use', id: 'q', name: 'Edit', input: { file_path: 'S.ts' } }] } });
+  assert.deepEqual([...currentRun(setup([line]).transcript).files], ['s.ts']);
+});
+
+test('a fresh claim by a concurrent hook suppresses the second nudge; a stale one does not', async () => {
+  const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
+  const ctx = setup(five);
+  const state = join(ctx.h, 'state.json');
+  const payload = { session_id: 's9', transcript_path: ctx.transcript, tool_input: { file_path: 'cur.ts' } };
+  writeFileSync(`${state}.lock`, '');
+  assert.equal(nudge(payload, state), null, 'lock held by a parallel hook');
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(`${state}.lock`, old, old);
+  assert.ok(nudge(payload, state), 'stale lock is broken');
+  assert.equal(existsSync(`${state}.lock`), false, 'lock released');
+  assert.equal(nudge(payload, state), null, 'run recorded');
+});
+
+test('claimRun fails open (fires) when a stale lock cannot be removed or its mtime is in the future', async () => {
+  const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
+  const ctx = setup(five);
+  const state = join(ctx.h, 'state.json');
+  const payload = { session_id: 's8', transcript_path: ctx.transcript, tool_input: { file_path: 'cur.ts' } };
+  writeFileSync(`${state}.lock`, '');
+  const future = new Date(Date.now() + 3_600_000);
+  utimesSync(`${state}.lock`, future, future);
+  assert.ok(nudge(payload, state), 'future-dated lock does not silence the nudge');
+  // a lock that is a directory is stale-by-age but cannot be unlinked
+  const state2 = join(ctx.h, 'state2.json');
+  mkdirSync(`${state2}.lock`);
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(`${state2}.lock`, old, old);
+  assert.ok(nudge({ ...payload, session_id: 's7' }, state2), 'undeletable stale lock fires');
 });

@@ -99,3 +99,43 @@ test('--files and --days with a missing or non-numeric value print usage', () =>
     assert.match(run(cfg, co, co, ...args).trim(), /^usage:/, args.join(' '));
   }
 });
+
+test('answers differing only in key order dedupe to one', () => {
+  const cfg = config({ 's.jsonl': [answer({ a: '1', b: '2' }), answer({ b: '2', a: '1' })] });
+  const co = checkout('return null;');
+  assert.match(run(cfg, co, co).trim(), /0 commands, 1 answers from 1 files/);
+});
+
+test('env-assignment secrets are redacted in printed commands', () => {
+  const cfg = config({ 's.jsonl': [bash('GH_TOKEN=abc123 API_KEY="s p" MY_SECRET=x curl u')] });
+  const out = run(cfg, checkout("return c.includes('curl') ? 'blocked' : null;"), checkout('return null;'));
+  assert.match(out, /\| GH_TOKEN=\*\*\* API_KEY=\*\*\* MY_SECRET=\*\*\* curl u\n/);
+  assert.doesNotMatch(out, /abc123|s p|=x /);
+});
+
+test('a missing projects root reports zero files rather than failing', () => {
+  const co = checkout('return null;');
+  assert.match(run(mkdtempSync(join(tmpdir(), 'gr-empty-')), co, co).trim(), /^summary: 0 changed; 0 commands, 0 answers from 0 files$/);
+});
+
+test('more secret shapes are redacted; ordinary names and flags are kept', () => {
+  const cmds = [
+    'DB_PASSWORD=hunter2 run',
+    'NPM_PASS=hunter3 run',
+    'GH_PAT=ghp_abc run',
+    '$env:GH_TOKEN = "tok4" ; run',
+    'curl -H "Authorization: Bearer bearer5" u',
+    'gh auth login --with-token tok6',
+    'monkey=banana run',
+    'sort --sort-key=name f',
+  ];
+  const cfg = config({ 's.jsonl': cmds.map((c) => bash(c)) });
+  const out = run(cfg, checkout("return 'blocked';"), checkout('return null;'));
+  for (const s of ['hunter2', 'hunter3', 'ghp_abc', 'tok4', 'bearer5', 'tok6']) assert.doesNotMatch(out, new RegExp(s), s);
+  assert.match(out, /DB_PASSWORD=\*\*\* run/);
+  assert.match(out, /\$env:GH_TOKEN = \*\*\* ; run/);
+  assert.match(out, /Authorization: Bearer \*\*\*/);
+  assert.match(out, /--with-token \*\*\*/);
+  assert.match(out, /monkey=banana run/);
+  assert.match(out, /--sort-key=name f/);
+});

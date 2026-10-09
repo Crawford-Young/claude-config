@@ -23,7 +23,7 @@
 //   and gaps thin out sharply past 10 min (p90 human think time 10.8 min), and
 //   Bash's 10-min timeout caps any foreground tool run, so no tool is cut as idle.
 
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -554,18 +554,24 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   return { add, report };
 }
 
-/** Yields { file, ctx } for every main-session and subagent transcript under root. */
+/** readdir that treats an unreadable or vanished directory as empty. */
+const safeReaddir = async (dir) => {
+  try { return await readdir(dir, { withFileTypes: true }); } catch { return []; }
+};
+
+/** Yields { file, ctx } for every main-session and subagent transcript under root.
+ *  A missing root throws (spend.mjs treats that as a failed refresh); unreadable
+ *  directories below it are skipped one by one; symlinked/junction dirs are followed. */
 export async function* walkTranscripts(root) {
   for (const proj of await readdir(root, { withFileTypes: true })) {
-    if (!proj.isDirectory()) continue;
+    if (!proj.isDirectory() && !proj.isSymbolicLink()) continue;
     const pdir = join(root, proj.name);
-    for (const e of await readdir(pdir, { withFileTypes: true })) {
+    for (const e of await safeReaddir(pdir)) {
       if (e.isFile() && e.name.endsWith('.jsonl')) {
         yield { file: join(pdir, e.name), ctx: { sessionId: e.name.slice(0, -6), agent: null } };
-      } else if (e.isDirectory()) {
+      } else if (e.isDirectory() || e.isSymbolicLink()) {
         const sub = join(pdir, e.name, 'subagents');
-        if (!existsSync(sub)) continue;
-        for (const f of await readdir(sub)) {
+        for (const f of (await safeReaddir(sub)).map((d) => d.name)) {
           if (!f.endsWith('.jsonl')) continue;
           const id = basename(f, '.jsonl').replace(/^agent-/, '');
           let meta = {};
