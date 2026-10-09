@@ -2,7 +2,7 @@
 // guard-replay.mjs — diff guard verdicts between two checkouts over real transcripts (#106).
 //   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--files N] [--days D] [--root <projects-dir>]
 // Replays unique Bash/PowerShell commands through staticCheck, gatedVerbs and browserCommand,
-// and unique AskUserQuestion answers through isApproving (plain and deletes) and isBrowserApproving,
+// and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
 // Transcripts: <CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/*.jsonl and projects/*/<session>/subagents/*.jsonl, last --days (default 7) or newest --files.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -144,7 +144,6 @@ async function main() {
 
   const ansFns = [
     ['isApproving', (m, x) => verdict(m.isApproving, x)],
-    ['isApproving(deletes)', (m, x) => verdict(m.isApproving, x, { deletes: true })],
     ['isBrowserApproving', (m, x) => verdict(m.isBrowserApproving, x)],
   ];
   for (const x of answers) for (const [name, f] of ansFns) report(name, f(a, x), f(b, x), Object.values(x).join(' / '));
