@@ -7,7 +7,7 @@ with `node --test scripts/test/*.test.mjs`.
 | Script | Purpose |
 | --- | --- |
 | `worktree.mjs` | Create/remove/list feature worktrees — branch from `origin/main`, env copy per `.worktreeinclude`, Windows-safe removal |
-| `qa.mjs` | Run the repo's own gates foreground + unpiped; full logs to `~/.claude/qa-logs/`, compact honest summary to the console |
+| `qa.mjs` | Run the repo's own gates (justfile, package.json, or marker files like `scripts/test/*.test.mjs`) foreground + unpiped; full logs to `~/.claude/qa-logs/`, compact honest summary to the console |
 | `land.mjs` | The claude-config commit lane — ephemeral worktree from `origin/main`, path-scoped diff, post-merge sync |
 | `cleanup.mjs` | End-of-wave sweep — dirty repos, worktrees; `--kill-port`, `--remove-worktree` |
 | `reflect-gather.mjs` | One-pass reflect payload: a unit's evidence via `audit.mjs --session <name>` plus per-repo git activity |
