@@ -516,7 +516,7 @@
    "kind": "script",
    "label": "verify-frontmatter.mjs",
    "file": "scripts/verify-frontmatter.mjs",
-   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (unflagged descriptions + skills/INDEX.md + CLAUDE.md files) stay within CAPS (issues #63, #64).",
+   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (unflagged descriptions + skills/INDEX.md + CLAUDE.md files) stay within CAPS (issues #63, #64); also reports synced skill/plugin description bytes, report only (#124; --synced-skills/--synced-plugins).",
    "rules": [
     "Caps live in one CAPS const at the top of the script",
     "Bytes measured as UTF-8 with CRLF normalized to LF"
