@@ -150,9 +150,13 @@ export function substitutions(s, quotesLiteral = false) {
  *  body stays whole (`echo $(a; b)` is one clause), and so does a redirection
  *  (`2>&1`, `&>f`). With `pipes`, a pipeline (`a | b`, `a |& b`) is one piece
  *  — `pipelines()`. Unbalanced quotes fall back to the plain split — never
- *  swallow the rest of the line. */
-export function clauses(cmd, pipes = false) {
+ *  swallow the rest of the line. When `seps` is an array it is filled, parallel to
+ *  the result, with the separator before each clause ('' for the first); the
+ *  unbalanced-quote fallback leaves it empty. */
+export function clauses(cmd, pipes = false, seps = null) {
   const out = [];
+  const before = [];
+  let sep = '';
   let cur = '';
   let quote = null;
   for (let i = 0; i < cmd.length; i++) {
@@ -176,18 +180,24 @@ export function clauses(cmd, pipes = false) {
       cur += ch;
       if (cmd[i + 1] === '&') cur += cmd[++i];
     } else if (/[;&|\n]/.test(ch)) {
-      if ((ch === '&' || ch === '|') && cmd[i + 1] === ch) i++;
+      let kind = ch;
+      if ((ch === '&' || ch === '|') && cmd[i + 1] === ch) kind = ch + cmd[i++ + 1];
       out.push(cur);
+      before.push(sep);
+      sep = kind;
       cur = '';
     } else cur += ch;
   }
   if (quote) return cmd.split(pipes ? /\|\||&&|(?<![<>|])&(?!>)|[;\n]/ : /\|\||&&|(?<![<>])&(?!>)|[;|\n]/).map((c) => c.trim()).filter(Boolean);
   out.push(cur);
-  return out.map((c) => c.trim()).filter(Boolean);
+  before.push(sep);
+  const keep = out.map((c) => c.trim());
+  if (seps) keep.forEach((c, k) => c && seps.push(before[k]));
+  return keep.filter(Boolean);
 }
 
 /** The pipelines of a compound command: clauses that keep `|` inside. */
-const pipelines = (cmd) => clauses(cmd, true);
+const pipelines = (cmd, seps = null) => clauses(cmd, true, seps);
 
 /** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
  *  word. Unbalanced quotes: plain whitespace split. */
@@ -344,7 +354,9 @@ const toDir = (dir, p) => {
 function commands(raw, cwd) {
   const out = [];
   let dir = cwd || null;
-  for (const p of pipelines(raw)) {
+  const pipeSeps = [];
+  for (const [pi, p] of pipelines(raw, pipeSeps).entries()) {
+    const viaOr = pipeSeps[pi] === '||';
     const pipe = {};
     for (const [seg, c] of clauses(p).entries()) {
       const w = words(c);
@@ -367,7 +379,7 @@ function commands(raw, cwd) {
         if (shellCmd !== null) out.push(...commands(shellCmd, dir));
         continue;
       }
-      out.push({ cmd, words: w, dir, pipe, seg });
+      out.push({ cmd, words: w, dir, pipe, seg, viaOr });
     }
   }
   return out;
@@ -411,7 +423,7 @@ function isGate({ cmd, words: w }) {
  *  unknown — callers fail open. */
 export function gitCalls(raw, cwd) {
   const out = [];
-  for (const { cmd, words: w, dir } of commands(raw, cwd)) {
+  for (const { cmd, words: w, dir, viaOr } of commands(raw, cwd)) {
     if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
@@ -419,7 +431,7 @@ export function gitCalls(raw, cwd) {
       if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i]);
       else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
     }
-    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo });
+    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr });
   }
   return out;
 }
@@ -585,15 +597,22 @@ function isUnborn(repo) {
   return refs.status === 0 && (refs.stdout || '').trim() === '';
 }
 
+function repoKey(repo) {
+  const r = spawnSync('git', ['-C', repo, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 4000 });
+  const top = resolve(r.status === 0 && (r.stdout || '').trim() ? r.stdout.trim() : repo);
+  return process.platform === 'win32' ? top.toLowerCase() : top;
+}
+
 export function branchRules(raw, cwd) {
+  const rooted = new Set(); // unborn repos whose one root-commit exemption this command already spent
   for (const g of gitCalls(scrub(raw), cwd)) {
-    const reason = callRule(g);
+    const reason = callRule(g, rooted);
     if (reason) return reason;
   }
   return null;
 }
 
-function callRule({ sub, args, repo }) {
+function callRule({ sub, args, repo, viaOr }, rooted = new Set()) {
   const isCommit = sub === 'commit';
   // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
   // worktree) — `restore --staged` alone only unstages and is left alone.
@@ -624,7 +643,19 @@ function callRule({ sub, args, repo }) {
   if (isCommit && (branch === 'main' || branch === 'master')) {
     if (name === 'docs') return null;
     if (/[/\\]\.worktrees[/\\]/.test(resolve(repo))) return null;
-    if (isUnborn(repo)) return null; // root commit: no origin/main yet, so no worktree to cut
+    // Root commit: no origin/main yet, so no worktree to cut. Only the first commit of a
+    // chain gets it; after it the repo is born, so a later one gets the normal verdict.
+    // Keyed by toplevel so cd/-C into a subdir or a case variant can't claim a second.
+    // A commit after `||` only runs if the first failed (still unborn): it neither spends
+    // nor is denied the exemption.
+    if (isUnborn(repo)) {
+      const key = repoKey(repo);
+      if (viaOr) return null;
+      if (!rooted.has(key)) {
+        rooted.add(key);
+        return null;
+      }
+    }
     return `"${repo}" is on ${branch} — never commit to the default branch. Cut a branch in a worktree (scripts/worktree.mjs new) first.`;
   }
 

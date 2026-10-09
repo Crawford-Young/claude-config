@@ -1,7 +1,7 @@
 // scripts/test/audit-lib.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, sessionNames } from '../audit-lib.mjs';
@@ -465,4 +465,31 @@ test('time: per-day and per-name rows split at UTC midnight and sum every window
   const md = renderMarkdown(r);
   for (const h of ['## Time', '**Per day**', '**Per session name**', '**Agent time**', '**Tool latency**', '**Retry and block cost**']) assert.ok(md.includes(h), h);
   assert.match(md, /idle gaps over 10 min removed/);
+});
+
+test('walkTranscripts skips an unreadable directory and keeps walking', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-bad-'));
+  mkdirSync(join(root, 'a-proj', 'sess'), { recursive: true });
+  writeFileSync(join(root, 'a-proj', 'sess', 'subagents'), 'not a dir');
+  mkdirSync(join(root, 'b-proj'));
+  writeFileSync(join(root, 'b-proj', 's.jsonl'), '{}\n');
+  const found = [];
+  for await (const f of walkTranscripts(root)) found.push(f.file);
+  assert.deepEqual(found, [join(root, 'b-proj', 's.jsonl')]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('walkTranscripts follows a symlinked project directory', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-link-'));
+  const real = mkdtempSync(join(tmpdir(), 'wt-real-'));
+  writeFileSync(join(real, 's.jsonl'), '{}\n');
+  try {
+    symlinkSync(real, join(root, 'linked'), 'junction');
+  } catch {
+    t.skip('cannot create a link here');
+    return;
+  }
+  const found = [];
+  for await (const f of walkTranscripts(root)) found.push(f.file);
+  assert.deepEqual(found, [join(root, 'linked', 's.jsonl')]);
 });

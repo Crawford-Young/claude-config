@@ -359,6 +359,33 @@ test('commit-on-main allows the root commit in an unborn repo, blocks once HEAD 
   assert.equal(guardRun(`cd ${master} && git commit -m root`, h), 0);
 });
 
+test('unborn-repo exemption covers only the first commit of a chain', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(join(app, 'src'), { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && git commit -m a`, h), 0);
+  for (const sep of ['&&', ';', '\n']) {
+    assert.equal(guardRun(`cd ${app} && git commit -m a ${sep} git commit -m b`, h), 2, JSON.stringify(sep));
+  }
+  // The same repo reached by another path is still the same repo.
+  assert.equal(guardRun(`cd ${app} && git commit -m a && cd src && git commit -m b`, h), 2, 'subdir cd');
+  assert.equal(guardRun(`git -C ${app} commit -m a && git -C ${join(app, 'src')} commit -m b`, h), 2, '-C subdir');
+  if (process.platform === 'win32') {
+    assert.equal(guardRun(`git -C ${app} commit -m a && git -C ${app.toUpperCase()} commit -m b`, h), 2, 'case variant');
+  }
+});
+
+test('a commit after || only runs if the first failed, so it keeps the unborn exemption', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || git commit -m b`, h), 0);
+  // ...but a && chain ahead of it still spent the exemption.
+  assert.equal(guardRun(`cd ${app} && git commit -m a && git commit -m b || git commit -m c`, h), 2);
+});
+
 test('commit words in quoted or heredoc text never trip commit-on-main', () => {
   const h = tmpHome();
   const app = join(h, 'app');

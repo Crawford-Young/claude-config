@@ -8,18 +8,30 @@
 // silent allow there is invisible, where a block is not. H21 is the case in
 // point: a BOM on stdin disarmed bash-guard and nothing said so.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 export const claudeDir = join(homedir(), '.claude');
 
-/** Skills read through the shell (#103): the names in `skills/<name>/SKILL.md`
- *  (and `INDEX` for `skills/INDEX.md`) that a Bash/PowerShell command line
- *  names, in either slash direction under any path prefix. A command that
- *  merely says "skills" names no file and reads nothing. Deduped, in order. */
+const WRAPPERS = new Set(['sudo', 'time', 'env']); // env's VAR=value args fall to the assignment strip
+const READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'bat', 'nl', 'sed', 'awk', 'type', 'gc', 'get-content']);
+
+/** Skills read through the shell (#103, #117): the names in `skills/<name>/SKILL.md`
+ *  (and `INDEX` for `skills/INDEX.md`) that a reader verb (cat, head, sed,
+ *  Get-Content, ...) names in its own command segment (split on ; && || | and
+ *  newlines, leading VAR=value skipped). grep/echo/wc/cp/node naming the file
+ *  read nothing for the model. Either slash direction, any path prefix.
+ *  Deduped, in order. */
 export function shellSkillReads(command) {
-  const names = [...String(command ?? '').matchAll(/skills[\\/]+(?:([\w.-]+)[\\/]+SKILL\.md|(INDEX)\.md)(?![\w.-])/gi)].map((m) => m[1] ?? m[2]);
+  const names = [];
+  for (const seg of String(command ?? '').split(/[;&|\r\n]+/)) {
+    const toks = seg.trim().replace(/^[({\s]+/, '').replace(/^\$\w+\s*=\s*/, '').replace(/^[({\s]+/, '').split(/\s+/);
+    while (/^\w+=/.test(toks[0] ?? '') || WRAPPERS.has((toks[0] ?? '').toLowerCase())) toks.shift();
+    const verb = (toks[0] ?? '').replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, '');
+    if (!READERS.has(verb)) continue;
+    for (const m of seg.matchAll(/skills[\\/]+(?:([\w.-]+)[\\/]+SKILL\.md|(INDEX)\.md)(?![\w.-])/gi)) names.push(m[1] ?? m[2]);
+  }
   return [...new Set(names)];
 }
 export const errorLog = join(claudeDir, 'hook-errors.log');
@@ -164,11 +176,30 @@ export function readState(file) {
   }
 }
 
-/** Advisory persistence only — a lost write costs a duplicate ask, nothing more. */
-export function writeState(file, state) {
+/** Advisory persistence only — a lost write costs a duplicate ask, nothing more.
+ *  Writes a temp file then renames it, so a reader never sees half a file. Where the
+ *  rename is refused (win32 EPERM/EBUSY/EACCES when the target is open) it falls
+ *  back to a direct write. `io` is a test seam for the fs calls. */
+export function writeState(file, state, io = {}) {
+  const write = io.writeFileSync ?? writeFileSync;
+  const rename = io.renameSync ?? renameSync;
+  const data = JSON.stringify(state);
+  const tmp = `${file}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(state));
+    try {
+      write(tmp, data);
+      rename(tmp, file);
+    } catch (err) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) throw err;
+      write(file, data); // old behavior: non-atomic, but it lands
+    } finally {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // already renamed or never written
+      }
+    }
   } catch {
     // best-effort
   }

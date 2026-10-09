@@ -5,10 +5,11 @@
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
 // Transcripts: <CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/*.jsonl and projects/*/<session>/subagents/*.jsonl, last --days (default 7) or newest --files.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { walkTranscripts } from './audit-lib.mjs';
 
 const MAX_SHOWN = 120;
 
@@ -38,36 +39,34 @@ function projectsRoot(override) {
   return join(base, 'projects');
 }
 
-function transcripts(root, { files, days }) {
+async function transcripts(root, { files, days }) {
   const all = [];
-  const add = (p) => {
-    try {
-      all.push({ p, mtime: statSync(p).mtimeMs });
-    } catch {
-      // vanished mid-scan
-    }
-  };
-  for (const d of safeDir(root)) {
-    for (const f of safeDir(join(root, d))) {
-      if (f.endsWith('.jsonl')) add(join(root, d, f));
-      else {
-        const sub = join(root, d, f, 'subagents');
-        for (const g of safeDir(sub)) if (g.endsWith('.jsonl')) add(join(sub, g));
+  try {
+    for await (const { file } of walkTranscripts(root)) {
+      try {
+        all.push({ p: file, mtime: statSync(file).mtimeMs });
+      } catch {
+        // vanished mid-scan
       }
     }
+  } catch {
+    // projects root missing or unreadable: scan nothing
   }
   all.sort((a, b) => b.mtime - a.mtime);
   if (days != null) return all.filter((f) => f.mtime >= Date.now() - days * 864e5).map((f) => f.p);
   return all.slice(0, files).map((f) => f.p);
 }
 
-function safeDir(p) {
-  try {
-    return readdirSync(p);
-  } catch {
-    return [];
-  }
-}
+/** Order-independent identity for an answers object. */
+const answerKey = (a) => JSON.stringify(Object.entries(a).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+
+/** Shown commands never carry secrets: NAME=value, $env:NAME = value, Bearer tokens and --with-token values print as ***. */
+const SECRET_ASSIGN = /(?<![-\w])((?:\$env:)?(?:[A-Z0-9]+_)*(?:TOKEN|KEY|SECRET|PASSWORD|PASS|PAT)\s*=\s*)("[^"]*"|'[^']*'|\S+)/g;
+const redact = (s) =>
+  s
+    .replace(SECRET_ASSIGN, '$1***')
+    .replace(/(Authorization:\s*Bearer\s+)[^\s"']+/gi, '$1***')
+    .replace(/(--with-token[\s=]+)[^\s"']+/g, '$1***');
 
 /** Unique shell commands and unique AskUserQuestion answer objects across the files. */
 function collect(paths) {
@@ -91,7 +90,7 @@ function collect(paths) {
         }
       }
       const a = o?.toolUseResult?.answers;
-      if (o?.type === 'user' && a && typeof a === 'object' && !Array.isArray(a)) answers.set(JSON.stringify(a), a);
+      if (o?.type === 'user' && a && typeof a === 'object' && !Array.isArray(a)) answers.set(answerKey(a), a);
     }
   }
   return { commands: [...commands], answers: [...answers.values()] };
@@ -125,14 +124,14 @@ async function main() {
     return;
   }
   const [a, b] = await Promise.all(args.paths.map(load));
-  const files = transcripts(projectsRoot(args.root), args);
+  const files = await transcripts(projectsRoot(args.root), args);
   const { commands, answers } = collect(files);
   let changed = 0;
   const cwd = process.cwd();
   const report = (name, o, n, text) => {
     if (o === n) return;
     changed++;
-    console.log(`${name}: ${o} -> ${n} | ${oneLine(text)}`);
+    console.log(`${name}: ${o} -> ${n} | ${oneLine(redact(text))}`);
   };
 
   const cmdFns = [

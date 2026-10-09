@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -159,4 +159,65 @@ test('shellSkillReads: a bare mention of skills, other skill files, or non-strin
   assert.deepEqual(shellSkillReads('echo "read the skills first"'), []);
   assert.deepEqual(shellSkillReads('wc -c skills/reflect/gotchas.md skills/reflect/scripts/x.mjs'), []);
   assert.deepEqual(shellSkillReads(undefined), []);
+});
+
+// #117: only a reader verb reading the file is a skill read
+test('shellSkillReads: counts reader verbs per command segment; grep/echo/wc/cp/node are not reads', async () => {
+  const { shellSkillReads } = await import(hooklibUrl);
+  assert.deepEqual(shellSkillReads('cat skills/a/SKILL.md | head'), ['a']);
+  assert.deepEqual(shellSkillReads('FOO=1 /usr/bin/CAT.exe skills/a/SKILL.md'), ['a']);
+  assert.deepEqual(shellSkillReads('echo hi && sed -n 1,5p skills/b/SKILL.md; ls'), ['b']);
+  assert.deepEqual(shellSkillReads('head -5 skills/c/SKILL.md\ntail skills/d/SKILL.md'), ['c', 'd']);
+  for (const c of ['grep x skills/a/SKILL.md', 'echo skills/a/SKILL.md', 'wc -c skills/a/SKILL.md', 'cp skills/a/SKILL.md /tmp/x', 'node scripts/land.mjs x skills/a/SKILL.md']) {
+    assert.deepEqual(shellSkillReads(c), [], c);
+  }
+});
+
+test('writeState writes atomically (no temp litter) and stays fail-open', async () => {
+  const { writeState, readState } = await import(hooklibUrl);
+  const h = home();
+  const f = join(h, '.claude', 's.json');
+  writeState(f, { a: 1 });
+  writeState(f, { a: 2 });
+  assert.deepEqual(readState(f), { a: 2 });
+  assert.deepEqual(readdirSync(join(h, '.claude')), ['s.json']);
+  writeState(join(home({ claudeIsAFile: true }), '.claude', 's.json'), { a: 1 }); // must not throw
+});
+
+test('writeState falls back to a direct write when the rename is refused (win32 EPERM on an open target)', async () => {
+  const { writeState, readState } = await import(hooklibUrl);
+  const h = home();
+  const f = join(h, '.claude', 's.json');
+  let tried = 0;
+  const refuse = () => {
+    tried++;
+    throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+  };
+  writeState(f, { a: 3 }, { renameSync: refuse });
+  assert.equal(tried, 1, 'the atomic rename was attempted');
+  assert.deepEqual(readState(f), { a: 3 });
+  assert.deepEqual(readdirSync(join(h, '.claude')), ['s.json'], 'temp file removed');
+});
+
+test('writeState removes its temp file when writing the temp file itself fails', async () => {
+  const { writeState } = await import(hooklibUrl);
+  const h = home();
+  const f = join(h, '.claude', 's.json');
+  const half = (p, data) => {
+    writeFileSync(p, data.slice(0, 2));
+    throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+  };
+  writeState(f, { a: 1 }, { writeFileSync: half });
+  assert.deepEqual(readdirSync(join(h, '.claude')), []);
+});
+
+test('shellSkillReads: segment-start wrappers (sudo/time/env, parens, braces, $var =) and a single & are skipped', async () => {
+  const { shellSkillReads } = await import(hooklibUrl);
+  assert.deepEqual(shellSkillReads('sudo cat skills/a/SKILL.md'), ['a']);
+  assert.deepEqual(shellSkillReads('time env FOO=1 cat skills/b/SKILL.md'), ['b']);
+  assert.deepEqual(shellSkillReads("(Get-Content skills/c/SKILL.md) -join ''"), ['c']);
+  assert.deepEqual(shellSkillReads('$c = Get-Content skills/d/SKILL.md'), ['d']);
+  assert.deepEqual(shellSkillReads('{ cat skills/e/SKILL.md; }'), ['e']);
+  assert.deepEqual(shellSkillReads('sleep 1 & cat skills/f/SKILL.md'), ['f']);
+  assert.deepEqual(shellSkillReads('sudo grep x skills/a/SKILL.md'), []);
 });

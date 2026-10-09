@@ -1159,6 +1159,12 @@
    "kind": "reads"
   },
   {
+   "from": "script:guard-replay",
+   "to": "script:audit-lib",
+   "kind": "reads",
+   "label": "walkTranscripts"
+  },
+  {
    "from": "script:audit-lib",
    "to": "store:transcripts",
    "kind": "reads"
