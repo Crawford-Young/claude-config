@@ -40,4 +40,4 @@ Blockers first: <uncommitted work, unmerged branch, unrun migration>
 
 Every line must pass one test: does the next session need this to **act**? Mission briefing, not session diary.
 
-Auto-compact thrashing despite the context-gauge gate (e.g. one huge paste): recover via chunked reads → focused `/compact` → subagent offload → `/clear`.
+Auto-compact thrashing despite the context gauge (e.g. one huge paste): recover via chunked reads → focused `/compact` → subagent offload → `/clear`.

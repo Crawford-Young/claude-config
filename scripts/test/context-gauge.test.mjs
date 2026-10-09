@@ -14,6 +14,7 @@ import {
   readTail,
   shouldFire,
   thresholds,
+  blockFloored,
   nudgeText,
   warnText,
   blockText,
@@ -173,69 +174,89 @@ test('with no source at all the window is null — the gauge never invents one',
   }
 });
 
-// --- bands as fractions of that window ---
-
-test('bands are fractions of the live window, not constants', () => {
-  assert.deepEqual(thresholds(1_000_000, {}), { nudge: 400_000, warn: 700_000, blockAt: 940_000 });
-  // The shipped ratios are preserved: the old 100k/175k/235k were these same
-  // fractions of the 250k window the hook used to assume.
-  assert.deepEqual(thresholds(250_000, {}), { nudge: 100_000, warn: 175_000, blockAt: 235_000 });
-  assert.deepEqual(BANDS, { nudge: 0.4, warn: 0.7, blockAt: 0.94 });
+test('skipHistory keeps the 128 KB history tail unread', () => {
+  const { home, dir } = claudeHome({ history: sample('a', 1_000_000) });
+  try {
+    assert.equal(contextWindow({ dir, env: {}, skipHistory: true }), null);
+    assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: '300000' }, skipHistory: true }), 300_000);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
-test('the hard stop leaves headroom below the window it is protecting', () => {
-  const t = thresholds(1_000_000, {});
-  assert.ok(t.blockAt < 1_000_000);
-  assert.ok(t.nudge < t.warn && t.warn < t.blockAt);
+// --- absolute bands, the window only a floor ---
+
+test('bands are absolute tokens, with or without a window', () => {
+  assert.deepEqual(BANDS, { nudge: 150_000, warn: 200_000, blockAt: 250_000 });
+  assert.deepEqual(thresholds(null, {}), { nudge: 150_000, warn: 200_000, blockAt: 250_000 });
+  assert.deepEqual(thresholds(1_000_000, {}), { nudge: 150_000, warn: 200_000, blockAt: 250_000 });
 });
 
-test('an unknown window yields no thresholds rather than guessed ones', () => {
-  assert.equal(thresholds(null, {}), null);
-  assert.equal(thresholds(0, {}), null);
-  assert.equal(thresholds(null, { CLAUDE_CTX_NUDGE: '1000' }), null); // a partial set is no set
+test('a small window is a floor: blockAt = 0.94 x window, warn and nudge clamped under it', () => {
+  assert.deepEqual(thresholds(200_000, {}), { nudge: 112_800, warn: 150_400, blockAt: 188_000 });
+  assert.deepEqual(thresholds(100_000, {}), { nudge: 56_400, warn: 75_200, blockAt: 94_000 });
+  for (const w of [100_000, 128_000, 200_000, 213_000, 266_000]) {
+    const b = thresholds(w, {});
+    assert.ok(b.nudge < b.warn && b.warn < b.blockAt, `ordered at window ${w}`);
+  }
+  // an explicit per-band override still wins over the derived band
+  assert.equal(thresholds(200_000, { CLAUDE_CTX_WARN: '170000' }).warn, 170_000);
+  assert.ok(blockFloored(200_000, {}));
+  assert.ok(!blockFloored(1_000_000, {}));
+  assert.ok(!blockFloored(null, {}));
+});
+
+test('env overrides stay, and junk falls back to the absolute band', () => {
+  assert.equal(thresholds(null, { CLAUDE_CTX_NUDGE: '50000' }).nudge, 50_000);
+  assert.equal(thresholds(null, { CLAUDE_CTX_BLOCK: 'nope' }).blockAt, 250_000);
+  assert.equal(thresholds(null, { CLAUDE_CTX_WARN: '0' }).warn, 200_000);
   assert.deepEqual(thresholds(null, { CLAUDE_CTX_NUDGE: '10', CLAUDE_CTX_WARN: '20', CLAUDE_CTX_BLOCK: '30' }), {
     nudge: 10,
     warn: 20,
     blockAt: 30,
   });
+  // an explicit block override beats the window floor
+  assert.equal(thresholds(200_000, { CLAUDE_CTX_BLOCK: '300000' }).blockAt, 300_000);
+  assert.ok(!blockFloored(200_000, { CLAUDE_CTX_BLOCK: '300000' }));
 });
 
 test('bands split at the thresholds', () => {
-  const t = thresholds(250_000, {});
-  assert.equal(classify(99_999, t), 'ok');
-  assert.equal(classify(100_000, t), 'nudge');
-  assert.equal(classify(174_999, t), 'nudge');
-  assert.equal(classify(175_000, t), 'warn');
-  assert.equal(classify(235_000, t), 'block');
-});
-
-test('thresholds stay env-tunable, and junk overrides fall back to the derived band', () => {
-  assert.equal(thresholds(1_000_000, { CLAUDE_CTX_NUDGE: '50000' }).nudge, 50_000);
-  assert.equal(thresholds(1_000_000, { CLAUDE_CTX_BLOCK: 'nope' }).blockAt, 940_000);
-  assert.equal(thresholds(1_000_000, { CLAUDE_CTX_WARN: '0' }).warn, 700_000);
+  const t = thresholds(null, {});
+  assert.equal(classify(149_999, t), 'ok');
+  assert.equal(classify(150_000, t), 'nudge');
+  assert.equal(classify(199_999, t), 'nudge');
+  assert.equal(classify(200_000, t), 'warn');
+  assert.equal(classify(250_000, t), 'block');
 });
 
 // --- what the messages say ---
 
-test('the nudge does not tell the session to stop work early', () => {
-  // The bug this guards: the old nudge said "Finish the task in flight", which
-  // reads as a cost signal. The gate is auto-compact avoidance, not cost.
-  const t = thresholds(1_000_000, {});
-  const text = nudgeText(450_000, t, 1_000_000);
-  assert.doesNotMatch(text, /finish the task in flight/i);
-  assert.match(text, /never artificially stop a task early/i);
-  assert.match(text, /not cost/i);
+test('nudge says stop at the next green commit, with no auto-compact framing', () => {
+  const text = nudgeText(160_000, thresholds(null, {}));
+  assert.match(text, /160k/);
+  assert.match(text, /next green commit/i);
+  assert.doesNotMatch(text, /auto-compact|not cost|window/i);
 });
 
-test('every message quotes the live window, never a hardcoded 250k', () => {
-  const t = thresholds(1_000_000, {});
-  const texts = [nudgeText(450_000, t, 1_000_000), warnText(750_000, t, 1_000_000), blockText(950_000, t, 1_000_000)];
-  for (const text of texts) {
-    assert.match(text, /1\.0M/);
-    assert.doesNotMatch(text, /250k/);
-  }
-  assert.match(texts[2], /940k/);
-  assert.match(texts[2], /CONTEXT OK/);
+test('warn says checkpoint, then run the continuation skill', () => {
+  const text = warnText(210_000, thresholds(null, {}));
+  assert.match(text, /What\/Verified\/Next\/Ruled out/);
+  assert.match(text, /comment/i);
+  assert.match(text, /continuation\/SKILL\.md/);
+  assert.match(text, /AskUserQuestion/);
+  assert.doesNotMatch(text, /auto-compact|window/i);
+});
+
+test('the window is named only when the floor applied', () => {
+  const t = thresholds(200_000, {});
+  assert.doesNotMatch(nudgeText(160_000, t), /window/);
+  assert.match(nudgeText(160_000, t, 200_000), /200k window/);
+  assert.match(warnText(190_000, t, 200_000), /200k window/);
+  const b = blockText(190_000, t, 200_000);
+  assert.match(b, /200k window/);
+  assert.match(b, /188k/);
+  assert.match(b, /CONTEXT OK/);
+  assert.doesNotMatch(blockText(260_000, thresholds(null, {})), /window|auto-compact/i);
 });
 
 test('bands fire once and only escalate', () => {
@@ -260,68 +281,138 @@ test('readTail returns the end of a file larger than the window', () => {
 
 // --- end-to-end: pipe a payload to the hook, same contract as the others ---
 
-function runHook(prompt, transcript, { window = 1_000_000, env = {} } = {}) {
-  const { home } = claudeHome({ history: window == null ? undefined : sample('e2e', window) });
+/** One hook spawn. A `home` passed in is shared across calls, so state persists. */
+function spawnGauge(payloadExtra, transcript, { window, env = {}, home: given, sid = 'e2e-sid' } = {}) {
+  const home = given ?? claudeHome({ history: window == null ? undefined : sample(sid, window) }).home;
   const t = join(home, 'transcript.jsonl');
   writeFileSync(t, transcript);
-  const payload = JSON.stringify({
-    prompt,
-    session_id: `test-${Math.random().toString(36).slice(2)}`,
-    transcript_path: t,
-  });
+  const payload = JSON.stringify({ session_id: sid, transcript_path: t, ...payloadExtra });
   try {
     const stdout = execHarness(HOOK, [], { input: payload, home, env });
     return { code: 0, stdout, stderr: '' };
   } catch (e) {
     return { code: e.status, stdout: e.stdout || '', stderr: e.stderr || '' };
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    if (!given) rmSync(home, { recursive: true, force: true });
   }
 }
 
-test('on a 1M window a 240k session is quiet — the old 235k block was window-blind', () => {
-  const r = runHook('carry on', line(usage(0, 240_000)));
+const runHook = (prompt, transcript, opts) => spawnGauge({ prompt }, transcript, opts);
+const runPost = (transcript, opts, extra = {}) =>
+  spawnGauge({ hook_event_name: 'PostToolUse', tool_name: 'Bash', ...extra }, transcript, opts);
+const sharedHome = () => claudeHome({}).home;
+
+test('with no window source the absolute bands still fire: 160k nudges, 260k blocks', () => {
+  const n = runHook('carry on', line(usage(0, 160_000)), { window: null });
+  assert.equal(n.code, 0);
+  assert.match(n.stdout, /context-gauge.*160k/s);
+  const b = runHook('keep building', line(usage(0, 260_000)), { window: null });
+  assert.equal(b.code, 2);
+  assert.match(b.stderr, /260k/);
+  assert.match(b.stderr, /\/clear/);
+  assert.match(b.stderr, /CONTEXT OK/);
+});
+
+test('a big window does not delay the bands: 1M window, 260k still blocks', () => {
+  assert.equal(runHook('keep building', line(usage(0, 260_000)), { window: 1_000_000 }).code, 2);
+  assert.equal(runHook('carry on', line(usage(0, 140_000)), { window: 1_000_000 }).stdout.trim(), '');
+});
+
+test('the floor: a 200k window blocks at 188k, via history and via CLAUDE_CTX_WINDOW', () => {
+  const viaHistory = runHook('keep building', line(usage(0, 190_000)), { window: 200_000 });
+  assert.equal(viaHistory.code, 2);
+  assert.match(viaHistory.stderr, /188k/);
+  assert.match(viaHistory.stderr, /200k window/);
+  const viaEnv = runHook('keep building', line(usage(0, 95_000)), { window: null, env: { CLAUDE_CTX_WINDOW: '100000' } });
+  assert.equal(viaEnv.code, 2);
+  assert.match(viaEnv.stderr, /94k/);
+});
+
+test('a slash command is never blocked, and CONTEXT OK overrides the hard stop', () => {
+  assert.equal(runHook('/clear', line(usage(0, 260_000)), { window: null }).code, 0);
+  assert.equal(runHook('CONTEXT OK, finishing this wave', line(usage(0, 260_000)), { window: null }).code, 0);
+});
+
+test('env overrides move the bands end to end', () => {
+  const env = { CLAUDE_CTX_NUDGE: '1000', CLAUDE_CTX_WARN: '2000', CLAUDE_CTX_BLOCK: '3000' };
+  assert.match(runHook('x', line(usage(0, 1500)), { window: null, env }).stdout, /context-gauge.*2k|context-gauge.*1k/s);
+  assert.equal(runHook('x', line(usage(0, 3500)), { window: null, env }).code, 2);
+});
+
+test('PostToolUse emits additionalContext JSON per band and exits 0', () => {
+  const nudge = runPost(line(usage(0, 160_000)), { window: null });
+  assert.equal(nudge.code, 0);
+  const n = JSON.parse(nudge.stdout);
+  assert.equal(n.hookSpecificOutput.hookEventName, 'PostToolUse');
+  assert.match(n.hookSpecificOutput.additionalContext, /160k.*next green commit/s);
+
+  const w = JSON.parse(runPost(line(usage(0, 210_000)), { window: null }).stdout);
+  assert.match(w.hookSpecificOutput.additionalContext, /continuation\/SKILL\.md/);
+
+  const blockRun = runPost(line(usage(0, 260_000)), { window: null });
+  assert.equal(blockRun.code, 0); // a tool that already ran can't be blocked
+  assert.match(JSON.parse(blockRun.stdout).hookSpecificOutput.additionalContext, /260k.*\/clear/s);
+
+  assert.equal(runPost(line(usage(0, 100_000)), { window: null }).stdout.trim(), '');
+});
+
+test('a tool-call payload without hook_event_name is treated as PostToolUse, never blocked', () => {
+  const r = spawnGauge({ tool_name: 'Bash' }, line(usage(0, 260_000)), { window: null });
+  assert.equal(r.code, 0);
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /260k/);
+});
+
+test('PostToolUse skips subagent tool calls (agent_id)', () => {
+  const r = runPost(line(usage(0, 260_000)), { window: null }, { agent_id: 'sub-1' });
   assert.equal(r.code, 0);
   assert.equal(r.stdout.trim(), '');
 });
 
-test('past the derived nudge line it writes a note to stdout and still exits 0', () => {
-  const r = runHook('carry on', line(usage(0, 450_000)));
-  assert.equal(r.code, 0);
-  assert.match(r.stdout, /context-gauge.*450k/s);
-  assert.match(r.stdout, /1\.0M/);
+test('PostToolUse fires each band once per session', () => {
+  const home = sharedHome();
+  try {
+    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
+    assert.equal(runPost(line(usage(0, 165_000)), { home }).stdout.trim(), '');
+    assert.match(runPost(line(usage(0, 210_000)), { home }).stdout, /continuation/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
-test('past the derived hard stop it blocks with exit 2 and names the way out', () => {
-  const r = runHook('keep building', line(usage(0, 950_000)));
-  assert.equal(r.code, 2);
-  assert.match(r.stderr, /950k/);
-  assert.match(r.stderr, /\/clear/);
-  assert.match(r.stderr, /CONTEXT OK/);
+test('state is shared: a nudge on PostToolUse does not re-fire on UserPromptSubmit, and vice versa', () => {
+  const home = sharedHome();
+  try {
+    assert.match(runPost(line(usage(0, 160_000)), { home, sid: 'a' }).stdout, /next green commit/);
+    assert.equal(runHook('go on', line(usage(0, 165_000)), { home, sid: 'a' }).stdout.trim(), '');
+    assert.match(runHook('go on', line(usage(0, 210_000)), { home, sid: 'b' }).stdout, /continuation/);
+    assert.equal(runPost(line(usage(0, 215_000)), { home, sid: 'b' }).stdout.trim(), '');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
-test('a slash command is never blocked — /clear is the escape hatch', () => {
-  // The bug this guards: blocking every prompt at the hard stop also blocks
-  // the command that resolves it, wedging the session with no way out.
-  const r = runHook('/clear', line(usage(0, 950_000)));
-  assert.equal(r.code, 0);
+test('a block announced on PostToolUse is announced once, and UserPromptSubmit still exits 2', () => {
+  const home = sharedHome();
+  try {
+    assert.match(runPost(line(usage(0, 260_000)), { home }).stdout, /additionalContext/);
+    assert.equal(runPost(line(usage(0, 262_000)), { home }).stdout.trim(), '');
+    const prompt = runHook('keep building', line(usage(0, 262_000)), { home });
+    assert.equal(prompt.code, 2);
+    assert.match(prompt.stderr, /\/clear/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
-test('CONTEXT OK overrides the hard stop', () => {
-  const r = runHook('CONTEXT OK, finishing this wave', line(usage(0, 950_000)));
-  assert.equal(r.code, 0);
-});
-
-test('a smaller window blocks earlier — the bands follow the window they are given', () => {
-  const r = runHook('keep building', line(usage(0, 240_000)), { window: 250_000 });
-  assert.equal(r.code, 2);
-  assert.match(r.stderr, /235k/);
-});
-
-test('with no window source the hook stays silent rather than guessing a band', () => {
-  const r = runHook('keep building', line(usage(0, 950_000)), { window: null });
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout.trim(), '');
+test('dropping under the nudge line re-arms the bands for both triggers', () => {
+  const home = sharedHome();
+  try {
+    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
+    assert.equal(runPost(line(usage(0, 20_000)), { home }).stdout.trim(), '');
+    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('a broken transcript path fails open rather than wedging the session', () => {

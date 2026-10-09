@@ -349,9 +349,11 @@
    "kind": "hook",
    "label": "context-gauge",
    "file": "hooks/context-gauge.mjs",
-   "summary": "UserPromptSubmit — forces a checkpoint before silent auto-compact.",
+   "summary": "UserPromptSubmit + PostToolUse — forces a checkpoint before context gets costly.",
    "rules": [
-    "Bands are fractions of the live window"
+    "Bands are absolute tokens: 150k nudge, 200k warn, 250k block",
+    "A known window only floors the block at 0.94 × window",
+    "PostToolUse announces via additionalContext; only UserPromptSubmit blocks"
    ]
   },
   {
@@ -366,10 +368,11 @@
    "kind": "hook",
    "label": "stop-reflect-gate",
    "file": "hooks/stop-reflect-gate.mjs",
-   "summary": "Stop — reminds once per merged PR (a successful gh pr merge in the transcript) to run reflect.",
+   "summary": "Stop — reminds once per merged PR (a successful gh pr merge in the transcript) to run reflect, then to ask clear-or-continue.",
    "rules": [
-    "Reminds, never hard-blocks (since 2026-08-21)",
-    "Once per merge: handled tool_use ids (newest 200) kept in ~/.claude/stop-reflect-gate.json"
+    "Blocks once per merge, never repeatedly (since 2026-08-21)",
+    "Once per merge: handled tool_use ids (newest 200) kept in ~/.claude/stop-reflect-gate.json",
+    "After merge + reflect, blocks once per merge until a clear-or-continue AskUserQuestion is asked (#122)"
    ]
   },
   {
@@ -1064,7 +1067,7 @@
    "from": "hook:context-gauge",
    "to": "phase:cleanup-continuation",
    "kind": "gates",
-   "label": "checkpoint before compact"
+   "label": "checkpoint before context grows costly"
   },
   {
    "from": "hook:session-start",
