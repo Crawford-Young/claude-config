@@ -35,3 +35,4 @@ Rules that survived the profile system:
 - Warm redo beats cold re-dispatch for fixable same-model failures — message the same agent with the findings. Escalations are always fresh dispatches.
 - Zero-output death with a session-limit message is infra, not failure — re-dispatch once after the limit resets.
 - sonnet implementer on scoped harness tasks (2026-10-08, #63 and #75): both had correct behavior, $1.68/run. Each needed one warm redo, and both redos traced to the brief or the agent def, not to capability. Fix the brief before escalating.
+- sonnet implementer skipped the red step in a SendMessage fix round whose brief said only "same scope, same gates" (2026-10-12, claude-config#137); the opus fix brief that said "red→green where it's behavior" got red first. A fix-round message restates red→green.

@@ -5,8 +5,10 @@
 //
 // Prints one markdown payload: the transcript audit of every window renamed
 // <session-name> (audit.mjs --session) with its cost and time (#97), then
-// per-repo git log + diffstat since the unit's first window, then the repo's
-// open `debt` issues that name a file those commits touched (#137).
+// per-repo git log + diffstat of the commits since the unit's first window whose
+// subject names the unit's issue (the name's trailing number: `(#N)` or
+// `<repo>#N`), then the repo's open `debt` issues that name a file those commits
+// touched (#137). A name with no trailing number takes the whole window.
 
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -60,13 +62,42 @@ export function renderDebt({ matched, other, error, truncated }) {
   return lines.join('\n');
 }
 
-/** The rendered debt lines for one repo: issues naming files its commits touched since `since`. */
-export function debtSection(repo, since, run = spawnSync) {
-  const names = git(repo, ['log', '--name-only', '--format=', `--since=${since}`]).out;
-  const touched = [...new Set(names.split('\n').filter(Boolean))];
+/** `<repo>-<N>` → { prefix, issue }; null when the name has no trailing issue number. */
+export function parseUnit(name) {
+  const m = /^(.*)-(\d+)$/.exec(name);
+  return m ? { prefix: m[1], issue: m[2] } : null;
+}
+
+/** Whether a commit subject names the unit's issue: `(#N)` or `<prefix>#N`, on a number boundary. */
+export function namesIssue(subject, { prefix, issue }) {
+  return new RegExp(`\\(#${issue}\\)|(?<![\\w-])${escapeRe(prefix)}#${issue}(?!\\d)`).test(subject);
+}
+
+/** Commits of `repo` since `since`, split into those naming the unit's issue and a count of the rest. */
+export function unitCommits(repo, since, unit) {
+  const rows = git(repo, ['log', '--format=%h\t%s', '--no-decorate', `--since=${since}`]).out.split('\n').filter(Boolean)
+    .map((row) => { const [sha, ...s] = row.split('\t'); return { sha, subject: s.join('\t') }; });
+  const commits = rows.filter((c) => namesIssue(c.subject, unit));
+  return { commits, other: rows.length - commits.length };
+}
+
+/** Files touched by, and a one-line diffstat of, exactly these commits. */
+export function commitChanges(repo, commits) {
+  if (!commits.length) return { files: [], summary: '' };
+  const rows = git(repo, ['show', '--numstat', '--no-renames', '--format=', ...commits.map((c) => c.sha)]).out.split('\n').filter(Boolean).map((r) => r.split('\t'));
+  const files = [...new Set(rows.map((r) => r[2]))];
+  const sum = (i) => rows.reduce((n, r) => n + (Number(r[i]) || 0), 0);
+  return { files, summary: `${files.length} file${files.length === 1 ? '' : 's'} changed, ${sum(0)} insertions(+), ${sum(1)} deletions(-)` };
+}
+
+/** The rendered debt lines for one repo: issues naming the files its unit commits touched. */
+export function debtSection(repo, touched, run = spawnSync) {
   const debt = fetchDebt(repo, run);
   return renderDebt(debt.error ? debt : { ...matchDebt(debt.issues, touched), truncated: debt.truncated });
 }
+
+/** Files touched by every commit since `since` — the unattributed fallback for a name with no issue number. */
+const whole = (repo, since) => [...new Set(git(repo, ['log', '--name-only', '--format=', `--since=${since}`]).out.split('\n').filter(Boolean))];
 
 const minutes = (ms) => `${Math.round(ms / 60e3)} min`;
 
@@ -108,12 +139,25 @@ function main() {
   }
   const since = /^\d{4}-\d{2}-\d{2}$/.test(day) ? `${day}T00:00:00Z` : day;
   log(`\n## Repo activity since ${day}`);
+  const unitId = parseUnit(name);
+  const attributed = new Map();
   for (const repo of repos) {
-    const shortlog = git(repo, ['log', '--oneline', '--no-decorate', `--since=${since}`]);
-    const stat = git(repo, ['diff', '--stat', `HEAD@{${since}}`, 'HEAD']);
     log(`\n### ${repo} (branch ${git(repo, ['branch', '--show-current']).out || 'detached'})`);
-    log(shortlog.out || '(no commits in window)');
-    if (stat.code === 0 && stat.out) log(stat.out.split('\n').slice(-1)[0].trim());
+    if (unitId) {
+      const { commits, other } = unitCommits(repo, since, unitId);
+      const changes = commitChanges(repo, commits);
+      attributed.set(repo, { files: changes.files, issue: unitId.issue, none: !commits.length });
+      if (commits.length) {
+        log(commits.map((c) => `${c.sha} ${c.subject}`).join('\n'));
+        log(changes.summary);
+        if (other) log(`(${other} other commit(s) in the window, not naming #${unitId.issue})`);
+      } else log(`no commits naming #${unitId.issue} since ${day} (${other} other commit(s) in the window)`);
+    } else {
+      const shortlog = git(repo, ['log', '--oneline', '--no-decorate', `--since=${since}`]);
+      const stat = git(repo, ['diff', '--stat', `HEAD@{${since}}`, 'HEAD']);
+      log(shortlog.out || '(no commits in window)');
+      if (stat.code === 0 && stat.out) log(stat.out.split('\n').slice(-1)[0].trim());
+    }
     const dirty = git(repo, ['status', '--porcelain']).out;
     if (dirty) log(`uncommitted: ${dirty.split('\n').filter(Boolean).length} file(s)`);
   }
@@ -125,6 +169,8 @@ function main() {
   log('\n## Open debt in touched code');
   for (const repo of repos) {
     log(`\n### ${repo}`);
-    log(debtSection(repo, since));
+    const a = attributed.get(repo);
+    if (a?.none) log(`(no commits naming #${a.issue}, so no debt matched)`);
+    else log(debtSection(repo, a ? a.files : whole(repo, since), spawnSync));
   }
 }
