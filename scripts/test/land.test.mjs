@@ -308,7 +308,10 @@ function scratchRepo(seedFiles = {}) {
   return { root, origin, cfg, env: { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg } };
 }
 
-/** Land commits on origin/main from a throwaway clone — stands in for a merged PR. */
+/**
+ * Land commits on origin/main from a throwaway clone — stands in for a merged PR.
+ * A `null` content deletes the path.
+ */
 function pushUpstream(root, origin, files, msg) {
   const up = mkdtempSync(join(root, 'up-'));
   // --branch main explicitly: the bare repo's HEAD is an unborn `master`, so a
@@ -317,6 +320,10 @@ function pushUpstream(root, origin, files, msg) {
   sh(up, 'git', ['config', 'user.email', 't@t']);
   sh(up, 'git', ['config', 'user.name', 't']);
   for (const [p, content] of Object.entries(files)) {
+    if (content === null) {
+      sh(up, 'git', ['rm', '-q', p]);
+      continue;
+    }
     mkdirSync(dirname(join(up, p)), { recursive: true });
     writeFileSync(join(up, p), content);
     sh(up, 'git', ['add', p]);
@@ -409,4 +416,135 @@ test('the third failure mode is real: ff-only refuses an incoming path that exis
   writeFileSync(join(cfg, 'hooks', 'new.mjs'), 'alpha\r\n');
   sh(cfg, 'git', ['fetch', 'origin']);
   assert.throws(() => sh(cfg, 'git', ['merge', '--ff-only', 'origin/main']));
+});
+
+// --- sync: another session's live edit in a file the incoming range touches --
+//
+// The main checkout is shared: while one session syncs, another can hold an
+// uncommitted edit in a file the merged PR also changed (skills/agent-factory/
+// SKILL.md vs a881a20, 2026-10-12). sync must carry that edit across the
+// fast-forward — save it, reset it, merge, 3-way re-apply — and on every
+// failure branch leave the edit recoverable.
+
+const SHARED = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\n';
+const lf = (s) => s.replace(/\r\n/g, '\n');
+const crlf = (s) => s.replace(/\n/g, '\r\n');
+const porcelain = (cfg) => sh(cfg, 'git', ['status', '--porcelain', '--untracked-files=no']);
+const head = (cfg) => sh(cfg, 'git', ['rev-parse', 'HEAD']).trim();
+
+/** sync expected to fail: returns the child's combined output. */
+function syncFails(env, files) {
+  const r = spawnHarness(script, ['sync', '--', ...files], { encoding: 'utf8', env });
+  assert.notEqual(r.status, 0, `sync was expected to stop:\n${r.stdout}`);
+  return `${r.stdout}\n${r.stderr}`;
+}
+
+/** A repo where our PR (mine.md) merged alongside an upstream change to shared.md. */
+function overlapRepo(upstreamShared) {
+  const repo = scratchRepo({ 'mine.md': 'v1\n', 'shared.md': SHARED });
+  pushUpstream(repo.root, repo.origin, { 'mine.md': 'v2\n', 'shared.md': upstreamShared }, 'chore: merged PR');
+  writeFileSync(join(repo.cfg, 'mine.md'), 'v2\r\n'); // our live edit that became the PR
+  return repo;
+}
+
+test('sync carries a foreign live edit through an ff-merge that touches the same file', () => {
+  const { cfg, env } = overlapRepo(SHARED.replace('one', 'ONE upstream'));
+  writeFileSync(join(cfg, 'shared.md'), crlf(SHARED.replace('seven', 'SEVEN foreign')));
+
+  const out = runSync(env, ['mine.md']);
+
+  assert.ok(headsMatch(cfg), 'checkout fast-forwarded to origin/main');
+  assert.equal(
+    lf(readFileSync(join(cfg, 'shared.md'), 'utf8')),
+    SHARED.replace('one', 'ONE upstream').replace('seven', 'SEVEN foreign'),
+    'both the incoming change and the foreign edit are present',
+  );
+  assert.equal(porcelain(cfg), ' M shared.md\n', 'the foreign edit is back as an unstaged worktree edit');
+  assert.match(out, /carried.*shared\.md/s, 'says which path it carried');
+});
+
+test('sync stops on a 3-way conflict with main merged, the edit kept and the patch printed', () => {
+  const { cfg, env } = overlapRepo(SHARED.replace('four', 'FOUR upstream'));
+  writeFileSync(join(cfg, 'shared.md'), crlf(SHARED.replace('four', 'FOUR foreign')));
+
+  const out = syncFails(env, ['mine.md']);
+
+  assert.ok(headsMatch(cfg), 'main checkout is on the merged commit');
+  assert.match(out, /conflict/i);
+  assert.match(out, /shared\.md/, 'names the conflicting path');
+  const patch = out.match(/(\S+\.patch)/);
+  assert.ok(patch, `prints the saved patch path:\n${out}`);
+  assert.ok(existsSync(patch[1]), 'the printed patch exists');
+  assert.match(readFileSync(patch[1], 'utf8'), /^\+FOUR foreign/m, 'and holds the foreign edit');
+  assert.match(readFileSync(join(cfg, 'shared.md'), 'utf8'), /FOUR foreign/, 'the edit is in the worktree, as conflict markers');
+  assert.equal(
+    sh(cfg, 'git', ['diff', '--name-only', '--diff-filter=U']),
+    '',
+    'the shared index is left operable, not unmerged',
+  );
+});
+
+test('sync fast path: a live edit the incoming range does not touch is left byte-identical', () => {
+  const { cfg, env } = overlapRepo(SHARED);
+  writeFileSync(join(cfg, 'shared.md'), crlf(SHARED.replace('two', 'TWO foreign')));
+  const before = readFileSync(join(cfg, 'shared.md'));
+
+  const out = runSync(env, ['mine.md']);
+
+  assert.ok(headsMatch(cfg));
+  assert.deepEqual(readFileSync(join(cfg, 'shared.md')), before, 'untouched by the sync');
+  assert.doesNotMatch(out, /carried/i, 'nothing was carried');
+});
+
+test('sync refuses, resetting nothing, when an overlapping edit is staged', () => {
+  const { cfg, env } = overlapRepo(SHARED.replace('one', 'ONE upstream'));
+  writeFileSync(join(cfg, 'shared.md'), crlf(SHARED.replace('seven', 'SEVEN staged')));
+  sh(cfg, 'git', ['add', 'shared.md']);
+  const before = {
+    head: head(cfg),
+    status: porcelain(cfg),
+    shared: readFileSync(join(cfg, 'shared.md')),
+    mine: readFileSync(join(cfg, 'mine.md')),
+  };
+
+  const out = syncFails(env, ['mine.md']);
+
+  assert.match(out, /staged/i);
+  assert.match(out, /shared\.md/);
+  assert.equal(head(cfg), before.head, 'no merge happened');
+  assert.equal(porcelain(cfg), before.status, 'index and worktree state unchanged');
+  assert.deepEqual(readFileSync(join(cfg, 'shared.md')), before.shared);
+  assert.deepEqual(readFileSync(join(cfg, 'mine.md')), before.mine, 'not even the named path was reset');
+});
+
+test('sync refuses, resetting nothing, when the incoming range deletes a locally modified file', () => {
+  const { cfg, env } = overlapRepo(null);
+  writeFileSync(join(cfg, 'shared.md'), crlf(SHARED.replace('seven', 'SEVEN foreign')));
+  const before = { head: head(cfg), shared: readFileSync(join(cfg, 'shared.md')), mine: readFileSync(join(cfg, 'mine.md')) };
+
+  const out = syncFails(env, ['mine.md']);
+
+  assert.match(out, /delet/i);
+  assert.match(out, /shared\.md/);
+  assert.equal(head(cfg), before.head, 'no merge happened');
+  assert.deepEqual(readFileSync(join(cfg, 'shared.md')), before.shared);
+  assert.deepEqual(readFileSync(join(cfg, 'mine.md')), before.mine, 'not even the named path was reset');
+});
+
+test('sync puts a carried edit back when the ff-merge itself fails after the reset', () => {
+  const { root, origin, cfg, env } = overlapRepo(SHARED.replace('one', 'ONE upstream'));
+  pushUpstream(root, origin, { 'new.md': 'upstream\n' }, 'feat: add new.md');
+  // An unnamed untracked file in the way: ff-only refuses AFTER sync reset shared.md.
+  writeFileSync(join(cfg, 'new.md'), 'someone else\r\n');
+  const edited = crlf(SHARED.replace('seven', 'SEVEN foreign'));
+  writeFileSync(join(cfg, 'shared.md'), edited);
+  const before = head(cfg);
+
+  const out = syncFails(env, ['mine.md']);
+
+  assert.match(out, /merge --ff-only stopped/);
+  assert.match(out, /Carried edits were put back\./, 'the reset-then-restore branch really ran');
+  assert.equal(head(cfg), before, 'still on the old commit');
+  assert.equal(lf(readFileSync(join(cfg, 'shared.md'), 'utf8')), lf(edited), 'the carried edit is back');
+  assert.equal(readFileSync(join(cfg, 'new.md'), 'utf8'), 'someone else\r\n');
 });

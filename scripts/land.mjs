@@ -14,9 +14,11 @@
 //        checkout's diff for the named paths (untracked files copied) →
 //        commit. Pushing and opening the PR stay with the user's approval.
 // sync:  verify the live edits match origin/main for those paths, then
-//        restore tracked copies and fast-forward the main checkout.
+//        restore tracked copies and fast-forward the main checkout. Other
+//        sessions' live edits in files the incoming commits also touch are
+//        saved as patches, reset, and 3-way re-applied after the merge.
 
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -147,6 +149,96 @@ function classifySyncPaths(files) {
   return { tracked, adopt };
 }
 
+// NUL-separated git output as a list. -z output is never quoted, so paths with
+// spaces or non-ASCII survive (git()'s trim() could only clip a path that
+// starts with whitespace — not a shape this repo has).
+function zList(repo, args) {
+  const r = git(repo, [...args, '-z']);
+  if (r.code !== 0) die(`git ${args.join(' ')} failed in ${repo}:\n${r.err || r.out}`);
+  return r.out.split('\0').filter(Boolean);
+}
+
+// Another session's uncommitted edit in a file the incoming range also touches
+// makes `merge --ff-only` refuse. Those are the paths to carry across the merge:
+// locally modified (worktree or index vs HEAD), touched by HEAD..origin/main,
+// and not one of the named paths (cmdSync restores those outright, having
+// verified them equal to origin/main).
+//
+// Only an edit that one worktree patch fully represents is safe to reset, so
+// two cases are refused here, before anything has been touched:
+// - staged changes: the index and the worktree can hold two different states
+//   of the file and one patch can't carry both. The main checkout never
+//   commits, so a staged change is someone's deliberate, unusual state.
+// - an incoming deletion (a rename is a deletion under --no-renames): there is
+//   no file left to re-apply onto; whether the edit should move or die is a
+//   human's call.
+function carryPaths(named) {
+  const skip = new Set(named);
+  const incoming = new Map();
+  const status = zList(cfg, ['diff', '--name-status', '--no-renames', 'HEAD', 'origin/main']);
+  for (let i = 0; i < status.length; i += 2) incoming.set(status[i + 1], status[i]);
+  const carry = zList(cfg, ['diff', '--name-only', 'HEAD']).filter((f) => incoming.has(f) && !skip.has(f));
+  if (carry.length === 0) return carry;
+
+  const staged = new Set(zList(cfg, ['diff', '--cached', '--name-only', 'HEAD']));
+  const refuse = [
+    ...carry.filter((f) => staged.has(f)).map((f) => `  ${f} (staged changes)`),
+    ...carry.filter((f) => incoming.get(f) === 'D').map((f) => `  ${f} (incoming commits delete it)`),
+  ];
+  if (refuse.length) {
+    die(
+      `incoming commits touch locally-modified paths sync can't carry — nothing was reset; reconcile by hand:\n` +
+        refuse.join('\n'),
+    );
+  }
+  return carry;
+}
+
+// Save each carried path's worktree diff to its own patch file under the git
+// dir (not the worktree, where it would show up as untracked). Patches are
+// written and read back BEFORE any reset, so every later failure branch still
+// has the edit on disk. Raw spawnSync, not git(): a patch is whitespace-
+// significant to the byte (see cmdStart).
+function saveCarryPatches(carry) {
+  const gitDir = gitOrDie(cfg, ['rev-parse', '--absolute-git-dir']);
+  const dir = join(gitDir, 'land-sync-carry', new Date().toISOString().replace(/[:.]/g, '-'));
+  mkdirSync(dir, { recursive: true });
+  return carry.map((path, i) => {
+    const diff = spawnSync('git', ['-C', cfg, 'diff', '--binary', 'HEAD', '--', path], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (diff.status !== 0) die(`diff failed for ${path} — nothing was reset:\n${diff.stderr}`);
+    const file = join(dir, `${i}-${basename(path)}.patch`);
+    writeFileSync(file, diff.stdout);
+    if (readFileSync(file, 'utf8') !== diff.stdout) die(`could not save ${file} intact — nothing was reset`);
+    return { path, file, empty: !diff.stdout.trim() };
+  });
+}
+
+// Re-apply saved patches; returns the ones that did not apply cleanly. --3way
+// stages a clean result, so the path's index entry goes back to HEAD to leave
+// the edit exactly as it was: unstaged. A conflict leaves markers in the
+// worktree; its unmerged index entry is reset too, so the shared checkout's
+// index stays operable for every other session (the patch keeps the original).
+function applyCarryPatches(saved, threeWay) {
+  const failed = [];
+  for (const p of saved) {
+    if (p.empty) continue;
+    const r = git(cfg, ['apply', ...(threeWay ? ['--3way'] : []), p.file]);
+    if (threeWay) git(cfg, ['reset', '-q', '--', p.path]);
+    if (r.code === 0) rmSync(p.file);
+    else failed.push({ ...p, err: r.err || r.out });
+  }
+  return failed;
+}
+
+// A function declaration, not a const: the command dispatch at the top of this
+// module runs before any const below it is initialized.
+function describeKept(kept) {
+  return kept.map((p) => `  ${p.path}  <- edit saved at ${p.file}`).join('\n');
+}
+
 function cmdSync() {
   const files = paths();
   gitOrDie(cfg, ['fetch', 'origin']);
@@ -157,14 +249,43 @@ function cmdSync() {
     if (drift.out) {
       die(`live edits differ from origin/main for these paths — reconcile before syncing (never discard):\n${drift.out}`);
     }
-    gitOrDie(cfg, ['restore', '--source=HEAD', '--worktree', '--', ...tracked]);
   }
-  // Only after every path has been checked — a die() above must not leave the
-  // checkout half-reverted with files already deleted.
+  if (git(cfg, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']).code !== 0) {
+    die('HEAD is not an ancestor of origin/main — a fast-forward is impossible; nothing was reset.');
+  }
+  const saved = saveCarryPatches(carryPaths(tracked));
+
+  // Every precondition has passed and every carried edit is on disk — only now
+  // reset anything. A die() above must not leave the checkout half-reverted.
+  const reset = [...tracked, ...saved.map((p) => p.path)];
+  if (reset.length) {
+    const r = git(cfg, ['restore', '--source=HEAD', '--worktree', '--', ...reset]);
+    if (r.code !== 0) die(`git restore failed:\n${r.err}${saved.length ? `\ncarried edits are saved:\n${describeKept(saved)}` : ''}`);
+  }
   for (const f of adopt) rmSync(join(cfg, f), { force: true });
 
   const merge = git(cfg, ['merge', '--ff-only', 'origin/main']);
-  if (merge.code !== 0) die(`merge --ff-only stopped:\n${merge.err || merge.out}\nIncoming commits touch a locally-modified path — reconcile by hand.`);
+  if (merge.code !== 0) {
+    // Still on the old HEAD the patches were cut from: they apply as-is.
+    const kept = applyCarryPatches(saved, false);
+    if (saved.length && !kept.length) rmSync(dirname(saved[0].file), { recursive: true, force: true });
+    die(
+      `merge --ff-only stopped:\n${merge.err || merge.out}\nReconcile by hand.` +
+        (saved.length ? ` Carried edits were put back${kept.length ? `, except:\n${describeKept(kept)}` : '.'}` : ''),
+    );
+  }
+
+  const conflicts = applyCarryPatches(saved, true);
+  if (conflicts.length) {
+    die(
+      `main checkout synced to origin/main, but carrying a live edit hit a 3-way conflict in:\n${describeKept(conflicts)}\n` +
+        'The worktree file holds conflict markers; the patch holds the original edit. Resolve by hand.',
+    );
+  }
+  if (saved.length) {
+    rmSync(dirname(saved[0].file), { recursive: true, force: true });
+    log(`carried live edits across the merge: ${saved.map((p) => p.path).join(', ')}`);
+  }
   log('main checkout synced to origin/main.');
 }
 

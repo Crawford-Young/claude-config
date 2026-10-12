@@ -33,6 +33,15 @@ the local copy, re-run the merge — it re-materializes the tracked version.
 If a restore re-materializes CRLF over the index's LF, normalize via
 `git show HEAD:<file> > <file>` and retry.
 
+## `land.mjs sync` and another session's live edit in an incoming file
+
+No manual steps: sync saves the edit as a patch under
+`.git/land-sync-carry/`, resets it, fast-forwards, and `git apply --3way`s it
+back. On a 3-way conflict main is already merged; sync names the paths and
+prints each patch path — resolve the markers by hand, the patch holds the
+original edit. It refuses up front, resetting nothing, when the overlapping
+path has staged changes or the incoming commits delete it.
+
 ## /rewind coverage gap
 
 Checkpoint restore covers the main session's own file edits only — not
