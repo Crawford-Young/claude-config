@@ -1,5 +1,5 @@
 {
-  "$comment": "First-party API $/MTok for audit.mjs. Re-verify against the source when a model ships or audit.mjs warns of an unpriced model. Its cost-state line is no price check: it runs ~10% under by scope (#116).",
+  "$comment": "First-party API $/MTok for audit.mjs. Re-verify against the source when a model ships or audit.mjs warns of an unpriced model. The cost-state total runs ~10% under by scope (#116), so it is no price check; the per-model check on cost-state's own tokens is (#141). A model's \"exception\" is a price Claude Code charges that differs from the published one: dated, named for the fix it waits on, and reported as an exception, not drift.",
   "verified": "2026-10-08",
   "source": "https://platform.claude.com/docs/en/about-claude/pricing",
   "webSearchPer1k": 10,
@@ -7,7 +7,14 @@
     "claude-fable-5-1": { "input": 10, "output": 50, "cacheWrite5m": 12.5, "cacheWrite1h": 20, "cacheRead": 0.25 },
     "claude-opus-5-5": { "input": 4, "output": 20, "cacheWrite5m": 5, "cacheWrite1h": 8, "cacheRead": 0.2 },
     "claude-opus-5": { "input": 5, "output": 25, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5 },
-    "claude-sonnet-5-5": { "input": 2, "output": 10, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.1 },
+    "claude-sonnet-5-5": {
+      "input": 2, "output": 10, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.1,
+      "exception": {
+        "since": "2026-10-12",
+        "price": { "cacheRead": 0.2 },
+        "waitsOn": "Claude Code correcting its Sonnet 5.5 cache-read price to the published $0.10 (CC 2.1.296 already does; drop this once no audited cost-state is from CC 2.1.295 or older)"
+      }
+    },
     "claude-sonnet-5": { "input": 2, "output": 10, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.2 },
     "claude-haiku-4-5": { "input": 1, "output": 5, "cacheWrite5m": 1.25, "cacheWrite1h": 2, "cacheRead": 0.1 }
   }

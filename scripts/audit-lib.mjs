@@ -24,9 +24,14 @@
 //   on every record, output_tokens a partial) lose their output (~45% of the gap);
 //   requests no transcript records (input and cache reads on the models of
 //   background-subagent sessions, Haiku side calls) are ~55%. It also prices Sonnet
-//   5.5 cache reads at 0.1x input, where the published price is 0.05x.
+//   5.5 cache reads at 0.1x input through CC 2.1.295, where the published price is
+//   0.05x; 2.1.296 prices them at 0.05x (#141, 18 of 20 cost-state records fit $0.20 exactly, the 2 on 2.1.296 fit $0.10).
 // - Against cost-state's own per-model tokens prices.json matches within 0.25%, so
-//   the gap is cost-state's wider scope, not a price error.
+//   the gap is cost-state's wider scope, not a price error. That per-model match is
+//   the price check (#141). modelUsage splits no cache-write tier, so the check takes
+//   the 5m/1h ratio from the same file's transcript (point estimate, within 0.7% on
+//   real data); a model with no writes in that file's transcript is only tested
+//   against the 5m-to-1h range and labeled band-checked.
 //
 // Timing facts (#97, verified 2026-10-08, CC 2.1.280):
 // - Every record is stamped when written: an assistant record per content block
@@ -78,6 +83,57 @@ export function priceUsage(u, model, prices) {
     (tk.input * p.input + tk.output * p.output + tk.cacheRead * p.cacheRead + tk.cacheWrite5m * p.cacheWrite5m + tk.cacheWrite1h * p.cacheWrite1h) / MTOK +
     (web * (prices.webSearchPer1k || 0)) / 1000;
   return { usd };
+}
+
+/** Tolerance for the cost-state check, as a fraction. Measured 2026-10-12 on 82 model
+ *  rows (37 files, point estimates from each file's own 5m/1h split, tolerance 0): every
+ *  row is within 0.01% of the published price or of the Sonnet 5.5 exception except
+ *  opus-5-5 (34 rows, max |miss| 0.54%) and opus-5 (6 rows, one at 0.67%), where
+ *  cost-state's unrecorded requests skew the transcript's tier ratio. 1% is that max
+ *  plus margin: a uniform 10% repricing is far outside, a sub-1% drift is not seen. */
+export const PRICE_TOLERANCE = 0.01;
+
+/** modelUsage → the usage record priceUsage reads, `share1h` of the cache writes at 1h. */
+function usageOfModel(u, share1h) {
+  const writes = u.cacheCreationInputTokens || 0;
+  return {
+    input_tokens: u.inputTokens,
+    output_tokens: u.outputTokens,
+    cache_read_input_tokens: u.cacheReadInputTokens,
+    cache_creation: { ephemeral_5m_input_tokens: writes * (1 - share1h), ephemeral_1h_input_tokens: writes * share1h },
+    server_tool_use: { web_search_requests: u.webSearchRequests },
+  };
+}
+
+/** Relative miss of cost-state's $ for one model against prices.json. modelUsage splits
+ *  no cache-write tier, so the split comes from `share1h`, the 1h share of the model's
+ *  writes in the same file's transcript: a point estimate, miss = cost / priced - 1.
+ *  Without it (null) cost-state's $ is only known to lie between every write priced 5m
+ *  and every write priced 1h: a band, miss 0 inside it. null when the model has no price
+ *  or no $. */
+function priceMiss(u, model, prices, share1h) {
+  if (!u.costUSD) return null;
+  const lo = priceUsage(usageOfModel(u, share1h ?? 0), model, prices).usd;
+  if (lo === null) return null;
+  if (share1h !== null) return u.costUSD / lo - 1;
+  const hi = priceUsage(usageOfModel(u, 1), model, prices).usd;
+  return u.costUSD < lo ? u.costUSD / lo - 1 : u.costUSD > hi ? u.costUSD / hi - 1 : 0;
+}
+
+/** One model of a cost-state record: 'ok', 'excepted' (fits only the model's dated
+ *  exception price), or 'drift' with the miss against the published price; `band` marks a
+ *  row checked only against the 5m/1h band. null: unchecked. */
+function checkModelUsage(u, model, prices, share1h, tolerance) {
+  const miss = priceMiss(u, model, prices, share1h);
+  if (miss === null) return null;
+  const band = share1h === null;
+  if (Math.abs(miss) <= tolerance) return { status: 'ok', band };
+  const p = priceFor(model, prices);
+  if (p.exception) {
+    const withException = { ...prices, models: { [model]: { ...p, ...p.exception.price } } };
+    if (Math.abs(priceMiss(u, model, withException, share1h)) <= tolerance) return { status: 'excepted', band };
+  }
+  return { status: 'drift', miss, band };
 }
 
 const depthOf = (u) => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -200,7 +256,7 @@ function refusal(text) {
  *  { sessionId, agent: null | { id, type, model }, window?, name?, timeOnly? } — from
  *  transcriptWindows. Rows key by window, else by sessionId (one window per file).
  *  A timeOnly record feeds its file's timeline and nothing else. */
-export function createCollector({ prices, since, until, installedSkills = [], docPrefixes = [], idleGapMin = IDLE_GAP_MIN }) {
+export function createCollector({ prices, since, until, installedSkills = [], docPrefixes = [], idleGapMin = IDLE_GAP_MIN, tolerance = PRICE_TOLERANCE }) {
   const requests = new Map(); // requestId -> { u, model, day, ctx }
   const lines = new Map(); // sessionId or sessionId/agent -> timeline (#97), per file as windows share idle detection
   const timeOnly = new Set(); // windows fed only so their file's time is whole (--session)
@@ -212,6 +268,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const fileOf = new Map(); // window -> sessionId
   const titleOf = (key) => custom.get(key) || ai.get(fileOf.get(key)) || '';
   const reported = new Map(); // sessionId -> Claude Code's cost-state total (its max)
+  const reportedModels = new Map(); // sessionId -> that record's modelUsage
   const skills = {}, skillReads = {}, slash = {}, docs = {};
   const hookBlocks = {}, hookTimes = {}, hookFires = {};
   const inRange = (ts) => {
@@ -331,7 +388,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       return;
     }
     if (rec.type === 'cost-state') {
-      reported.set(sid, Math.max(reported.get(sid) || 0, rec.totalCostUSD || 0));
+      const total = rec.totalCostUSD || 0;
+      if (total >= (reported.get(sid) || 0)) reportedModels.set(sid, rec.modelUsage || {});
+      reported.set(sid, Math.max(reported.get(sid) || 0, total));
       return;
     }
     if (!inRange(rec.timestamp)) return;
@@ -381,6 +440,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
   function report() {
     const zero = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 });
+    const writeTiers = new Map(); // file + model -> cache-write tokens its transcript records, by tier
     const totals = { requests: 0, usd: 0, tokens: zero() };
     const days = new Map(), sessions = new Map(), agents = {}, agentRuns = {}, unpriced = {}, runUsd = new Map();
     for (const { u, model, day, ctx } of requests.values()) {
@@ -398,6 +458,10 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
       const d = days.get(day) || { day, sessions: new Set(), requests: 0, usd: 0, peakDepth: 0 };
       const win = ctx.window ?? ctx.sessionId;
+      const wk = `${fileOf.get(win)}\n${model}`;
+      const w = writeTiers.get(wk) || writeTiers.set(wk, { m5: 0, h1: 0 }).get(wk);
+      w.m5 += tk.cacheWrite5m;
+      w.h1 += tk.cacheWrite1h;
       d.sessions.add(win);
       d.requests++;
       d.usd += cost;
@@ -433,8 +497,25 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       (windowsOf.get(sid) || windowsOf.set(sid, []).get(sid)).push(s);
     }
     const costState = { files: 0, reportedUsd: 0, computedUsd: 0 };
+    // per model: files checked, files on the exception price, drift misses (%); exceptions: those in use
+    const priceCheck = { models: {}, exceptions: {} };
     for (const [sid, total] of reported) {
       if (!total || !windowsOf.has(sid)) continue;
+      for (const [model, u] of Object.entries(reportedModels.get(sid) || {})) {
+        const wt = writeTiers.get(`${sid}\n${model}`);
+        const share1h = wt && wt.m5 + wt.h1 > 0 ? wt.h1 / (wt.m5 + wt.h1) : null;
+        const res = checkModelUsage(u, model, prices, share1h, tolerance);
+        if (!res) continue;
+        const m = (priceCheck.models[model] ||= { files: 0, excepted: 0, band: 0, drift: [] });
+        m.files++;
+        if (res.band) m.band++;
+        if (res.status === 'excepted') {
+          m.excepted++;
+          const { price, since, waitsOn } = priceFor(model, prices).exception;
+          priceCheck.exceptions[model] = { since, waitsOn, price, published: Object.fromEntries(Object.keys(price).map((k) => [k, priceFor(model, prices)[k]])) };
+        }
+        if (res.status === 'drift') m.drift.push(res.miss * 100);
+      }
       costState.files++;
       costState.reportedUsd += total;
       costState.computedUsd += windowsOf.get(sid).reduce((a, s) => a + s.usd, 0);
@@ -462,6 +543,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       totals,
       unpriced,
       costState,
+      priceCheck,
       days: [...days.values()].map((d) => ({ ...d, sessions: d.sessions.size })).sort((a, b) => a.day.localeCompare(b.day)),
       sessions: [...sessions.values()]
         .map((s) => ({ ...s, title: titleOf(s.sessionId) }))
@@ -792,6 +874,28 @@ const kt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.ro
 const table = (head, rows) => (rows.length ? [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map((r) => `| ${r.join(' | ')} |`)].join('\n') : '_none_');
 const byCount = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
 
+/** The #141 check as report lines: drift warns, an exception is named and dated, a clean check is one line. */
+function priceCheckLines({ models, exceptions }) {
+  const lines = [];
+  const rate = (o) => Object.entries(o).map(([k, v]) => `${k} $${v}`).join(', ');
+  for (const [model, m] of Object.entries(models)) {
+    if (m.drift.length) {
+      const worst = m.drift.reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a));
+      lines.push(`⚠ price drift ${model}: ${m.drift.length} of ${m.files} cost-state files off by up to ${worst.toFixed(1)}% on their own tokens — re-verify prices.json`);
+    }
+  }
+  for (const [model, e] of Object.entries(exceptions)) {
+    lines.push(`exception ${model} (since ${e.since}): ${models[model].excepted} of ${models[model].files} cost-state files fit only ${rate(e.price)} (published ${rate(e.published)}); waits on ${e.waitsOn}`);
+  }
+  const clean = Object.values(models).filter((m) => !m.drift.length).length;
+  const rows = Object.values(models).reduce((a, m) => a + m.files, 0);
+  const band = Object.values(models).reduce((a, m) => a + m.band, 0);
+  if (clean) {
+    lines.push(`price check: ${clean} model${clean === 1 ? '' : 's'} within ${+(PRICE_TOLERANCE * 100).toFixed(3)}% of cost-state on its own tokens (${band} of ${rows} model-files band-checked: no cache writes in the transcript to split 5m/1h, so only the 5m-1h range is tested)`);
+  }
+  return lines;
+}
+
 export function renderMarkdown(r, { top = 15 } = {}) {
   const { totals: t, costState } = r;
   const delta = costState.reportedUsd ? ((costState.computedUsd - costState.reportedUsd) / costState.reportedUsd) * 100 : null;
@@ -802,6 +906,7 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   if (costState.files) {
     out.push(`cost-state (${costState.files} transcripts): computed ${usd(costState.computedUsd)} vs Claude Code's ${usd(costState.reportedUsd)} (Δ ${delta.toFixed(1)}%) · cost-state also counts requests and subagent output the transcripts don't record, so ~10% under is normal (#116): not a price check`);
   }
+  out.push(...priceCheckLines(r.priceCheck));
   for (const [m, x] of Object.entries(r.unpriced)) out.push(`⚠ unpriced model ${m}: ${x.requests} requests, ${kt(x.tokens)} tokens — add it to prices.json`);
   out.push('', '## Per day (UTC)');
   out.push(table(['day', 'sessions', 'requests', '$', 'peak depth'], r.days.map((d) => [d.day, d.sessions, d.requests, usd(d.usd), kt(d.peakDepth)])));

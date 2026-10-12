@@ -195,6 +195,110 @@ test('the cost-state line states its wider scope and never sends you to prices.j
   assert.doesNotMatch(md, /check prices\.json/);
 });
 
+// ---- per-model price check on cost-state's own tokens (#141) ----------------------
+
+/** A cost-state record whose modelUsage is opus-5 at PRICES: 1M in + 1M out = $30 */
+const costStateOf = (modelUsage, totalCostUSD = 1) => ({ type: 'cost-state', sessionId: 's1', totalCostUSD, modelUsage });
+const mu = (o = {}) => ({ inputTokens: 1e6, outputTokens: 1e6, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 30, ...o });
+const checkOf = (prices, record) => {
+  const c = createCollector({ prices });
+  c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
+  c.add(record, MAIN);
+  return c.report().priceCheck;
+};
+
+test('priceCheck: a model whose cost-state $ matches prices.json on its own tokens is ok', () => {
+  const pc = checkOf(PRICES, costStateOf({ 'claude-opus-5': mu() }));
+  assert.deepEqual(pc.models['claude-opus-5'], { files: 1, excepted: 0, band: 1, drift: [] });
+});
+
+test('priceCheck: a $ beyond the 1% tolerance is drift, one inside it is not', () => {
+  const off = checkOf(PRICES, costStateOf({ 'claude-opus-5': mu({ costUSD: 33 }) })); // priced $30 vs $33: cost-state is 10% above
+  assert.equal(off.models['claude-opus-5'].drift.length, 1);
+  assert.ok(Math.abs(off.models['claude-opus-5'].drift[0] - 10) < 0.01, `${off.models['claude-opus-5'].drift}`);
+  const near = checkOf(PRICES, costStateOf({ 'claude-opus-5': mu({ costUSD: 30.05 }) })); // +0.17%
+  assert.deepEqual(near.models['claude-opus-5'].drift, []);
+});
+
+test('priceCheck: cache writes carry no tier in modelUsage, so $ between the all-5m and all-1h price is ok', () => {
+  const w = { cacheCreationInputTokens: 1e6 }; // 5m $6.25, 1h $10 on top of $30
+  const at = (costUSD) => checkOf(PRICES, costStateOf({ 'claude-opus-5': mu({ ...w, costUSD }) })).models['claude-opus-5'].drift;
+  assert.deepEqual(at(36.25), []);
+  assert.deepEqual(at(40), []);
+  assert.deepEqual(at(38), []); // a mix
+  assert.equal(at(41).length, 1); // above the 1h price
+  assert.equal(at(35).length, 1); // below the 5m price
+});
+
+test('priceCheck: web searches are priced', () => {
+  const pc = checkOf(PRICES, costStateOf({ 'claude-opus-5': mu({ webSearchRequests: 100, costUSD: 31 }) })); // 100 x $10/1k
+  assert.deepEqual(pc.models['claude-opus-5'].drift, []);
+});
+
+test('priceCheck: a dated exception is reported as an exception, never as drift, and still catches other drift', () => {
+  const ex = { price: { cacheRead: 1 }, since: '2026-10-12', waitsOn: 'Claude Code pricing cache reads at the published price' };
+  const prices = { ...PRICES, models: { ...PRICES.models, 'claude-opus-5': { ...PRICES.models['claude-opus-5'], exception: ex } } };
+  const read = { cacheReadInputTokens: 1e6 }; // published $0.50, Claude Code $1
+  const pc = checkOf(prices, costStateOf({ 'claude-opus-5': mu({ ...read, costUSD: 31 }) }));
+  assert.deepEqual(pc.models['claude-opus-5'], { files: 1, excepted: 1, band: 1, drift: [] });
+  const published = checkOf(prices, costStateOf({ 'claude-opus-5': mu({ ...read, costUSD: 30.5 }) }));
+  assert.deepEqual(published.models['claude-opus-5'], { files: 1, excepted: 0, band: 1, drift: [] });
+  const other = checkOf(prices, costStateOf({ 'claude-opus-5': mu({ ...read, costUSD: 40 }) }));
+  assert.equal(other.models['claude-opus-5'].drift.length, 1);
+});
+
+test('priceCheck: models with no price or no $ are skipped (the unpriced warning covers them)', () => {
+  const pc = checkOf(PRICES, costStateOf({ 'claude-mystery-9': mu(), 'claude-opus-5': mu({ costUSD: 0 }) }));
+  assert.deepEqual(pc.models, {});
+});
+
+test('priceCheck: renders drift as a warning and an exception as a dated exception', () => {
+  const ex = { price: { cacheRead: 1 }, since: '2026-10-12', waitsOn: 'Claude Code correcting the cache-read price' };
+  const prices = { ...PRICES, models: { ...PRICES.models, 'claude-opus-5': { ...PRICES.models['claude-opus-5'], exception: ex } } };
+  const c = createCollector({ prices });
+  c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
+  c.add(costStateOf({ 'claude-opus-5': mu({ cacheReadInputTokens: 1e6, costUSD: 31 }), 'claude-haiku-4-5': mu({ costUSD: 99 }) }, 130), MAIN);
+  const md = renderMarkdown(c.report());
+  assert.match(md, /⚠ price drift claude-haiku-4-5: 1 of 1 cost-state files off by/);
+  assert.match(md, /exception claude-opus-5 \(since 2026-10-12\): 1 of 1 cost-state files fit only cacheRead \$1 \(published cacheRead \$0\.5\); waits on Claude Code correcting the cache-read price/);
+  assert.doesNotMatch(md, /drift claude-opus-5/);
+});
+
+test('priceCheck: a clean check renders one line', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
+  c.add(costStateOf({ 'claude-opus-5': mu() }), MAIN);
+  assert.match(renderMarkdown(c.report()), /price check: 1 model within [\d.]+% of cost-state on its own tokens \(1 of 1 model-files band-checked/);
+});
+
+// ---- point estimate from the transcript's own 5m/1h split --------------------------
+
+/** One opus-5 request writing 1M at 5m and 1M at 1h (+1M input): $5 + $6.25 + $10 = $21.25; its band is $17.50-$25. */
+const splitRequest = () => asst('r1', usage({ input_tokens: 1e6, cache_creation_input_tokens: 2e6, cache_creation: { ephemeral_5m_input_tokens: 1e6, ephemeral_1h_input_tokens: 1e6 } }));
+const splitCheck = (costUSD) => {
+  const c = createCollector({ prices: PRICES });
+  c.add(splitRequest(), MAIN);
+  c.add(costStateOf({ 'claude-opus-5': mu({ outputTokens: 0, cacheCreationInputTokens: 2e6, costUSD }) }), MAIN);
+  return c.report().priceCheck.models['claude-opus-5'];
+};
+
+test('priceCheck: a uniform 10% repricing inside the 5m/1h band is drift once the file\'s own tier split prices it', () => {
+  const exact = splitCheck(21.25);
+  assert.deepEqual(exact, { files: 1, excepted: 0, band: 0, drift: [] });
+  const off = splitCheck(21.25 * 1.1); // $23.375: inside the band, outside the point
+  assert.equal(off.band, 0);
+  assert.equal(off.drift.length, 1);
+  assert.ok(Math.abs(off.drift[0] - 10) < 0.01, `${off.drift}`);
+});
+
+test('priceCheck: a file with no recorded writes for the model falls back to the band and says so', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
+  c.add(costStateOf({ 'claude-opus-5': mu({ cacheCreationInputTokens: 1e6, costUSD: 38 }) }), MAIN); // between $36.25 and $40
+  const m = c.report().priceCheck.models['claude-opus-5'];
+  assert.deepEqual(m, { files: 1, excepted: 0, band: 1, drift: [] });
+});
+
 test('session titles come from custom-title over ai-title', () => {
   const c = createCollector({ prices: PRICES });
   c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
