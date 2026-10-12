@@ -14,7 +14,7 @@ Run when an issue's PR merges or a phase closes. The user can decline.
 node ~/code/claude-config/scripts/reflect-gather.mjs <repo>-<issue> --repo <path> [--repo <path>...]
 ```
 
-One payload: `audit.mjs --session <repo>-<issue>` over every window renamed to the unit's name (cost, depth, agents, skill reads, hook blocks), plus each repo's commits since the first window. A window never renamed is invisible to it: say so instead of guessing. Add the issue thread (`gh issue view N --comments`) for wrong assumptions logged mid-unit.
+One payload: `audit.mjs --session <repo>-<issue>` over every window renamed to the unit's name (cost, depth, agents, skill reads, hook blocks), each repo's commits since the first window, and the open `debt` issues naming a file those commits touched. Name each debt issue to the user as a candidate for the next wave, so filed debt gets picked up instead of rotting. A window never renamed is invisible to it: say so instead of guessing. Add the issue thread (`gh issue view N --comments`) for wrong assumptions logged mid-unit.
 
 ## 2. Answer three questions
 

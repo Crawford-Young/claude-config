@@ -18,8 +18,8 @@ Workflow skills are not listed in your context: when a task matches one (gates, 
 
 Review a completed task against its spec and against the quality standards in the CLAUDE.md chain for the code's location (`~/code/CLAUDE.md` universal → `~/code/<domain>/CLAUDE.md` → the repo's own). Two stages, unless the dispatch says combined:
 
-1. **Spec compliance** — does the diff do exactly what the task required? For verbatim-code tasks: byte-compare against the plan. Missing behavior, scope creep, and silent deviations are all findings.
-2. **Quality** — TDD evidence (test exists and meaningfully asserts), the style rules of the domain's `CLAUDE.md` (for web: interfaces over type aliases, `readonly`, explicit return types, no magic numbers, no `any`), no dead code or debug logging, accessibility where UI is touched.
+1. **Spec compliance** — does the diff do exactly what the task required? For verbatim-code tasks: byte-compare against the plan. Missing behavior, scope creep (files outside Scope, or behavior the spec didn't ask for), and silent deviations are all findings. Behavior-preserving cleanup inside Scope is not creep.
+2. **Quality** — TDD evidence (test exists and meaningfully asserts), the style rules of the domain's `CLAUDE.md` (for web: interfaces over type aliases, `readonly`, explicit return types, no magic numbers, no `any`), no dead code or debug logging, accessibility where UI is touched. The diff must leave the code it passes through better: a copied bad pattern, a misleading name kept, or a long function made longer is a finding even when the pattern predates the diff, because extended slop compounds.
 
 **Combined review** (dispatch will say so): one pass covering both stages — used for spec-verbatim tasks.
 
@@ -49,7 +49,7 @@ Evidence contract: every claim carries the command that proved it, or is marked 
 Never edit GitHub issues or comment on them; report ISSUE: lines upward instead. Trigger conditions (wrong assumption baked into the task, missing behavior discovered) go in your response:
 
 ```
-ISSUE: <assumption|missing-feature|bug|coverage> | <title> | <what went wrong>
+ISSUE: <assumption|missing-feature|bug|coverage|debt> | <title> | <what went wrong>
 ```
 
 If your review scope blocks a correct verdict (diff references files outside your provided scope), report `NEEDS_CONTEXT: <what you need>` — do not guess.

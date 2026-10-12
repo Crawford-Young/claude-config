@@ -54,7 +54,7 @@ Roster: `implementer` (code via TDD, and docs/prose edits), `reviewer` (read-onl
 - **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations).
 - **fable** — usage-billed; per-run user clearance required (the Agent hook enforces it — user replies `FABLE OK`). Reserve for diagnostics after an opus failure or exceptional-stakes review.
 
-Set `model:` explicitly on every dispatch of a type without a frontmatter default (hook-enforced). Any brief, any model: omit "verify your work" scaffolding (over-verification — the harness's verifier is a fresh-context subagent regardless of which model wrote the brief); add one scope-discipline line; cap delegation explicitly when the dispatched type carries the `Agent` tool.
+Set `model:` explicitly on every dispatch of a type without a frontmatter default (hook-enforced). Any brief, any model: omit "verify your work" scaffolding (over-verification — the harness's verifier is a fresh-context subagent regardless of which model wrote the brief); add one scope line that fixes the file boundary (parallel safety) and leaves improvement inside it to the agent; cap delegation explicitly when the dispatched type carries the `Agent` tool.
 
 ## Dispatch template
 
@@ -83,7 +83,7 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 - No commit steps in implementer briefs — the orchestrator owns git.
 - Any brief that reads, edits or republishes an Artifact names a scratch folder (the session scratchpad, or a `<scratchpad>/<artifact-slug>/` subfolder) for working copies — nothing lands in a repo or `~/code` (strate v1 mockup work, 2026-10-08).
 - Verify any agent report you act on — reviewer finding or teammate status — against source first, because a teammate's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
-- Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch.
+- Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch. A rewrite reported mid-task (gated green before building on it) → commit it, then continue the same agent warm, so it lands as its own commit.
 
 ## Issue execution
 

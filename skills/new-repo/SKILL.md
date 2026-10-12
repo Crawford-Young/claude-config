@@ -96,7 +96,7 @@ Work through the chosen path in order. Check each off as it completes.
 #### CI & Publishing
 - [ ] `.github/workflows/ci.yml` — check job + e2e job, see TEMPLATES.md's 'GitHub Actions CI' section
 - [ ] `.github/dependabot.yml` — npm + github-actions, weekly schedule
-- [ ] `gh label create in-progress` once the GitHub repo exists — tracking runs on its issues
+- [ ] `gh label create in-progress` and `gh label create debt` once the GitHub repo exists — tracking runs on its issues
 - [ ] If published package: `tsup.config.ts`, Changesets init, `src/index.ts` barrel export
 
 #### Published Package Extra (if applicable)

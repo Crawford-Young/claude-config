@@ -4,7 +4,7 @@ Governs every project in this workspace. Stack rules live in the domain file; th
 
 ## Philosophy
 
-**The simplest way to complete the task: lowest cost, tokens and time.** Every resident line is paid on every turn and dilutes recall. So it stays only with evidence (an `audit.mjs` count, an incident or a measurement), placed per the `harness-editing` ladder.
+**The simplest way to complete the task: lowest cost, tokens and time.** Every resident line is paid on every turn and dilutes recall, so it needs evidence.
 **No outdated-tech bias:** pinned tools, models and vendors carry `verified: YYYY-MM` and are re-checked on evidence, migrated when it says so.
 
 ## Domains
@@ -29,7 +29,7 @@ GitHub issues, via plain `gh`: harness/cross-repo work in claude-config, project
 - **Order:** issue (user approves its Done-when) → plan mode if the shape is open → execute without per-change approval → pause only when done, blocked, or the plan needs revision.
 - **Resume state = commit bodies:** `What:` / `Verified:` (cmd → rc) / `Next:` / `Ruled out:`. A cold session resumes from the last `Next:` plus Done-when. The user renames each unit session `/rename <repo>-<issue>`.
 - **Bugs and wrong assumptions** found mid-wave → a comment on the issue, or a new `bug` issue. Subagents report `ISSUE:` lines upward instead.
-- **Follow-ups found mid-task** — a pre-existing bug or nearby improvement goes in the summary as a follow-up line, not into this wave's change, unless the requested behavior cannot work without it.
+- **Leave it better:** code a change passes through is brought to standard in the same PR (up to a rewrite, in its own commit), since extended slop compounds. Match the repo's conventions, not its mistakes. A rewrite pins behavior first: tests, or byte-identical output on frozen inputs. Debt outside the touched code → a filed `debt` issue naming its files; commit-body follow-ups never got filed (#137).
 
 ## Git
 
