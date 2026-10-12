@@ -15,6 +15,18 @@
 //   ai-title and agent-name records carry auto names, not unit names (#73).
 //   A launch name (claude --bg -n <name>) writes the same record (2.1.280).
 //
+// cost-state facts (#116, measured 2026-10-12 on 29 sessions, CC 2.1.263-2.1.295):
+// - A {type:'cost-state'} record is Claude Code's running total for the session,
+//   written at exit or /clear (work in a later resume that never exits has none).
+// - It runs ~10% over what the transcripts hold, and none of the difference is on
+//   disk: subagent requests that persist only a mid-stream usage (stop_reason null
+//   on every record, output_tokens a partial) lose their output (~45% of the gap);
+//   requests no transcript records (input and cache reads on the models of
+//   background-subagent sessions, Haiku side calls) are ~55%. It also prices Sonnet
+//   5.5 cache reads at 0.1x input, where the published price is 0.05x.
+// - Against cost-state's own per-model tokens prices.json matches within 0.25%, so
+//   the gap is cost-state's wider scope, not a price error.
+//
 // Timing facts (#97, verified 2026-10-08, CC 2.1.280):
 // - Every record is stamped when written: an assistant record per content block
 //   as it finishes streaming, a tool_result when its tool returns. A tool starts at
@@ -391,7 +403,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
 
-    // cost-state is per transcript file: its total against the sum of the file's windows
+    // cost-state is per transcript file: its total against the sum of the file's windows.
+    // It counts more than the transcripts hold (see the header): coverage, not a price check
     let checked = 0, reportedUsd = 0, computedUsd = 0;
     for (const [sid, reported] of costState) {
       const ws = [...sessions.values()].filter((s) => fileOf.get(s.sessionId) === sid);
@@ -708,7 +721,7 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   out.push(`${t.requests} requests · **${usd(t.usd)}** API-equivalent · prices verified ${r.pricesVerified}`);
   out.push(`tokens: input ${kt(t.tokens.input)} · output ${kt(t.tokens.output)} · cache read ${kt(t.tokens.cacheRead)} · cache write 5m ${kt(t.tokens.cacheWrite5m)} · 1h ${kt(t.tokens.cacheWrite1h)}`);
   if (cc.sessions) {
-    out.push(`cross-check vs Claude Code's cost-state (${cc.sessions} sessions): computed ${usd(cc.computedUsd)} vs reported ${usd(cc.reportedUsd)} (Δ ${delta.toFixed(1)}%)${Math.abs(delta) > 5 ? ' ⚠ over 5% — check prices.json' : ''}`);
+    out.push(`cost-state (${cc.sessions} sessions): computed ${usd(cc.computedUsd)} vs Claude Code's ${usd(cc.reportedUsd)} (Δ ${delta.toFixed(1)}%) · cost-state also counts requests and subagent output the transcripts don't record, so ~10% under is normal (#116): not a price check`);
   }
   for (const [m, x] of Object.entries(r.unpriced)) out.push(`⚠ unpriced model ${m}: ${x.requests} requests, ${kt(x.tokens)} tokens — add it to prices.json`);
   out.push('', '## Per day (UTC)');

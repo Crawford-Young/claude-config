@@ -183,6 +183,16 @@ test('cost-state cross-check compares computed $ with Claude Code\'s own total p
   assert.equal(r.crossCheck.computedUsd, 5);
 });
 
+test('the cost-state line states its wider scope and never sends you to prices.json (#116)', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(asst('r1', usage({ input_tokens: 1e6 })), MAIN);
+  c.add({ type: 'cost-state', sessionId: 's1', totalCostUSD: 10 }, MAIN);
+  const md = renderMarkdown(c.report());
+  assert.match(md, /cost-state \(1 sessions\): computed \$5\.00 vs Claude Code's \$10\.00 \(Δ -50\.0%\)/);
+  assert.match(md, /not a price check/);
+  assert.doesNotMatch(md, /check prices\.json/);
+});
+
 test('session titles come from custom-title over ai-title', () => {
   const c = createCollector({ prices: PRICES });
   c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);

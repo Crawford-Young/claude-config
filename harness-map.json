@@ -657,7 +657,7 @@
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state cross-check, custom-title session names, timestamp timelines for the time dimension."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, custom-title session names, timestamp timelines for the time dimension."
   },
   {
    "id": "store:push-gate-approvals",

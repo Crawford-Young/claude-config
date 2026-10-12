@@ -1,5 +1,5 @@
 {
-  "$comment": "First-party API $/MTok for audit.mjs. Re-verify against the source when a model ships or audit.mjs warns: an unpriced model, or a cost-state cross-check Δ over 5%.",
+  "$comment": "First-party API $/MTok for audit.mjs. Re-verify against the source when a model ships or audit.mjs warns of an unpriced model. Its cost-state line is no price check: it runs ~10% under by scope (#116).",
   "verified": "2026-10-08",
   "source": "https://platform.claude.com/docs/en/about-claude/pricing",
   "webSearchPer1k": 10,
