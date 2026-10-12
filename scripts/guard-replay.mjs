@@ -4,6 +4,7 @@
 // Replays unique Bash/PowerShell commands through staticCheck, gatedVerbs and browserCommand,
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
+// Stateless rules only: a branchRules change also needs old-vs-new probes on an unborn and a born repo (#138).
 // Transcripts: <CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/*.jsonl and projects/*/<session>/subagents/*.jsonl, last --days (default 7) or newest --files.
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
