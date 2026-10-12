@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, splitWindows, transcriptWindows } from '../audit-lib.mjs';
+import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
 const PRICES = {
@@ -172,15 +172,17 @@ test('hook blocks, stop-hook durations and attachment fires are tallied; replaye
   assert.equal(r.hooks.fires['SessionStart:startup hook_success'], 1);
 });
 
-test('cost-state cross-check compares computed $ with Claude Code\'s own total per session', () => {
+test('costState: Claude Code\'s own running total per transcript file (its latest), beside the computed $', () => {
   const c = createCollector({ prices: PRICES });
   c.add(asst('r1', usage({ input_tokens: 1e6 })), MAIN);
   c.add({ type: 'cost-state', sessionId: 's1', totalCostUSD: 4 }, MAIN);
   c.add({ type: 'cost-state', sessionId: 's1', totalCostUSD: 5 }, MAIN);
+  c.add({ type: 'cost-state', sessionId: 's9', totalCostUSD: 3 }, { sessionId: 's9', agent: null }); // no request: nothing to set beside
+  c.add(asst('r8', usage({ input_tokens: 1e6 })), { sessionId: 's8', agent: null });
+  c.add({ type: 'cost-state', sessionId: 's8', totalCostUSD: 0 }, { sessionId: 's8', agent: null }); // a zero total reports nothing
   const r = c.report();
-  assert.equal(r.crossCheck.sessions, 1);
-  assert.equal(r.crossCheck.reportedUsd, 5);
-  assert.equal(r.crossCheck.computedUsd, 5);
+  assert.equal(r.crossCheck, undefined);
+  assert.deepEqual(r.costState, { files: 1, reportedUsd: 5, computedUsd: 5 });
 });
 
 test('the cost-state line states its wider scope and never sends you to prices.json (#116)', () => {
@@ -188,7 +190,7 @@ test('the cost-state line states its wider scope and never sends you to prices.j
   c.add(asst('r1', usage({ input_tokens: 1e6 })), MAIN);
   c.add({ type: 'cost-state', sessionId: 's1', totalCostUSD: 10 }, MAIN);
   const md = renderMarkdown(c.report());
-  assert.match(md, /cost-state \(1 sessions\): computed \$5\.00 vs Claude Code's \$10\.00 \(Δ -50\.0%\)/);
+  assert.match(md, /cost-state \(1 transcripts\): computed \$5\.00 vs Claude Code's \$10\.00 \(Δ -50\.0%\)/);
   assert.match(md, /not a price check/);
   assert.doesNotMatch(md, /check prices\.json/);
 });
@@ -221,6 +223,11 @@ test('sessions group by their custom-title name across windows; unnamed sessions
 const title = (customTitle) => ({ type: 'custom-title', customTitle });
 const said = (ts) => ({ type: 'assistant', timestamp: ts });
 const typed = (ts) => ({ type: 'user', timestamp: ts });
+const splitWindows = (recs) => {
+  const split = windowSplitter();
+  for (const rec of recs) split.push(rec);
+  return split.windows();
+};
 const shape = (recs) => splitWindows(recs).map((w) => [w.name, w.first]);
 
 test('splitWindows: each change of custom-title starts a window; a repeat title does not', () => {
@@ -282,11 +289,22 @@ function windowFixture() {
 
 async function auditRoot(root) {
   const c = createCollector({ prices: PRICES });
-  for await (const { parts } of transcriptWindows(root)) for (const { ctx, recs } of parts) for (const rec of recs) c.add(rec, ctx);
+  for await (const { records } of transcriptWindows(root)) for await (const { rec, ctx } of records) c.add(rec, ctx);
   return c.report();
 }
 
-test('transcriptWindows: one session row per window, titled by its name; subagents join the window live at their first record', async () => {
+/** [file, window, name, record count] per window, sorted. */
+async function windowShape(root) {
+  const seen = [];
+  for await (const { file, windows, records } of transcriptWindows(root)) {
+    const n = new Map(windows.map((w) => [w, 0]));
+    for await (const { ctx } of records) n.set(ctx, n.get(ctx) + 1);
+    for (const [ctx, k] of n) seen.push([file.split(/[\\/]/).pop(), ctx.window, ctx.name, k]);
+  }
+  return seen.sort((x, y) => `${x[0]}${x[1]}`.localeCompare(`${y[0]}${y[1]}`));
+}
+
+test('transcriptWindows: one session row per window, titled by its name; subagents join the window live at their earliest stamp', async () => {
   const root = windowFixture();
   try {
     const r = await auditRoot(root);
@@ -302,22 +320,21 @@ test('transcriptWindows: one session row per window, titled by its name; subagen
     assert.deepEqual(r.time.names.map((g) => [g.name, g.windows]).sort(), [['a', 1], ['b', 1], ['c', 1], ['d', 1]]);
     assert.deepEqual(r.time.agentRuns.map((a) => [a.id, a.sessionId]), [['x', 'f#2']]);
     // cost-state stays per transcript file: f's reported total against the sum of its windows
-    assert.deepEqual(r.crossCheck, { sessions: 1, reportedUsd: 27, computedUsd: 27 });
+    assert.deepEqual(r.costState, { files: 1, reportedUsd: 27, computedUsd: 27 });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('transcriptWindows: ctx carries the window key and name; a subagent before every window joins the first; one with no parent transcript stays unnamed', async () => {
+test('transcriptWindows: ctx carries the window key and name; a subagent before every window joins the first, one stamped at a window\'s start joins it; one with no parent transcript stays unnamed', async () => {
   const root = windowFixture();
   try {
     mkdirSync(join(root, 'C--proj', 'orphan', 'subagents'), { recursive: true });
     writeFileSync(join(root, 'C--proj', 'orphan', 'subagents', 'agent-z.jsonl'), jsonl(asst('z1', usage(), { ts: T(50) })));
     writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-early.jsonl'), jsonl(asst('e1', usage(), { ts: '2026-10-05T09:59:00Z' })));
-    const seen = [];
-    for await (const { file, parts } of transcriptWindows(root)) for (const { ctx, recs } of parts) seen.push([file.split(/[\\/]/).pop(), ctx.window, ctx.name, recs.length]);
-    seen.sort((x, y) => `${x[0]}${x[1]}`.localeCompare(`${y[0]}${y[1]}`));
-    assert.deepEqual(seen, [
+    writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-at.jsonl'), jsonl(asst('t1', usage(), { ts: T(10) }))); // b's first stamp
+    assert.deepEqual(await windowShape(root), [
+      ['agent-at.jsonl', 'f#2', 'b', 1],
       ['agent-early.jsonl', 'f', 'a', 1],
       ['agent-x.jsonl', 'f#2', 'b', 1],
       ['agent-y.jsonl', 'f#3', 'c', 1],
@@ -331,6 +348,64 @@ test('transcriptWindows: ctx carries the window key and name; a subagent before 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('transcriptWindows: a resumed file\'s replayed records stay with the transcript that holds them first, out of its split and its records (strate parity)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'audit-replay-'));
+  try {
+    const proj = join(root, 'C--proj');
+    mkdirSync(proj, { recursive: true });
+    const original = [{ type: 'user', uuid: 'a-u0', timestamp: T(0), message: { content: 'go' } }, asst('a1', usage({ input_tokens: 1e6 }), { ts: T(1) })];
+    writeFileSync(join(proj, 'a.jsonl'), jsonl(...original, title('a')));
+    // the resume replays a's records (same uuids) under the carried name, then renames
+    writeFileSync(join(proj, 'b.jsonl'), jsonl(...original, title('a'), title('b'),
+      { type: 'user', uuid: 'b-u0', timestamp: T(10), message: { content: 'resumed' } }, asst('b1', usage({ input_tokens: 1e6 }), { ts: T(11) })));
+    assert.deepEqual(await windowShape(root), [['a.jsonl', 'a', 'a', 3], ['b.jsonl', 'b', 'b', 4]]);
+    const r = await auditRoot(root);
+    assert.deepEqual(r.sessions.map((s) => [s.sessionId, s.title, s.requests]).sort(), [['a', 'a', 1], ['b', 'b', 1]]);
+    assert.deepEqual(r.time.sessions.map((s) => [s.sessionId, s.wallMs / 60e3]).sort(), [['a', 1], ['b', 1]]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('transcriptWindows: a uuid repeated within one file is read once, as a replay is', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'audit-repeat-'));
+  try {
+    mkdirSync(join(root, 'C--proj'), { recursive: true });
+    const said1 = asst('p1', usage({ input_tokens: 1e6 }), { ts: T(1) });
+    writeFileSync(join(root, 'C--proj', 'p.jsonl'), jsonl({ type: 'user', uuid: 'p-u0', timestamp: T(0), message: { content: 'go' } }, said1, said1));
+    assert.deepEqual(await windowShape(root), [['p.jsonl', 'p', undefined, 2]]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('transcriptWindows: a file removed between its split and its records yields no records instead of throwing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'audit-gone-'));
+  try {
+    mkdirSync(join(root, 'C--proj'), { recursive: true });
+    const file = join(root, 'C--proj', 'q.jsonl');
+    writeFileSync(file, jsonl(asst('q1', usage(), { ts: T(1) })));
+    let n = 0;
+    for await (const { records } of transcriptWindows(root)) {
+      rmSync(file);
+      for await (const _ of records) n++;
+    }
+    assert.equal(n, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an empty custom-title is no name: it neither splits a window nor clears its name', () => {
+  assert.deepEqual(shape([title('a'), said(), title(''), said()]), [['a', 0]]);
+  const c = createCollector({ prices: PRICES });
+  const ctx = { sessionId: 's1', agent: null, window: 's1', name: 'a' };
+  feed(c, ctx, title('a'), asst('e1', usage({ input_tokens: 1e6 })), title(''), asst('e2', usage({ input_tokens: 1e6 })));
+  const r = c.report();
+  assert.deepEqual(r.sessions.map((s) => [s.sessionId, s.title]), [['s1', 'a']]);
+  assert.deepEqual(r.names.map((g) => [g.name, g.windows, g.usd]), [['a', 1, 10]]);
 });
 
 test('walkTranscripts finds main sessions and subagents with their meta agentType', async () => {
@@ -603,6 +678,52 @@ test('time: a timeOnly window feeds its file\'s idle detection but reports nothi
   const r = c.report();
   assert.deepEqual(r.time.sessions.map((s) => [s.sessionId, sec(s.wallMs), sec(s.idleMs)]), [['s1#2', 86, 0]]);
   assert.deepEqual([r.totals.requests, r.time.agentRuns.length, r.inline.length, Object.keys(r.time.tools)], [2, 0, 0, []]);
+});
+
+test('time: a window whose first stamp runs back before the previous window\'s start begins at its first stamp after it (#115)', () => {
+  const c = createCollector({ prices: PRICES });
+  const one = { sessionId: 's1', agent: null, window: 's1', name: 'one' };
+  const two = { sessionId: 's1', agent: null, window: 's1#2', name: 'two' };
+  feed(c, one, human(10), say(20, 'r1', [], 'end_turn'));
+  // two's first record carries an earlier stamp: stamps run backwards in real files
+  feed(c, two, { type: 'system', subtype: 'informational', uuid: 'late1', timestamp: at(5) }, human(30), say(40, 'r2', [], 'end_turn'));
+  const t = c.report().time;
+  assert.deepEqual(t.sessions.map((s) => [s.sessionId, sec(s.wallMs)]).sort((x, y) => x[0].localeCompare(y[0])), [['s1', 25], ['s1#2', 10]]);
+  assert.equal(sec(t.totals.wallMs), 35, 'the windows still tile the file');
+});
+
+test('time: a window whose every stamp runs back before the previous start is empty; the window before it runs on to the next start', () => {
+  const c = createCollector({ prices: PRICES });
+  const w = (window) => ({ sessionId: 's1', agent: null, window });
+  const sys = (s) => ({ type: 'system', subtype: 'informational', uuid: `y${tn++}`, timestamp: at(s) });
+  feed(c, w('s1'), human(10), say(20, 'r1', [], 'end_turn'));
+  feed(c, w('s1#2'), sys(5), sys(6));
+  feed(c, w('s1#3'), human(30), say(40, 'r3', [], 'end_turn'));
+  const t = c.report().time;
+  assert.deepEqual(t.sessions.map((s) => [s.sessionId, sec(s.wallMs)]).sort((x, y) => x[0].localeCompare(y[0])), [['s1', 25], ['s1#2', 0], ['s1#3', 10]]);
+  assert.equal(sec(t.totals.wallMs), 35);
+});
+
+test('time: a replayed record never starts a window; the window starts at its first record timed here', () => {
+  const c = createCollector({ prices: PRICES });
+  const w = (window) => ({ sessionId: 's1', agent: null, window });
+  const old = human(25);
+  c.add(old, { sessionId: 's0', agent: null }); // timed in the file that holds it first
+  feed(c, w('s1'), human(10), say(20, 'r1', [], 'end_turn'));
+  feed(c, w('s1#2'), old, human(30), say(40, 'r2', [], 'end_turn'));
+  const rows = c.report().time.sessions.filter((s) => s.sessionId.startsWith('s1'));
+  assert.deepEqual(rows.map((s) => [s.sessionId, sec(s.wallMs)]).sort((x, y) => x[0].localeCompare(y[0])), [['s1', 20], ['s1#2', 10]]);
+});
+
+test('time: a failure retried in a timeOnly window counts as retried, as in the whole-root run; the timeOnly failure is not counted', () => {
+  const c = createCollector({ prices: PRICES });
+  const one = { sessionId: 's1', agent: null, window: 's1', name: 'one' };
+  const two = { sessionId: 's1', agent: null, window: 's1#2', name: 'two', timeOnly: true };
+  feed(c, one, human(0), say(10, 'r1', [use('b1', 'Bash', { command: 'x' })]), result(11, 'b1', 'Exit code 1\nboom', true));
+  feed(c, two, human(20), say(30, 'r2', [use('b2', 'Bash', { command: 'x' })]), result(31, 'b2', 'Exit code 2\nagain', true),
+    say(40, 'r3', [use('b3', 'Bash', { command: 'x' })]), result(41, 'b3'));
+  const { errors } = c.report().time.retry;
+  assert.deepEqual(errors, { Bash: { count: 1, retried: 1, unresolved: 0, ms: 20000, reasons: { 'Exit code 1': { count: 1, ms: 20000 } } } });
 });
 
 test('walkTranscripts skips an unreadable directory and keeps walking', async () => {

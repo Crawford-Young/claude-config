@@ -142,7 +142,7 @@
    "kind": "skill",
    "label": "plan",
    "file": "skills/plan/SKILL.md",
-   "summary": "Plan-mode conventions: issue-as-spec, commit-body cadence, five plan-time checks, design-fork debate.",
+   "summary": "Plan-mode conventions: issue-as-spec, commit-body cadence, plan-time checks (incl. the state of the landing code), design-fork debate.",
    "rules": [
     "Spec first when the shape is open"
    ]
@@ -502,7 +502,7 @@
    "kind": "script",
    "label": "reflect-gather.mjs",
    "file": "scripts/reflect-gather.mjs",
-   "summary": "A unit's evidence via audit.mjs --session <name> plus per-repo git activity, in one payload."
+   "summary": "A unit's evidence via audit.mjs --session <name>, per-repo git activity, and the open debt issues (gh) naming files the unit touched, in one payload."
   },
   {
    "id": "script:cleanup",
@@ -657,7 +657,7 @@
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, custom-title session names, timestamp timelines for the time dimension."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per /rename (streamed, replays kept with the first transcript read), timestamp timelines for the time dimension."
   },
   {
    "id": "store:push-gate-approvals",

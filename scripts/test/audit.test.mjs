@@ -94,7 +94,7 @@ test('--session keeps only the /rename windows of that name inside a renamed tra
     assert.deepEqual(eleven.names.map((g) => [g.name, g.windows, g.requests]), [['unit-11', 1, 3]]);
     const twelve = run('unit-12');
     // a slice of a transcript is not checked against the whole file's cost-state
-    assert.equal(twelve.crossCheck.sessions, 0);
+    assert.equal(twelve.costState.files, 0);
     // unit-11's subagent still keeps unit-12's wait active, as in a whole-root run
     assert.deepEqual([twelve.totals.requests, twelve.time.totals.wallMs, twelve.time.totals.idleMs], [2, 20 * 60e3, 0]);
     assert.equal(twelve.time.agentRuns.length, 0);

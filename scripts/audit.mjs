@@ -49,20 +49,18 @@ const c = createCollector({
 
 let files = 0;
 const live = new Set(); // sessionIds with a kept window
-for await (const { parts } of transcriptWindows(o.root)) {
-  const kept = o.session ? parts.filter((p) => p.ctx.name === o.session) : parts;
-  const { sessionId, agent } = parts[0].ctx;
+for await (const { windows, records } of transcriptWindows(o.root)) {
+  const kept = o.session ? windows.filter((w) => w.name === o.session) : windows;
+  const { sessionId, agent } = windows[0];
   if (kept.length) {
     files++;
     if (!agent) live.add(sessionId);
   } else if (!live.has(sessionId)) continue;
   // the file's other windows still feed its timeline, so idle time matches the whole-root run;
-  // cost-state totals the whole file: a slice of it has nothing to check against
-  const whole = kept.length === parts.length;
-  for (const p of parts) {
-    const ctx = kept.includes(p) ? p.ctx : { ...p.ctx, timeOnly: true };
-    for (const rec of p.recs) if (whole || rec?.type !== 'cost-state') c.add(rec, ctx);
-  }
+  // cost-state totals the whole file: a slice of it has nothing to stand beside
+  const whole = kept.length === windows.length;
+  const feed = new Map(windows.map((w) => [w.window, kept.includes(w) ? w : { ...w, timeOnly: true }]));
+  for await (const { rec, ctx } of records) if (whole || rec?.type !== 'cost-state') c.add(rec, feed.get(ctx.window));
 }
 if (o.session && !files) {
   console.error(`no session named ${o.session} — rename the unit's windows with /rename ${o.session}`);
