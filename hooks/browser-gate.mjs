@@ -14,7 +14,7 @@
 //
 // Fails CLOSED, like the other guards: an unreadable transcript blocks.
 
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { block, browserGateReason, run } from './_hooklib.mjs';
 
 const CHROME = /^mcp__claude-in-chrome__(.+)$/;
@@ -26,7 +26,7 @@ export function isGatedBrowserTool(name) {
   return Boolean(m) && !READ_ONLY.has(m[1]);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   run(
     'browser-gate',
     (payload) => {

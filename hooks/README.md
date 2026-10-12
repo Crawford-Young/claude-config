@@ -123,7 +123,7 @@ Keep the settings `deny` rules for `git add -A` forms — the two layers
 - Unit-test by piping JSON to stdin: `echo '{"tool_input":{"command":"git add -A"}}' | node hooks/bash-guard.mjs` — tests live in `scripts/test/`, run `node --test scripts/test/*.test.mjs`.
 - Hook wiring reloads live — no session restart needed to verify new wiring.
 - Env overrides for tests/remotes: `CLAUDE_WORKSPACE_ROOT`, `CLAUDE_CONFIG_REPO`.
-- A hook that a test imports must guard its `run()` behind an `import.meta.url === pathToFileURL(process.argv[1]).href` check — an unguarded import blocks forever reading stdin.
+- A hook that a test imports must guard its `run()` behind an `isMain(import.meta.url)` check (`scripts/lib.mjs`, realpath-based so junctions work) — an unguarded import blocks forever reading stdin.
 
 ## Context-gauge thresholds
 

@@ -28,7 +28,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { block, claudeDir, readState, run, shellSkillReads, writeState } from './_hooklib.mjs';
 import { clauses, gatedVerbs, scrub } from './bash-guard.mjs';
 
@@ -121,7 +121,7 @@ export function continuationAsked(text, after) {
   return false;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isMain(import.meta.url)) main();
 
 function main() {
   run('stop-reflect-gate', (payload) => {

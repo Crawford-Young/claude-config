@@ -11,7 +11,7 @@
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { claudeDir, run } from './_hooklib.mjs';
 import { gitInfo } from '../statusline/statusline.mjs';
 
@@ -50,4 +50,4 @@ function prune(dir, now) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run('active-repo', (payload) => record(payload));
+if (isMain(import.meta.url)) run('active-repo', (payload) => record(payload));

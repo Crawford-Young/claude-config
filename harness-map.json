@@ -1115,6 +1115,59 @@
    "kind": "reads"
   },
   {
+   "from": "hook:active-repo",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "hook:browser-gate",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "hook:context-gauge",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "hook:inline-edit-nudge",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "hook:stop-reflect-gate",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "script:harness-map",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "script:reflect-gather",
+   "to": "script:lib",
+   "kind": "reads"
+  },
+  {
+   "from": "script:statusline",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
    "from": "store:settings-json",
    "to": "hook:notification-toast",
    "kind": "loads",

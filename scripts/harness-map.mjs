@@ -15,7 +15,8 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMain } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -66,7 +67,7 @@ export function render(map, template, generated) {
   return template.replace('__DATA__', JSON.stringify(data).replace(/</g, '\\u003c'));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const [cmd, out] = process.argv.slice(2);
   const map = JSON.parse(readFileSync(join(repoRoot, 'harness-map.json'), 'utf8'));
   if (cmd === 'check') {

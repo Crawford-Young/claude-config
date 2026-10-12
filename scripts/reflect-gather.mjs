@@ -9,9 +9,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { renderMarkdown } from './audit-lib.mjs';
-import { die, git, log, parseArgs } from './lib.mjs';
+import { die, git, isMain, log, parseArgs } from './lib.mjs';
 
 /** What to print and exit with when the audit spawn failed — a spawn that never
  *  started has null stderr and status, so fall back to its error. */
@@ -21,7 +21,7 @@ export function auditFailure(r) {
 
 const minutes = (ms) => `${Math.round(ms / 60e3)} min`;
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isMain(import.meta.url)) main();
 
 function main() {
   const args = parseArgs(process.argv.slice(2));

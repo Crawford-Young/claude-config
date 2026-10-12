@@ -16,7 +16,7 @@
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { priceUsage, walkTranscripts } from '../scripts/audit-lib.mjs';
 import { localDay, spendDir, spendLock } from './statusline.mjs';
 
@@ -133,4 +133,4 @@ async function main() {
   rmSync(spendLock(dir), { force: true });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => process.exit(0));
+if (isMain(import.meta.url)) main().catch(() => process.exit(0));

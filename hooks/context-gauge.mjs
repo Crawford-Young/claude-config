@@ -51,7 +51,7 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { block, claudeDir, run } from './_hooklib.mjs';
 
 const stateDir = join(claudeDir, 'context-gauge');
@@ -336,6 +336,6 @@ export function main(payload) {
 
 // Only act when executed as a hook. The test suite imports this module, and an
 // import that ran the body would block forever on an empty stdin.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   run('context-gauge', main);
 }

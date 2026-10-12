@@ -2,9 +2,23 @@
 // No dependencies outside Node builtins — must run on Windows and Linux alike.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Main-module guard that survives junctions/symlinks (#129): compares real paths, since
+ * Node resolves import.meta.url through the link but argv[1] stays as typed.
+ */
+export function isMain(metaUrl) {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
 
 /** Workspace root (~/code by default; CLAUDE_WORKSPACE_ROOT overrides for tests/remotes). */
 export function workspaceRoot() {

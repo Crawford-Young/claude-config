@@ -54,7 +54,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import {
   BILLED_MODEL,
   block,
@@ -664,7 +664,7 @@ function callRule({ sub, args, repo, viaOr }, rooted = new Set()) {
 
 // ---- main (only when executed as a hook, so tests can import the rules) -----
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   run(
     'bash-guard',
     (payload) => {

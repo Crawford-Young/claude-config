@@ -7,7 +7,7 @@
 // verified 2026-10). stdout: one {"id","content"} JSON line per row overridden.
 // A task without a model gets no line and keeps the default row. Fails to silence.
 
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { formatTokens, readJsonStdin } from './statusline.mjs';
 
 const ESC = '\x1b';
@@ -58,7 +58,7 @@ export function render(input, now = Date.now()) {
   return lines.join('\n');
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   try {
     const out = render(readJsonStdin());
     if (out) process.stdout.write(`${out}\n`);

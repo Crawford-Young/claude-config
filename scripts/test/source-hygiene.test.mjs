@@ -98,3 +98,10 @@ test('the helper covers every CLAUDE_* path override the harness reads', () => {
   const missing = [...read].filter((n) => !notPaths.has(n) && !OVERRIDE_NAMES.includes(n));
   assert.deepEqual(missing, [], 'add these to PATH_OVERRIDES in scripts/test/_spawn.mjs (or to notPaths if not a path)');
 });
+
+test('no hook, script or statusline module uses the symlink-blind pathToFileURL(process.argv[1]) main guard (#129)', () => {
+  const offenders = listed()
+    .filter((p) => /^(hooks|scripts|statusline)\/.*\.mjs$/.test(p) && !p.startsWith('scripts/test/'))
+    .filter((p) => (readText(p) ?? '').includes('pathToFileURL(process.argv[1])'));
+  assert.deepEqual(offenders, [], 'use isMain(import.meta.url) from scripts/lib.mjs');
+});

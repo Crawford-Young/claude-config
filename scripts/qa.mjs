@@ -16,10 +16,9 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import net from 'node:net';
-import { pathToFileURL } from 'node:url';
-import { die, log, parseArgs, readIfExists, resolveRepo } from './lib.mjs';
+import { die, isMain, log, parseArgs, readIfExists, resolveRepo } from './lib.mjs';
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isMain(import.meta.url)) await main();
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));

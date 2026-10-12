@@ -21,7 +21,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isMain } from '../scripts/lib.mjs';
 import { claudeDir, readState, run, writeState } from './_hooklib.mjs';
 
 export const THRESHOLD = 6;
@@ -157,7 +157,7 @@ export function nudge(payload, file = stateFile()) {
   return { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: MESSAGE } };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   run('inline-edit-nudge', (payload) => {
     const out = nudge(payload);
     if (out) process.stdout.write(JSON.stringify(out));
