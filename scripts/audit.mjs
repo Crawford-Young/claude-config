@@ -3,7 +3,8 @@
 // per-agent-type cost, skill/doc invocation counts and hook activity from the
 // transcripts Claude Code keeps on disk, grouped by /rename session name (#73),
 // plus time (#97): wall vs active, the model/tools/user/other split, agent and tool
-// latency, retry cost. --session keeps only the windows renamed <name>.
+// latency, retry cost. --session keeps only the windows renamed <name>: a file splits
+// at each /rename (#115), and its subagents follow the window they ran in.
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
 // Accounting: audit-lib.mjs.
 //
@@ -17,7 +18,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createCollector, readJsonl, renderMarkdown, sessionNames, walkTranscripts } from './audit-lib.mjs';
+import { createCollector, renderMarkdown, transcriptWindows } from './audit-lib.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -46,14 +47,24 @@ const c = createCollector({
   installedSkills: existsSync(skillsDir) ? readdirSync(skillsDir).filter((n) => existsSync(join(skillsDir, n, 'SKILL.md'))) : [],
 });
 
-const names = o.session ? await sessionNames(o.root) : null;
 let files = 0;
-for await (const { file, ctx } of walkTranscripts(o.root)) {
-  if (names && names.get(ctx.sessionId) !== o.session) continue;
-  files++;
-  for await (const rec of readJsonl(file)) c.add(rec, ctx);
+const live = new Set(); // sessionIds with a kept window
+for await (const { parts } of transcriptWindows(o.root)) {
+  const kept = o.session ? parts.filter((p) => p.ctx.name === o.session) : parts;
+  const { sessionId, agent } = parts[0].ctx;
+  if (kept.length) {
+    files++;
+    if (!agent) live.add(sessionId);
+  } else if (!live.has(sessionId)) continue;
+  // the file's other windows still feed its timeline, so idle time matches the whole-root run;
+  // cost-state totals the whole file: a slice of it has nothing to check against
+  const whole = kept.length === parts.length;
+  for (const p of parts) {
+    const ctx = kept.includes(p) ? p.ctx : { ...p.ctx, timeOnly: true };
+    for (const rec of p.recs) if (whole || rec?.type !== 'cost-state') c.add(rec, ctx);
+  }
 }
-if (names && !files) {
+if (o.session && !files) {
   console.error(`no session named ${o.session} — rename the unit's windows with /rename ${o.session}`);
   process.exit(1);
 }

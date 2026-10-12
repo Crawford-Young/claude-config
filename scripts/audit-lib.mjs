@@ -9,7 +9,9 @@
 //   .meta.json carrying agentType; their records never appear in the parent file.
 // - Resumed/forked sessions replay earlier records into a new file: non-request
 //   records dedupe on uuid, tool calls on tool_use id.
-// - A user-set name (/rename) is a {type:'custom-title'} record; the last wins.
+// - A user-set name (/rename) is a {type:'custom-title'} record. One file can hold
+//   several units (/rename without /clear), so it splits into a window at each
+//   change of name (#115; the rule is strate's store/group.rs, settled on real data).
 //   ai-title and agent-name records carry auto names, not unit names (#73).
 //   A launch name (claude --bg -n <name>) writes the same record (2.1.280).
 //
@@ -176,14 +178,20 @@ function refusal(text) {
 }
 
 /** Accumulates records (add) and produces the report (report). ctx is
- *  { sessionId, agent: null | { id, type, model } } — from walkTranscripts. */
+ *  { sessionId, agent: null | { id, type, model }, window?, name?, timeOnly? } — from
+ *  transcriptWindows. Rows key by window, else by sessionId (one window per file).
+ *  A timeOnly record feeds its file's timeline and nothing else. */
 export function createCollector({ prices, since, until, installedSkills = [], docPrefixes = [], idleGapMin = IDLE_GAP_MIN }) {
   const requests = new Map(); // requestId -> { u, model, day, ctx }
-  const lines = new Map(); // session or session/agent -> timeline (#97)
+  const lines = new Map(); // sessionId or sessionId/agent -> timeline (#97), per file as windows share idle detection
+  const timeOnly = new Set(); // windows fed only so their file's time is whole (--session)
   const timedUuid = new Set();
   const seenUuid = new Set();
   const seenTool = new Set();
-  const titles = new Map(); // sessionId -> { custom, ai }
+  const custom = new Map(); // window -> its /rename name
+  const ai = new Map(); // sessionId -> auto title, a per-file fallback label
+  const fileOf = new Map(); // window -> sessionId
+  const titleOf = (key) => custom.get(key) || ai.get(fileOf.get(key)) || '';
   const costState = new Map(); // sessionId -> max totalCostUSD
   const skills = {}, skillReads = {}, slash = {}, docs = {};
   const hookBlocks = {}, hookTimes = {}, hookFires = {};
@@ -222,13 +230,16 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   function timeRecord(rec, ctx) {
     const t = Date.parse(rec.timestamp || '');
     if (!t) return;
+    const win = ctx.window ?? ctx.sessionId;
+    const key = ctx.agent ? `${ctx.sessionId}/${ctx.agent.id}` : ctx.sessionId;
+    let tl = lines.get(key);
+    if (!tl) lines.set(key, (tl = { sessionId: ctx.sessionId, win, agent: ctx.agent, starts: [], ts: [], reqs: new Map(), uses: [], byId: new Map(), prompts: [], lastInput: null, lastEnd: null }));
+    // a main window starts at its first stamped record; the windows tile the file
+    if (!ctx.agent && tl.starts.at(-1)?.[0] !== win) tl.starts.push([win, t]);
     if (rec.uuid) {
       if (timedUuid.has(rec.uuid)) return;
       timedUuid.add(rec.uuid);
     }
-    const key = ctx.agent ? `${ctx.sessionId}/${ctx.agent.id}` : ctx.sessionId;
-    let tl = lines.get(key);
-    if (!tl) lines.set(key, (tl = { sessionId: ctx.sessionId, agent: ctx.agent, ts: [], reqs: new Map(), uses: [], byId: new Map(), prompts: [], lastInput: null, lastEnd: null }));
     tl.ts.push(t);
     if (rec.type === 'assistant') {
       const rid = rec.requestId || rec.message?.id || rec.uuid;
@@ -239,7 +250,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       tl.lastEnd = Math.max(tl.lastEnd ?? t, t);
       for (const b of rec.message?.content || []) {
         if (b?.type !== 'tool_use' || !b.id || tl.byId.has(b.id)) continue;
-        const u = { name: b.name, t, end: null, err: false, text: '', cmd: SHELLS.has(b.name) ? commandHead(b.input?.command) : null,
+        const u = { name: b.name, win, t, end: null, err: false, text: '', cmd: SHELLS.has(b.name) ? commandHead(b.input?.command) : null,
           file: EDITS.has(b.name) ? b.input?.file_path || b.input?.notebook_path || '' : null };
         tl.uses.push(u);
         tl.byId.set(b.id, u);
@@ -264,11 +275,19 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
   function add(rec, ctx) {
     if (!rec || typeof rec !== 'object') return;
-    const sid = ctx.sessionId;
-    if (rec.type === 'custom-title' || rec.type === 'ai-title') {
-      const t = titles.get(sid) || {};
-      if (rec.type === 'custom-title') t.custom = rec.customTitle; else t.ai = rec.aiTitle;
-      titles.set(sid, t);
+    const sid = ctx.sessionId, win = ctx.window ?? sid;
+    fileOf.set(win, sid);
+    if (ctx.timeOnly) {
+      timeOnly.add(win);
+      if (inWindow(rec.timestamp)) timeRecord(rec, ctx);
+      return;
+    }
+    if (rec.type === 'custom-title') {
+      custom.set(win, rec.customTitle);
+      return;
+    }
+    if (rec.type === 'ai-title') {
+      ai.set(sid, rec.aiTitle);
       return;
     }
     if (rec.type === 'cost-state') {
@@ -345,10 +364,11 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       for (const k of Object.keys(tk)) totals.tokens[k] += tk[k];
 
       const d = days.get(day) || { day, sessions: new Set(), requests: 0, usd: 0, peakDepth: 0 };
-      d.sessions.add(ctx.sessionId);
+      const win = ctx.window ?? ctx.sessionId;
+      d.sessions.add(win);
       d.requests++;
       d.usd += cost;
-      const s = sessions.get(ctx.sessionId) || { sessionId: ctx.sessionId, requests: 0, usd: 0, subagentUsd: 0, peakDepth: 0, first: day, last: day };
+      const s = sessions.get(win) || { sessionId: win, requests: 0, usd: 0, subagentUsd: 0, peakDepth: 0, first: day, last: day };
       s.requests++;
       s.usd += cost;
       if (day && (!s.first || day < s.first)) s.first = day;
@@ -367,24 +387,25 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         d.peakDepth = Math.max(d.peakDepth, depth);
       }
       days.set(day, d);
-      sessions.set(ctx.sessionId, s);
+      sessions.set(win, s);
     }
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
 
+    // cost-state is per transcript file: its total against the sum of the file's windows
     let checked = 0, reportedUsd = 0, computedUsd = 0;
     for (const [sid, reported] of costState) {
-      const s = sessions.get(sid);
-      if (!s || !reported) continue;
+      const ws = [...sessions.values()].filter((s) => fileOf.get(s.sessionId) === sid);
+      if (!ws.length || !reported) continue;
       checked++;
       reportedUsd += reported;
-      computedUsd += s.usd;
+      computedUsd += ws.reduce((a, s) => a + s.usd, 0);
     }
 
     const timed = {};
     for (const [h, ms] of Object.entries(hookTimes)) timed[h] = { fires: ms.length, p50: pct(ms, 50), p95: pct(ms, 95) };
     const names = new Map(); // custom-title -> one row over all its windows
     for (const s of sessions.values()) {
-      const name = titles.get(s.sessionId)?.custom;
+      const name = custom.get(s.sessionId);
       if (!name) continue;
       const g = names.get(name) || { name, windows: 0, requests: 0, usd: 0, subagentUsd: 0, first: s.first, last: s.last };
       g.windows++;
@@ -404,7 +425,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       crossCheck: { sessions: checked, reportedUsd, computedUsd },
       days: [...days.values()].map((d) => ({ ...d, sessions: d.sessions.size })).sort((a, b) => a.day.localeCompare(b.day)),
       sessions: [...sessions.values()]
-        .map((s) => ({ ...s, title: titles.get(s.sessionId)?.custom || titles.get(s.sessionId)?.ai || '' }))
+        .map((s) => ({ ...s, title: titleOf(s.sessionId) }))
         .sort((a, b) => b.usd - a.usd),
       names: [...names.values()].sort((a, b) => b.usd - a.usd),
       agents,
@@ -419,28 +440,32 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     };
   }
 
-  /** #99's measure: per main session, Edit/Write calls against Agent dispatches,
+  /** #99's measure: per main window, Edit/Write calls against Agent dispatches,
    *  and the most distinct files edited between two dispatches. */
   function inlineReport() {
     const rows = [];
     for (const tl of lines.values()) {
       if (tl.agent) continue;
-      const files = new Set();
-      let edits = 0, dispatches = 0, run = new Set(), longestRun = 0;
-      for (const u of [...tl.uses].sort((a, b) => a.t - b.t)) {
-        if (EDITS.has(u.name)) {
-          edits++;
-          files.add(u.file);
-          run.add(u.file);
-          longestRun = Math.max(longestRun, run.size);
-        } else if (DISPATCHES.has(u.name)) {
-          dispatches++;
-          run = new Set();
-        }
-      }
-      if (edits || dispatches) rows.push({ sessionId: tl.sessionId, title: titles.get(tl.sessionId)?.custom || titles.get(tl.sessionId)?.ai || '', edits, editFiles: files.size, dispatches, longestRun });
+      for (const [win] of tl.starts) if (!timeOnly.has(win)) inlineRow(rows, win, tl.uses.filter((u) => u.win === win));
     }
     return rows.sort((a, b) => b.edits - a.edits);
+  }
+
+  function inlineRow(rows, win, uses) {
+    const files = new Set();
+    let edits = 0, dispatches = 0, run = new Set(), longestRun = 0;
+    for (const u of uses.sort((a, b) => a.t - b.t)) {
+      if (EDITS.has(u.name)) {
+        edits++;
+        files.add(u.file);
+        run.add(u.file);
+        longestRun = Math.max(longestRun, run.size);
+      } else if (DISPATCHES.has(u.name)) {
+        dispatches++;
+        run = new Set();
+      }
+    }
+    if (edits || dispatches) rows.push({ sessionId: win, title: titleOf(win), edits, editFiles: files.size, dispatches, longestRun });
   }
 
   /** Wall vs active time, the model/tools/user/other split per session, name and
@@ -465,23 +490,32 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       for (const q of tl.reqs.values()) iv.push([q.start, q.end, 'model']);
       for (const u of tl.uses) if (u.end !== null) iv.push([u.t, u.end, USER_TOOLS.has(u.name) ? 'ask' : 'tools']);
       for (const p of tl.prompts) if (p.human && p.from !== null) iv.push([p.from, p.t, 'wait']);
-      const row = { sessionId: tl.sessionId, title: titles.get(tl.sessionId)?.custom || titles.get(tl.sessionId)?.ai || '',
-        first: new Date(first).toISOString().slice(0, 10), wallMs: last - first, activeMs: 0, ...zeroSplit(), usd: cost.sessions.get(tl.sessionId)?.usd || 0 };
-      for (const [day, split] of sweep(iv, first, last)) {
-        const d = dayRows.get(day) || { day, wallMs: 0, activeMs: 0, ...zeroSplit(), usd: cost.days.get(day)?.usd || 0 };
-        for (const k of SPLIT) { row[k] += split[k]; d[k] += split[k]; }
-        d.wallMs += SPLIT.reduce((a, k) => a + split[k], 0);
-        d.activeMs = d.wallMs - d.idleMs;
-        dayRows.set(day, d);
-      }
-      row.activeMs = row.wallMs - row.idleMs;
-      sessions.push(row);
-      for (const k of Object.keys(totals)) totals[k] += row[k];
+      // the file's sweep, partitioned at window starts: each window runs to the next
+      // one's first record, the first from the file's start, the last to its end
+      let from = first;
+      tl.starts.forEach(([win], i) => {
+        const to = i === tl.starts.length - 1 ? last : Math.min(last, Math.max(from, tl.starts[i + 1][1]));
+        const span = [from, to];
+        from = to;
+        if (timeOnly.has(win)) return;
+        const row = { sessionId: win, title: titleOf(win),
+          first: new Date(span[0]).toISOString().slice(0, 10), wallMs: span[1] - span[0], activeMs: 0, ...zeroSplit(), usd: cost.sessions.get(win)?.usd || 0 };
+        for (const [day, split] of sweep(iv, ...span)) {
+          const d = dayRows.get(day) || { day, wallMs: 0, activeMs: 0, ...zeroSplit(), usd: cost.days.get(day)?.usd || 0 };
+          for (const k of SPLIT) { row[k] += split[k]; d[k] += split[k]; }
+          d.wallMs += SPLIT.reduce((a, k) => a + split[k], 0);
+          d.activeMs = d.wallMs - d.idleMs;
+          dayRows.set(day, d);
+        }
+        row.activeMs = row.wallMs - row.idleMs;
+        sessions.push(row);
+        for (const k of Object.keys(totals)) totals[k] += row[k];
+      });
     }
 
     const names = new Map();
     for (const s of sessions) {
-      const name = titles.get(s.sessionId)?.custom;
+      const name = custom.get(s.sessionId);
       if (!name) continue;
       const g = names.get(name) || { name, windows: 0, wallMs: 0, activeMs: 0, ...zeroSplit(), usd: 0 };
       g.windows++;
@@ -491,9 +525,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
     const agentRuns = [], agentTypes = {};
     for (const tl of lines.values()) {
-      if (!tl.agent || !tl.ts.length) continue;
+      if (!tl.agent || !tl.ts.length || timeOnly.has(tl.win)) continue;
       const first = tl.ts.reduce((a, b) => Math.min(a, b)), wallMs = tl.ts.reduce((a, b) => Math.max(a, b)) - first;
-      agentRuns.push({ id: tl.agent.id, sessionId: tl.sessionId, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0 });
+      agentRuns.push({ id: tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0 });
       (agentTypes[tl.agent.type] ||= []).push(wallMs);
     }
     const agentsOut = {};
@@ -506,6 +540,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       const idle = idleOf.get(tl.sessionId) || [];
       const byName = new Map();
       for (const u of tl.uses) {
+        if (timeOnly.has(u.win)) continue;
         (byName.get(u.name) || byName.set(u.name, []).get(u.name)).push(u);
         if (u.end === null || USER_TOOLS.has(u.name)) continue;
         (toolMs[u.name] ||= []).push(u.end - u.t);
@@ -583,15 +618,70 @@ export async function* walkTranscripts(root) {
   }
 }
 
-/** Maps sessionId -> its last custom-title over the main transcripts under root.
- *  A pre-pass: /rename can land mid-file, after records it must still claim. */
-export async function sessionNames(root) {
-  const names = new Map();
+const earliest = (a, b) => (a === null ? b : b === null ? a : Math.min(a, b));
+
+/** Splits a main transcript's records (file order) into /rename windows (#115):
+ *  [{ name, first (record index), startedAt (earliest ms stamp or null) }].
+ *  A window starts at each change of custom-title (a repeat is no change); records
+ *  before the first title take it; a non-final window with no assistant record (the
+ *  name /clear carries to the top of a new file) merges into the next. No title at
+ *  all is one unnamed window. */
+export function splitWindows(recs) {
+  const raw = [{ name: undefined, first: 0, startedAt: null, replied: false }];
+  recs.forEach((rec, i) => {
+    let w = raw.at(-1);
+    const name = rec?.type === 'custom-title' ? rec.customTitle : undefined;
+    if (name && w.name === undefined) w.name = name;
+    else if (name && name !== w.name) raw.push((w = { name, first: i, startedAt: null, replied: false }));
+    if (rec?.type === 'assistant') w.replied = true;
+    w.startedAt = earliest(w.startedAt, Date.parse(rec?.timestamp || '') || null);
+  });
+  const out = [];
+  let prelude = null;
+  raw.forEach((w, i) => {
+    if (prelude) [w.first, w.startedAt] = [prelude.first, earliest(prelude.startedAt, w.startedAt)];
+    if (w.replied || i === raw.length - 1) {
+      out.push(w);
+      prelude = null;
+    } else prelude = w;
+  });
+  return out.map(({ name, first, startedAt }) => ({ name, first, startedAt }));
+}
+
+const readAll = async (file) => {
+  const recs = [];
+  for await (const rec of readJsonl(file)) recs.push(rec);
+  return recs;
+};
+
+/** Yields { file, parts: [{ ctx, recs }] } for every transcript under root, ctx
+ *  gaining window (the key its rows go under) and name (its custom-title). A main
+ *  transcript yields one part per /rename window — the first keyed by the bare
+ *  sessionId, the rest sessionId#2, #3… A subagent joins the window live at its first
+ *  record (the latest started by then; with no stamp, the final one). Main
+ *  transcripts come first so their windows are known when subagents are placed. */
+export async function* transcriptWindows(root) {
+  const subs = [], windowsOf = new Map();
   for await (const { file, ctx } of walkTranscripts(root)) {
-    if (ctx.agent) continue;
-    for await (const rec of readJsonl(file)) if (rec?.type === 'custom-title' && rec.customTitle) names.set(ctx.sessionId, rec.customTitle);
+    if (ctx.agent) { subs.push({ file, ctx }); continue; }
+    const recs = await readAll(file);
+    const ws = splitWindows(recs).map((w, j, all) => ({
+      ...w, ctx: { ...ctx, window: j ? `${ctx.sessionId}#${j + 1}` : ctx.sessionId, name: w.name }, end: all[j + 1]?.first ?? recs.length,
+    }));
+    windowsOf.set(ctx.sessionId, ws);
+    yield { file, parts: ws.map((w) => ({ ctx: w.ctx, recs: recs.slice(w.first, w.end) })) };
   }
-  return names;
+  for (const { file, ctx } of subs) {
+    const recs = await readAll(file);
+    const ws = windowsOf.get(ctx.sessionId);
+    let at = { window: ctx.sessionId, name: undefined };
+    if (ws) {
+      const first = recs.reduce((t, rec) => earliest(t, Date.parse(rec?.timestamp || '') || null), null);
+      const i = first === null ? ws.length - 1 : Math.max(0, ws.findLastIndex((w) => w.startedAt !== null && w.startedAt <= first));
+      at = { window: ws[i].ctx.window, name: ws[i].name };
+    }
+    yield { file, parts: [{ ctx: { ...ctx, ...at }, recs }] };
+  }
 }
 
 /** Streams a JSONL file's records; malformed lines are skipped. */

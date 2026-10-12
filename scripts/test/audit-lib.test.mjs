@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, sessionNames } from '../audit-lib.mjs';
+import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, splitWindows, transcriptWindows } from '../audit-lib.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
 const PRICES = {
@@ -206,20 +206,118 @@ test('sessions group by their custom-title name across windows; unnamed sessions
   assert.match(renderMarkdown(r), /## Per session name[\s\S]*\| claude-config-67 \| 2 \| 2026-10-02 \| 2026-10-04 \| 2 \| \$15\.00 \|/);
 });
 
-test('sessionNames maps each session to its last custom-title (a /rename), ignoring auto titles', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'audit-'));
+// ---- /rename windows (#115) ----------------------------------------------------
+
+const title = (customTitle) => ({ type: 'custom-title', customTitle });
+const said = (ts) => ({ type: 'assistant', timestamp: ts });
+const typed = (ts) => ({ type: 'user', timestamp: ts });
+const shape = (recs) => splitWindows(recs).map((w) => [w.name, w.first]);
+
+test('splitWindows: each change of custom-title starts a window; a repeat title does not', () => {
+  assert.deepEqual(shape([title('a'), said(), title('a'), said(), title('b'), said(), title('c'), said()]), [['a', 0], ['b', 4], ['c', 6]]);
+  assert.deepEqual(shape([title('a'), said(), title('b'), said(), title('a'), said()]), [['a', 0], ['b', 2], ['a', 4]]);
+});
+
+test('splitWindows: records before the first title take that title', () => {
+  assert.deepEqual(shape([typed(), said(), title('late'), said()]), [['late', 0]]);
+});
+
+test('splitWindows: a reply-less window merges forward, a run of them all the way; the final one stays', () => {
+  // the carried-name prelude a /clear writes at the top of a new file
+  assert.deepEqual(shape([title('old'), typed(), title('new'), said()]), [['new', 0]]);
+  assert.deepEqual(shape([title('a'), title('b'), typed(), title('c'), said()]), [['c', 0]]);
+  assert.deepEqual(shape([title('a'), said(), title('b'), typed()]), [['a', 0], ['b', 2]]);
+});
+
+test('splitWindows: no custom-title is one unnamed window; startedAt is the earliest stamp, a prelude\'s included', () => {
+  assert.deepEqual(shape([typed(), said()]), [[undefined, 0]]);
+  assert.deepEqual(shape([]), [[undefined, 0]]);
+  const w = splitWindows([title('old'), typed('2026-10-01T10:00:00Z'), title('new'), said('2026-10-01T10:05:00Z'), title('x'), said('2026-10-01T11:00:00Z')]);
+  assert.deepEqual(w.map((x) => [x.name, x.startedAt]), [['new', Date.parse('2026-10-01T10:00:00Z')], ['x', Date.parse('2026-10-01T11:00:00Z')]]);
+});
+
+const T = (m) => `2026-10-05T10:${String(m).padStart(2, '0')}:00Z`;
+const jsonl = (...r) => r.map((x) => JSON.stringify(x)).join('\n') + '\n';
+
+/** f: a late-titled a, a repeat a, then b and c mid-file; g: a carried-name prelude (b) then d;
+ *  subagent x starts while b is live, subagent y has no timestamp. */
+function windowFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'audit-win-'));
+  const proj = join(root, 'C--proj');
+  mkdirSync(join(proj, 'f', 'subagents'), { recursive: true });
+  writeFileSync(join(proj, 'f.jsonl'), jsonl(
+    { type: 'user', uuid: 'f-u0', timestamp: T(0), message: { content: 'go' } },
+    asst('f1', usage({ input_tokens: 1e6 }), { ts: T(1) }),
+    title('a'), title('a'),
+    asst('f2', usage({ input_tokens: 1e6 }), { ts: T(2) }),
+    title('b'),
+    { type: 'user', uuid: 'f-u1', timestamp: T(10), message: { content: 'next' } },
+    asst('f3', usage({ input_tokens: 2e6 }), { ts: T(11) }),
+    title('c'),
+    asst('f4', usage({ input_tokens: 1e6 }), { ts: T(20) }),
+    { type: 'cost-state', totalCostUSD: 27 },
+  ));
+  writeFileSync(join(proj, 'f', 'subagents', 'agent-x.jsonl'), jsonl(asst('x1', usage({ input_tokens: 2e5 }), { ts: T(12) })));
+  writeFileSync(join(proj, 'f', 'subagents', 'agent-x.meta.json'), JSON.stringify({ agentType: 'recon' }));
+  writeFileSync(join(proj, 'f', 'subagents', 'agent-y.jsonl'), jsonl({ ...asst('y1', usage({ input_tokens: 2e5 })), timestamp: undefined }));
+  writeFileSync(join(proj, 'g.jsonl'), jsonl(
+    title('b'),
+    { type: 'user', uuid: 'g-u0', timestamp: T(30), message: { content: 'carried' } },
+    title('d'),
+    asst('g1', usage({ input_tokens: 1e6 }), { ts: T(31) }),
+  ));
+  writeFileSync(join(proj, 'h.jsonl'), jsonl({ type: 'ai-title', aiTitle: 'auto h' }, asst('h1', usage({ input_tokens: 1e6 }), { ts: T(40) })));
+  return root;
+}
+
+async function auditRoot(root) {
+  const c = createCollector({ prices: PRICES });
+  for await (const { parts } of transcriptWindows(root)) for (const { ctx, recs } of parts) for (const rec of recs) c.add(rec, ctx);
+  return c.report();
+}
+
+test('transcriptWindows: one session row per window, titled by its name; subagents join the window live at their first record', async () => {
+  const root = windowFixture();
   try {
-    const proj = join(root, 'C--proj');
-    mkdirSync(proj, { recursive: true });
-    const lines = (...r) => r.map((x) => JSON.stringify(x)).join('\n') + '\n';
-    writeFileSync(join(proj, 'a.jsonl'), lines(
-      { type: 'custom-title', sessionId: 'a', customTitle: 'first' },
-      asst('n1', usage()),
-      { type: 'custom-title', sessionId: 'a', customTitle: 'repo-12' },
-    ));
-    writeFileSync(join(proj, 'b.jsonl'), lines({ type: 'ai-title', sessionId: 'b', aiTitle: 'x' }, { type: 'agent-name', sessionId: 'b', agentName: 'y' }));
-    const names = await sessionNames(root);
-    assert.deepEqual([...names], [['a', 'repo-12']]);
+    const r = await auditRoot(root);
+    const rows = r.sessions.map((s) => [s.sessionId, s.title, s.requests, s.usd, s.subagentUsd]).sort((x, y) => x[0].localeCompare(y[0]));
+    assert.deepEqual(rows, [
+      ['f', 'a', 2, 10, 0],
+      ['f#2', 'b', 2, 11, 1],
+      ['f#3', 'c', 2, 6, 1],
+      ['g', 'd', 1, 5, 0],
+      ['h', 'auto h', 1, 5, 0],
+    ]);
+    assert.deepEqual(r.names.map((g) => [g.name, g.windows, g.requests, g.usd]).sort(), [['a', 1, 2, 10], ['b', 1, 2, 11], ['c', 1, 2, 6], ['d', 1, 1, 5]]);
+    assert.deepEqual(r.time.names.map((g) => [g.name, g.windows]).sort(), [['a', 1], ['b', 1], ['c', 1], ['d', 1]]);
+    assert.deepEqual(r.time.agentRuns.map((a) => [a.id, a.sessionId]), [['x', 'f#2']]);
+    // cost-state stays per transcript file: f's reported total against the sum of its windows
+    assert.deepEqual(r.crossCheck, { sessions: 1, reportedUsd: 27, computedUsd: 27 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('transcriptWindows: ctx carries the window key and name; a subagent before every window joins the first; one with no parent transcript stays unnamed', async () => {
+  const root = windowFixture();
+  try {
+    mkdirSync(join(root, 'C--proj', 'orphan', 'subagents'), { recursive: true });
+    writeFileSync(join(root, 'C--proj', 'orphan', 'subagents', 'agent-z.jsonl'), jsonl(asst('z1', usage(), { ts: T(50) })));
+    writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-early.jsonl'), jsonl(asst('e1', usage(), { ts: '2026-10-05T09:59:00Z' })));
+    const seen = [];
+    for await (const { file, parts } of transcriptWindows(root)) for (const { ctx, recs } of parts) seen.push([file.split(/[\\/]/).pop(), ctx.window, ctx.name, recs.length]);
+    seen.sort((x, y) => `${x[0]}${x[1]}`.localeCompare(`${y[0]}${y[1]}`));
+    assert.deepEqual(seen, [
+      ['agent-early.jsonl', 'f', 'a', 1],
+      ['agent-x.jsonl', 'f#2', 'b', 1],
+      ['agent-y.jsonl', 'f#3', 'c', 1],
+      ['agent-z.jsonl', 'orphan', undefined, 1],
+      ['f.jsonl', 'f', 'a', 5],
+      ['f.jsonl', 'f#2', 'b', 3],
+      ['f.jsonl', 'f#3', 'c', 3],
+      ['g.jsonl', 'g', 'd', 4],
+      ['h.jsonl', 'h', undefined, 2],
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -465,6 +563,36 @@ test('time: per-day and per-name rows split at UTC midnight and sum every window
   const md = renderMarkdown(r);
   for (const h of ['## Time', '**Per day**', '**Per session name**', '**Agent time**', '**Tool latency**', '**Retry and block cost**']) assert.ok(md.includes(h), h);
   assert.match(md, /idle gaps over 10 min removed/);
+});
+
+test('time: windows tile their file; a subagent outliving its window keeps the parent\'s wait across a rename active (#115)', () => {
+  const c = createCollector({ prices: PRICES, idleGapMin: 0.5 }); // 30 s: the parent alone would idle out
+  const one = { sessionId: 's1', agent: null, window: 's1', name: 'one' };
+  const two = { sessionId: 's1', agent: null, window: 's1#2', name: 'two' };
+  feed(c, one, title('one'), human(0), say(2, 'r1', [use('g1', 'Agent', { subagent_type: 'recon' })]), say(3, 'r1b', [], 'end_turn'));
+  feed(c, two, title('two'), human(10), say(12, 'r3', [], 'end_turn'),
+    { type: 'user', uuid: 'tn9', timestamp: at(93), origin: { kind: 'task-notification' }, message: { content: '<task-notification>done</task-notification>' } },
+    say(95, 'r4', [], 'end_turn'));
+  // dispatched in one, still running long after two began
+  for (const s of [4, 24, 44, 64, 84, 92]) c.add(say(s, `p${s}`), { sessionId: 's1', agent: { id: 'p1', type: 'recon' }, window: 's1', name: 'one' });
+  const t = c.report().time;
+  const rows = t.sessions.map((s) => [s.sessionId, ...[s.wallMs, s.idleMs, s.modelMs, s.userMs, s.otherMs].map(sec)]).sort((x, y) => x[0].localeCompare(y[0]));
+  assert.deepEqual(rows, [['s1', 10, 0, 3, 7, 0], ['s1#2', 85, 0, 4, 0, 81]]);
+  assert.equal(sec(t.totals.wallMs), 95, 'the windows tile the file: no overlap, no gap');
+  assert.deepEqual(t.names.map((g) => [g.name, sec(g.wallMs)]).sort(), [['one', 10], ['two', 85]]);
+  assert.deepEqual(t.agentRuns.map((a) => [a.id, a.sessionId]), [['p1', 's1']]);
+});
+
+test('time: a timeOnly window feeds its file\'s idle detection but reports nothing', () => {
+  const c = createCollector({ prices: PRICES, idleGapMin: 0.5 });
+  const one = { sessionId: 's1', agent: null, window: 's1', name: 'one', timeOnly: true };
+  const two = { sessionId: 's1', agent: null, window: 's1#2', name: 'two' };
+  feed(c, one, human(0), say(2, 'r1', [use('g1', 'Agent'), use('e1', 'Edit', { file_path: 'a' })]), result(3, 'e1'));
+  feed(c, two, human(10), say(12, 'r3', [], 'end_turn'), human(95), say(96, 'r4', [], 'end_turn'));
+  for (const s of [4, 30, 60, 90]) c.add(say(s, `p${s}`), { sessionId: 's1', agent: { id: 'p1', type: 'recon' }, window: 's1', name: 'one', timeOnly: true });
+  const r = c.report();
+  assert.deepEqual(r.time.sessions.map((s) => [s.sessionId, sec(s.wallMs), sec(s.idleMs)]), [['s1#2', 86, 0]]);
+  assert.deepEqual([r.totals.requests, r.time.agentRuns.length, r.inline.length, Object.keys(r.time.tools)], [2, 0, 0, []]);
 });
 
 test('walkTranscripts skips an unreadable directory and keeps walking', async () => {

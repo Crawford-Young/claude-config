@@ -68,6 +68,41 @@ test('--session --json carries the time dimension for the named windows; --idle-
   }
 });
 
+test('--session keeps only the /rename windows of that name inside a renamed transcript (#115)', () => {
+  const root = fixture();
+  try {
+    const proj = join(root, 'C--proj');
+    const at = (m) => `2026-10-05T11:${String(m).padStart(2, '0')}:00Z`;
+    const say = (id, m) => ({ type: 'assistant', uuid: `u-${id}`, requestId: id, timestamp: at(m), sessionId: 'r',
+      message: { id: `m-${id}`, model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 1 }, content: [] } });
+    const title = (t) => ({ type: 'custom-title', sessionId: 'r', customTitle: t });
+    mkdirSync(join(proj, 'r', 'subagents'), { recursive: true });
+    writeFileSync(join(proj, 'r.jsonl'), lines(
+      say('r1', 0), title('unit-10'), say('r2', 1), title('unit-11'), say('r3', 10), say('r4', 11), title('unit-12'), say('r5', 20),
+      { type: 'cost-state', sessionId: 'r', totalCostUSD: 1 }, say('r6', 40)));
+    // dispatched in unit-11, it runs on through unit-12's 20-min wait
+    writeFileSync(join(proj, 'r', 'subagents', 'agent-s.jsonl'), lines(say('s1', 12), { ...say('s1', 25), uuid: 'u-s1b' }, { ...say('s1', 35), uuid: 'u-s1c' }));
+    const run = (name) => {
+      const r = spawnHarness(cli, ['--root', root, '--session', name, '--json']);
+      assert.equal(r.status, 0, r.stderr);
+      return JSON.parse(r.stdout);
+    };
+    const ten = run('unit-10');
+    assert.deepEqual([ten.files, ten.totals.requests, ten.sessions.map((s) => s.sessionId)], [1, 2, ['r']]);
+    const eleven = run('unit-11');
+    assert.deepEqual([eleven.files, eleven.totals.requests, eleven.sessions.map((s) => s.sessionId)], [2, 3, ['r#2']]);
+    assert.deepEqual(eleven.names.map((g) => [g.name, g.windows, g.requests]), [['unit-11', 1, 3]]);
+    const twelve = run('unit-12');
+    // a slice of a transcript is not checked against the whole file's cost-state
+    assert.equal(twelve.crossCheck.sessions, 0);
+    // unit-11's subagent still keeps unit-12's wait active, as in a whole-root run
+    assert.deepEqual([twelve.totals.requests, twelve.time.totals.wallMs, twelve.time.totals.idleMs], [2, 20 * 60e3, 0]);
+    assert.equal(twelve.time.agentRuns.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('--session with no matching window exits 1 and says so', () => {
   const root = fixture();
   try {
