@@ -28,10 +28,15 @@
 //      gated verb per Bash call), so a compound never spends one approval twice.
 //      A remote branch delete (`push --delete`/`-d`, or every refspec `:branch`)
 //      is exempt like --dry-run; a push that also pushes a ref stays gated.
+//      A spend records its call's tool_use_id; if that call's transcript
+//      tool_result is_error, the next gated call refunds the spend (#147).
 //   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
 //      codegen, show-report, show-trace, open — need the user's browser consent
 //      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
 //      once per session). Headless `playwright test` stays ungated.
+//  10. A heredoc body holding a doubled backslash — the Bash tool's shell spawn
+//      collapses it, silently corrupting the file or commit message; use Write
+//      (#123, #137, #147).
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -51,7 +56,7 @@
 // checked nothing, and a silent allow is invisible — a loud block is not.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isMain } from '../scripts/lib.mjs';
@@ -260,6 +265,25 @@ export function stripHeredocs(cmd) {
   return out.join('\n');
 }
 
+/** Does any heredoc body in `cmd` hold a doubled backslash? The Bash tool's
+ *  shell spawn collapses `\\` to `\` inside a heredoc body, quoted delimiter or
+ *  not, so the file or message written is silently wrong (#123, #137). Bodies are
+ *  found as stripHeredocs finds them: a `<<WORD` line (not a `<<<` here-string)
+ *  closed by a line of just WORD — text that only mentions `<<EOF` has no
+ *  terminator line, so it is not a heredoc. */
+export function heredocHasDoubledBackslash(cmd) {
+  const lines = cmd.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/(?<!<)<<(?!<)(-?)\s*(["']?)([\w.-]+)\2/);
+    if (!m) continue;
+    const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
+    if (end === -1) continue;
+    if (lines.slice(i + 1, end).some((l) => l.includes('\\\\'))) return true;
+    i = end;
+  }
+  return false;
+}
+
 /** Everything the rules should NOT read as command text. */
 export function scrub(raw) {
   return stripMessages(stripHeredocs(raw));
@@ -274,6 +298,9 @@ function expandHome(p) {
 
 export function staticCheck(raw) {
   if (!raw) return null;
+  if (heredocHasDoubledBackslash(raw)) {
+    return 'A heredoc body holding a doubled backslash arrives with it collapsed to one (the Bash tool\'s shell spawn eats it), so the file or message written is wrong. Write the file with the Write tool (or Edit) instead of a heredoc.';
+  }
   const cmd = scrub(raw);
 
   // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination —
@@ -497,15 +524,48 @@ export function isApproving(answers) {
 
 export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
 
+/** The state file's side table: `"<uuid>|<verb>"` -> the tool_use_id of the call
+ *  that spent it, so a later gated call can refund a spend whose call errored. */
+const IDS_KEY = '@ids';
+
+/** Did the transcript record an errored tool_result for tool_use `id`? */
+function toolResultErrored(transcriptPath, id) {
+  try {
+    for (const l of readFileSync(transcriptPath, 'utf8').split('\n')) {
+      if (!l || l[0] !== '{' || !l.includes(id)) continue;
+      const content = JSON.parse(l)?.message?.content;
+      if (Array.isArray(content) && content.some((b) => b?.type === 'tool_result' && b.tool_use_id === id && b.is_error === true)) return true;
+    }
+  } catch {
+    // Unreadable or torn line: no refund is the safe answer.
+  }
+  return false;
+}
+
 /** Has `verb` already been spent against approval `uuid`? Records it spent on
- *  first use. Self-trims to the newest 200 approval uuids. */
-function spend(uuid, verb, file) {
+ *  first use, with the spending call's `toolUseId`. A prior spend whose call's
+ *  tool_result errored is refunded first — the push never happened. Self-trims
+ *  to the newest 200 approval uuids. */
+function spend(uuid, verb, file, toolUseId, transcriptPath) {
   const state = readState(file);
-  const entry = state[uuid] || [];
+  const ids = state[IDS_KEY] || {};
+  const idKey = `${uuid}|${verb}`;
+  let entry = state[uuid] || [];
+  if (entry.includes(verb) && ids[idKey] && toolResultErrored(transcriptPath, ids[idKey])) {
+    entry = entry.filter((v) => v !== verb);
+    delete ids[idKey];
+  }
   if (entry.includes(verb)) return true;
   state[uuid] = [...entry, verb];
-  const keys = Object.keys(state);
-  if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete state[k];
+  if (toolUseId) ids[idKey] = toolUseId;
+  state[IDS_KEY] = ids;
+  const keys = Object.keys(state).filter((k) => k !== IDS_KEY);
+  if (keys.length > 200) {
+    for (const k of keys.slice(0, keys.length - 200)) {
+      delete state[k];
+      for (const v of Object.keys(ids)) if (v.startsWith(`${k}|`)) delete ids[v];
+    }
+  }
   writeState(file, state);
   return false;
 }
@@ -516,7 +576,7 @@ const askRemedy = (verb) =>
 /** 8. git push / gh pr create / gh pr merge need an approving answer in the
  *  transcript, spent once per verb. `transcriptPath` is read lazily — a
  *  non-gated command never touches disk here. */
-export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile()) {
+export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined) {
   const verbs = gatedVerbs(raw, cwd);
   if (!verbs.length) return null;
   if (verbs.length > 1) {
@@ -543,7 +603,7 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
     return `${verb} needs explicit user approval; the most recent AskUserQuestion answer does not approve it. ${askRemedy(verb)}`;
   }
 
-  if (spend(record.uuid, verb, stateFile)) {
+  if (spend(record.uuid, verb, stateFile, toolUseId, transcriptPath)) {
     return `${verb} already spent that approval — one push/PR per approving answer. ${askRemedy(verb)}`;
   }
 
@@ -676,7 +736,7 @@ if (isMain(import.meta.url)) {
         staticCheck(cmd) ||
         branchRules(cmd, cwd) ||
         (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
-        pushGateReason(cmd, cwd, payload?.transcript_path);
+        pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);
       if (reason) block(reason);
       // Last, so a command another rule blocks never spends the clearance.
       const billed = billedLaunch(cmd);

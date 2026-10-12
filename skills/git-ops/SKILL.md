@@ -14,6 +14,7 @@ disable-model-invocation: true
 - Explicit paths always — `git add <paths>` then `git commit --only <paths>` in shared repos (the bash-guard hook blocks `add -A` and env files).
 - Docs repo (`~/code/docs`) commits directly to `master`; code repos branch via the worktree skill (Read `skills/worktree/SKILL.md`).
 - Auto-fix (`/autofix-pr` on the PR branch, or the toggle at claude.ai/code; needs the Claude GitHub App on the repo) is the unattended lane for "watch checks until green" when a session will end first — the user turning it on is push approval for that one PR only, because it pushes fixes without asking. It gets no webhook for a base-branch conflict, so zero check runs still means check mergeability yourself.
+- A multi-repo ship asks once per repo — one approving answer spends each gated verb (push, PR create, PR merge) once, so the second repo's push needs its own `AskUserQuestion`.
 - Ultrareview (`/code-review ultra`, user-launched): offer it only for high-stakes PRs (auth, payments, migrations, anything that deletes refs, branches or data), because the free runs are few and extra usage is off.
 
 ## claude-config commit lane

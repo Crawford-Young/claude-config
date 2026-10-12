@@ -809,3 +809,82 @@ test('commit-on-main stays blocked when HEAD names a missing main but another br
   execFileSync('git', ['-C', app, 'update-ref', '-d', 'refs/heads/main']);
   assert.equal(guardRun(`cd ${app} && git commit -m x`, h), 2);
 });
+
+// ---- heredoc doubled backslash (#147) ---------------------------------------
+// The Bash tool's shell spawn collapses a doubled backslash, so a heredoc body
+// holding one arrives corrupted (#123, #137). Built by code, never typed.
+const BS2 = String.fromCharCode(92, 92);
+
+test('a heredoc body holding a doubled backslash is blocked, quoted or unquoted delimiter', () => {
+  for (const delim of ["'EOF'", 'EOF', '"EOF"']) {
+    const cmd = `cat > f.txt <<${delim}\nconst re = /a${BS2}d/;\nEOF`;
+    const reason = staticCheck(cmd);
+    assert.ok(reason, `delimiter ${delim}`);
+    assert.match(reason, /Write/);
+  }
+  assert.ok(staticCheck(`node - <<'EOF'\nconsole.log('${BS2}');\nEOF`));
+  assert.ok(staticCheck(`cat <<-EOF\n\tx${BS2}y\n\tEOF`));
+});
+
+test('a doubled backslash inside a git commit -m "$(cat <<EOF ...)" body is blocked', () => {
+  const cmd = `git commit -m "$(cat <<'EOF'\nfix: handle a${BS2}b\n\nbody\nEOF\n)"`;
+  assert.ok(staticCheck(cmd));
+});
+
+test('heredocs without a doubled backslash, and text that only mentions one, pass', () => {
+  assert.equal(staticCheck(`cat > f.txt <<'EOF'\nplain text with a single ${String.fromCharCode(92)} slash\nEOF`), null);
+  assert.equal(staticCheck(`git commit -m "$(cat <<'EOF'\nfix: nothing odd\nEOF\n)"`), null);
+  // Not heredocs: a message that mentions <<EOF or a doubled backslash as text.
+  assert.equal(staticCheck(`git commit -m "doc: heredoc <<EOF with ${BS2} in it" --allow-empty`), null);
+  assert.equal(staticCheck(`echo "a ${BS2} b"`), null);
+  assert.equal(staticCheck(`cat <<< "a${BS2}b"`), null);
+});
+
+// ---- refund a spent approval whose call errored (#147) ----------------------
+
+/** A transcript: the approving answer record, then a tool_result for `id`. */
+function transcriptWithResult(dir, id, isError) {
+  const path = join(dir, `r-${Math.random().toString(36).slice(2)}.jsonl`);
+  const answer = { type: 'user', uuid: 'u-ship', timestamp: new Date().toISOString(), toolUseResult: { questions: [], answers: { 'Ship?': 'Push + open PR' } } };
+  const result = { type: 'user', uuid: 'u-res', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: 'x' }] } };
+  writeFileSync(path, `${JSON.stringify(answer)}\n${JSON.stringify(result)}\n`);
+  return path;
+}
+
+test('a spend whose tool_result errored is refunded at the next gated call', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWithResult(h, 'toolu_A', true);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_A'), null);
+  // The push errored, so the retry is allowed against the same answer ...
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_B'), null);
+  // ... and its spend stands (toolu_B has no errored result).
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile, 'toolu_C'));
+});
+
+test('a spend whose tool_result succeeded, or is missing, is not refunded', () => {
+  const { h, stateFile } = pushGateTmp();
+  const ok = transcriptWithResult(h, 'toolu_A', false);
+  assert.equal(pushGateReason('git push', '/repo', ok, stateFile, 'toolu_A'), null);
+  assert.ok(pushGateReason('git push', '/repo', ok, stateFile, 'toolu_B'));
+
+  const { h: h2, stateFile: stateFile2 } = pushGateTmp();
+  const other = transcriptWithResult(h2, 'toolu_ZZ', true);
+  assert.equal(pushGateReason('git push', '/repo', other, stateFile2, 'toolu_A'), null);
+  assert.ok(pushGateReason('git push', '/repo', other, stateFile2, 'toolu_B'));
+});
+
+test('a refund un-spends only the errored verb', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWithResult(h, 'toolu_PUSH', true);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_PUSH'), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile, 'toolu_PR'), null);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_PUSH2'), null);
+  assert.ok(pushGateReason('gh pr create --fill', '/repo', t, stateFile, 'toolu_PR2'));
+});
+
+test('without a tool_use_id the spend is never refunded', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWithResult(h, 'toolu_A', true);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile));
+});
