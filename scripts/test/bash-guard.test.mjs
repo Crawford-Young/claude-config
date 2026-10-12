@@ -390,6 +390,58 @@ test('a commit after || only runs if the first failed, so it keeps the unborn ex
   assert.equal(guardRun(`cd ${app} && git commit -m a && git commit -m b || git commit -m c`, h), 2);
 });
 
+test('a commit in a loop body may run several times, so it gets no unborn exemption', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  for (const cmd of [
+    `cd ${app} && for m in a b; do git commit -m $m; done`,
+    `cd ${app} && while true; do git commit -m x; done`,
+    `cd ${app} && until git commit -m x; do sleep 1; done`,
+    `cd ${app} && while (true); do git commit -m x; done`,
+    `cd ${app} && until ( git commit -m x ); do sleep 1; done`,
+    `cd ${app} && (for m in a b; do git add $m && git commit -m $m; done)`,
+    `cd ${app} && for m in a b\ndo\n  git commit -m $m\ndone`,
+    `cd ${app} && for m in a b; do echo $(git commit -m $m); done`,
+    `cd ${app} && bash -c "for m in a b; do git commit -m x; done"`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  // The loop ends at done: one commit after a loop of non-commits is still the root.
+  assert.equal(guardRun(`cd ${app} && for f in a b; do git add $f; done && git commit -m root`, h), 0);
+  assert.equal(guardRun(`cd ${app} && while false; do :; done; git commit -m root`, h), 0);
+  // PowerShell for (…)/while (…) blocks have no done: they open no bash loop.
+  assert.equal(guardRun(`cd ${app}; for ($i=0; $i -lt 2; $i++) { echo $i }; git commit -m root`, h), 0);
+  assert.equal(guardRun(`cd ${app}; while ($x) { $x = $false }; git commit -m root`, h), 0);
+  // A wrapper after a subshell opener is still stripped to the real command.
+  assert.equal(guardRun(`cd ${app} && (sudo git commit -m a && git commit -m b)`, h), 2);
+});
+
+test('|| carries into $(...) and bash -c bodies, for the first commit of the alternative only', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || bash -c "git commit -m b"`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || echo $(git commit -m b)`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || bash -c "git commit -m b || git commit -m c"`, h), 0);
+  // A non-commit substitution ahead of the fallback commit doesn't use up its exemption.
+  assert.equal(guardRun(`cd ${app} && git commit -m a || git commit -m "$(cat msg.txt)"`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || git commit -m "$(git log -1 --format=%s)"`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || FOO=$(date) git commit -m b`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || git commit -F <(echo hi)`, h), 0);
+  // Later commands of the alternative run after its first one committed.
+  for (const cmd of [
+    `cd ${app} && git commit -m a || bash -c "git commit -m b && git commit -m c"`,
+    `cd ${app} && git commit -m a || bash -c "git commit -m b; git commit -m c"`,
+    `cd ${app} && git commit -m a || echo $(git commit -m b) $(git commit -m c)`,
+    `cd ${app} && git commit -m a || git commit -m "$(git commit -m b)"`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+});
+
 test('commit words in quoted or heredoc text never trip commit-on-main', () => {
   const h = tmpHome();
   const app = join(h, 'app');

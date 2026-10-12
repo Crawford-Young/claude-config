@@ -371,31 +371,61 @@ const toDir = (dir, p) => {
   return dir ? resolve(dir, e) : null;
 };
 
-/** Every command a line runs, as { cmd, words, dir, pipe, seg }: `cmd` is the
- *  command word's basename, `dir` the payload cwd walked through the cd clauses
- *  before it, `pipe` an identity shared by the commands of one pipeline and
- *  `seg` the command's place in it. cd clauses are consumed; a quoted command
- *  handed to a shell is expanded in place, and so is every substitution body
- *  (`…`, $(…), <(…)), which runs before the clause holding it. Other quoted
- *  text is an argument, never a command. */
-function commands(raw, cwd) {
+/** Every command a line runs, as { cmd, words, dir, pipe, seg, viaOr, loop }:
+ *  `cmd` is the command word's basename, `dir` the payload cwd walked through
+ *  the cd clauses before it, `pipe` an identity shared by the commands of one
+ *  pipeline and `seg` the command's place in it. `viaOr` marks the first
+ *  command of an `||` alternative (it runs only if what came before failed),
+ *  `loop` one inside a for/while/until loop (it may run several times). cd
+ *  clauses are consumed; a quoted command handed to a shell is expanded in
+ *  place, and so is every substitution body (`…`, $(…), <(…)), which runs
+ *  before the clause holding it. Other quoted text is an argument, never a
+ *  command. `orFirst`/`inLoop` carry the enclosing clause's state into a body. */
+function commands(raw, cwd, orFirst = false, inLoop = false) {
   const out = [];
   let dir = cwd || null;
+  let loops = 0; // loops opened in this text and not yet closed by `done`
   const pipeSeps = [];
   for (const [pi, p] of pipelines(raw, pipeSeps).entries()) {
-    const viaOr = pipeSeps[pi] === '||';
+    // Only the alternative's first commit is sure to run before the rest of
+    // it: viaOr clears once one is emitted. A substitution ahead of it
+    // (`-m "$(cat …)"`, `FOO=$(date) git …`) leaves it set.
+    let viaOr = pipeSeps[pi] === '||' || (pi === 0 && orFirst);
+    const emit = (...cs) => {
+      out.push(...cs);
+      if (cs.some((e) => /^git(?:\.exe)?$/i.test(e.cmd) && e.words.includes('commit'))) viaOr = false;
+    };
     const pipe = {};
     for (const [seg, c] of clauses(p).entries()) {
       const w = words(c);
-      while (w.length && WRAPPER.test(w[0])) w.shift();
-      if (w.length && /^[({]/.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
+      // A bash loop keyword; a PowerShell for (…)/while (…) block has no `done`
+      // to close it. A lone `(` after the keyword is PowerShell when a `{` body
+      // follows it or the `(` runs on past this clause (`for ($i=0; …`); a bash
+      // subshell condition (`while (true); do`) closes with no `{`.
+      const psBlock = () => /^\((?!\()/.test(w[0] ?? '') && (/\)\s*\{/.test(c) || !c.includes(')'));
+      const opensLoop = (kw) => /^(?:for|while|until)$/i.test(kw) && !psBlock();
+      for (;;) {
+        if (w.length && /^[({]+./.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
+        if (!w.length || !WRAPPER.test(w[0])) break;
+        if (opensLoop(w.shift())) loops++; // a while/until condition repeats too
+      }
       const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
+      const loop = inLoop || loops > 0;
       const shellAt = !SHELL_C.test(cmd) ? -1 : /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
       const shellCmd = shellAt !== -1 && w[shellAt + 1] !== undefined ? w.slice(shellAt + 1).join(' ') : null;
       // A shell's own command string is parsed whole below; reading its
       // substitutions here too would count each gated verb twice.
-      if (shellCmd === null) for (const body of substitutions(c)) out.push(...commands(body, dir));
+      if (shellCmd === null) for (const body of substitutions(c)) emit(...commands(body, dir, viaOr, loop));
       if (!w.length) continue;
+      if (/^for$/i.test(cmd)) {
+        w.shift();
+        if (opensLoop(cmd)) loops++; // its word list runs once; the body after `do` repeats
+        continue;
+      }
+      if (/^done\)*$/.test(cmd)) {
+        loops = Math.max(0, loops - 1);
+        continue;
+      }
       if (CD.test(cmd)) {
         const arg = w.slice(1).find((a) => !/^-/.test(a) || a === '-');
         if (arg === undefined) dir = /^cd$/i.test(cmd) ? homedir() : dir;
@@ -403,10 +433,10 @@ function commands(raw, cwd) {
         continue;
       }
       if (SHELL_C.test(cmd)) {
-        if (shellCmd !== null) out.push(...commands(shellCmd, dir));
+        if (shellCmd !== null) emit(...commands(shellCmd, dir, viaOr, loop));
         continue;
       }
-      out.push({ cmd, words: w, dir, pipe, seg, viaOr });
+      emit({ cmd, words: w, dir, pipe, seg, viaOr, loop });
     }
   }
   return out;
@@ -450,7 +480,7 @@ function isGate({ cmd, words: w }) {
  *  unknown — callers fail open. */
 export function gitCalls(raw, cwd) {
   const out = [];
-  for (const { cmd, words: w, dir, viaOr } of commands(raw, cwd)) {
+  for (const { cmd, words: w, dir, viaOr, loop } of commands(raw, cwd)) {
     if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
@@ -458,7 +488,7 @@ export function gitCalls(raw, cwd) {
       if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i]);
       else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
     }
-    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr });
+    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr, loop });
   }
   return out;
 }
@@ -672,7 +702,7 @@ export function branchRules(raw, cwd) {
   return null;
 }
 
-function callRule({ sub, args, repo, viaOr }, rooted = new Set()) {
+function callRule({ sub, args, repo, viaOr, loop }, rooted = new Set()) {
   const isCommit = sub === 'commit';
   // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
   // worktree) — `restore --staged` alone only unstages and is left alone.
@@ -707,8 +737,9 @@ function callRule({ sub, args, repo, viaOr }, rooted = new Set()) {
     // chain gets it; after it the repo is born, so a later one gets the normal verdict.
     // Keyed by toplevel so cd/-C into a subdir or a case variant can't claim a second.
     // A commit after `||` only runs if the first failed (still unborn): it neither spends
-    // nor is denied the exemption.
-    if (isUnborn(repo)) {
+    // nor is denied the exemption. A commit in a loop body may be several commits, and a
+    // hook can only block the whole command, so a loop commit gets no exemption at all.
+    if (!loop && isUnborn(repo)) {
       const key = repoKey(repo);
       if (viaOr) return null;
       if (!rooted.has(key)) {
