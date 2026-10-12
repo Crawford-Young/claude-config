@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // reflect-gather.mjs — a unit's reflect evidence in one pass (#67).
 //
-//   node reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]
+//   node reflect-gather.mjs <session-name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]
 //
 // Prints one markdown payload: the transcript audit of every window renamed
 // <session-name> (audit.mjs --session) with its cost and time (#97), then
 // per-repo git log + diffstat of the commits since the unit's first window whose
 // subject names the unit's issue (the name's trailing number: `(#N)` or
 // `<repo>#N`), then the repo's open `debt` issues that name a file those commits
-// touched (#137). A name with no trailing number takes the whole window.
+// touched (#137). A name with no trailing number takes the whole window, unless
+// --issue <N> names the issue (one session that worked several): it overrides the
+// trailing number, and the `<prefix>#N` form then takes each repo's directory name.
 
 import { spawnSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMarkdown } from './audit-lib.mjs';
 import { die, git, isMain, log, parseArgs } from './lib.mjs';
@@ -106,7 +108,8 @@ if (isMain(import.meta.url)) main();
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const name = args._[0];
-  if (!name) die('usage: reflect-gather.mjs <session-name> [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]');
+  if (!name) die('usage: reflect-gather.mjs <session-name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]');
+  if (args.issue !== undefined && !/^\d+$/.test(args.issue)) die('--issue takes an issue number, e.g. --issue 147');
 
   const repos = [];
   for (let i = 0; i < process.argv.length; i++) {
@@ -139,10 +142,11 @@ function main() {
   }
   const since = /^\d{4}-\d{2}-\d{2}$/.test(day) ? `${day}T00:00:00Z` : day;
   log(`\n## Repo activity since ${day}`);
-  const unitId = parseUnit(name);
+  const parsed = parseUnit(name);
   const attributed = new Map();
   for (const repo of repos) {
     log(`\n### ${repo} (branch ${git(repo, ['branch', '--show-current']).out || 'detached'})`);
+    const unitId = args.issue ? { prefix: basename(repo), issue: args.issue } : parsed;
     if (unitId) {
       const { commits, other } = unitCommits(repo, since, unitId);
       const changes = commitChanges(repo, commits);

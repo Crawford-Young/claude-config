@@ -12,3 +12,6 @@ workspace/docs/**/assets/
 
 # Runtime-staged agent types — reflect promotes (rename into agents/) or deletes them.
 agents/staged-*
+
+# In-session subagent worktrees (Agent isolation: "worktree").
+.claude/worktrees/

@@ -173,6 +173,26 @@ test('a repo with no commit naming the issue says so and counts the window\'s ot
   }
 });
 
+test('--issue attributes commits to that issue whatever the session name ends in; a bad value fails', () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.proj, 'w6.jsonl'), window('w6', '2026-10-03', 'repo-queue'));
+    const r = spawnHarness(cli, ['repo-queue', '--issue', '8', '--root', f.root, '--repo', f.repo]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /fix: another unit, same day \(#8\)/);
+    assert.doesNotMatch(r.stdout, /feat: unit work/);
+    assert.match(r.stdout, /\(1 other commit\(s\) in the window, not naming #8\)/);
+    const over = spawnHarness(cli, ['repo-7', '--issue', '8', '--root', f.root, '--repo', f.repo]);
+    assert.match(over.stdout, /fix: another unit, same day \(#8\)/, '--issue overrides the trailing number');
+    assert.doesNotMatch(over.stdout, /feat: unit work/);
+    const bad = spawnHarness(cli, ['repo-queue', '--issue', 'abc', '--root', f.root, '--repo', f.repo]);
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /--issue/);
+  } finally {
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
 test('fetchDebt: parses gh JSON, and turns every failure into an error string instead of throwing', async () => {
   const { fetchDebt } = await import('../reflect-gather.mjs');
   const ok = fetchDebt('/r', () => ({ status: 0, stdout: '[{"number":3,"title":"t","body":"b"}]' }));
