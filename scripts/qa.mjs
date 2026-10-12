@@ -71,8 +71,10 @@ export function discoverGates(repoPath) {
   const pkg = readIfExists(join(repoPath, 'package.json'));
   if (pkg) {
     const scripts = JSON.parse(pkg).scripts || {};
+    // The lockfile names the runner: pnpm in a Bun repo fails every gate (strate-18).
+    const bun = ['bun.lock', 'bun.lockb'].some((f) => existsSync(join(repoPath, f)));
     for (const name of ['lint', 'typecheck', 'test', 'e2e']) {
-      if (scripts[name]) found.push({ name, cmd: `pnpm ${name}` });
+      if (scripts[name]) found.push({ name, cmd: bun ? `bun run ${name}` : `pnpm ${name}` });
     }
     return found;
   }

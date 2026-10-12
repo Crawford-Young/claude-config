@@ -14,13 +14,15 @@ node ~/code/claude-config/scripts/qa.mjs [repo] --list   # show what would run
 node ~/code/claude-config/scripts/qa.mjs [repo] --gate e2e
 ```
 
-Gates come from the repo itself (justfile `check` recipe, else package.json scripts, else marker files such as claude-config's `scripts/test/*.test.mjs`). Each runs foreground and unpiped; full output goes to `~/.claude/qa-logs/`, the console gets `EXIT:<code>` per gate, failure lines on red, and all four coverage metrics on green.
+Gates come from the repo itself (justfile `check` recipe, else package.json scripts — `bun run` when `bun.lock`/`bun.lockb` exists, else `pnpm` — else marker files such as claude-config's `scripts/test/*.test.mjs`). Each runs foreground and unpiped; full output goes to `~/.claude/qa-logs/`, the console gets `EXIT:<code>` per gate, failure lines on red, and all four coverage metrics on green.
 
 ## Rules
 
 - The exit line is the verdict — never a piped summary, never a remembered threshold. Read the repo's `vitest.config.ts` for its actual coverage numbers before quoting one.
 - `just check` composition differs per repo — `--list` shows what a gate actually covers; don't quote it as covering e2e when it doesn't.
 - Before e2e: the script warns when :3000/:3001 have listeners — `reuseExistingServer` silently drives whatever answers the port. Kill stale holders first (`cleanup.mjs --kill-port N`).
+- Two vitest runs in one worktree collide on `coverage/` ("report directory already in use"), so any run alongside another passes `--coverage.reportsDirectory=<own scratch dir>` (strate-18).
+- Cargo gates on Windows: Application Control blocks freshly compiled build scripts and test executables in a new target dir (os error 4551; `cargo-fmt.exe` too), so set `CARGO_TARGET_DIR` to an existing trusted target and run `rustfmt --check --edition 2024 $(git ls-files '*.rs')` (strate-18).
 - The domain CLAUDE.md's Definition of Done is the gate list for "done" — including the manual pass (playtest for games, hands-on browser QA for UI waves).
 - `/code-review`'s effort level (`low` through `max`) is sticky across sessions — it reuses the last level you typed, even from an earlier session, until you type a new one. At `low`/`medium` it reports only high-confidence findings. Any coverage-first review pass must pass `high` explicitly rather than relying on the (unknown, possibly stale) default.
 

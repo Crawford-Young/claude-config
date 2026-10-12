@@ -49,6 +49,14 @@ test('justfile check and package.json still win over markers', () => {
   assert.equal(discoverGates(repo({ ...markers, 'package.json': '{"scripts":{"test":"x"}}' }))[0].cmd, 'pnpm test');
 });
 
+test('a Bun repo (bun.lock or bun.lockb) runs its scripts with bun run', () => {
+  const pkg = '{"scripts":{"lint":"x","test":"y"}}';
+  for (const lock of ['bun.lock', 'bun.lockb']) {
+    const cmds = discoverGates(repo({ 'package.json': pkg, [lock]: '' })).map((g) => g.cmd);
+    assert.deepEqual(cmds, ['bun run lint', 'bun run test']);
+  }
+});
+
 test('a node --test gate with no "tests N" (N>=1) line fails even on exit 0', () => {
   const g = { name: 'test', cmd: 'node --test "scripts/test/*.test.mjs"' };
   assert.equal(gateVerdict(g, 0, 'ℹ tests 0\nℹ pass 0\n').ok, false);
