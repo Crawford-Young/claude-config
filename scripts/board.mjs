@@ -19,7 +19,9 @@
 // --apply sets and reads back each drifted item. Exit nonzero only when gh fails.
 //
 // Review on PR open and Done on close are the board's own workflows; this script only
-// repairs drift. Reads avoid search and the project `items` index where they lag: repos
+// repairs drift. Review is "Pull request linked to issue" (Edit → Status=Review → Save and
+// turn on); it fires only on the link event, so after a reconfig re-link the PR (remove
+// and re-add `Closes #N`) — a save replays nothing (claude-config#149). Reads avoid search and the project `items` index where they lag: repos
 // come from `gh repo list` filtered locally, and a single item reads back by node id.
 // BOARD_GH (a JSON argv prefix) replaces `gh` in tests.
 
