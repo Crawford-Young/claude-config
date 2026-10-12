@@ -20,7 +20,7 @@ Plan mode is the default surface. This skill adds where the spec lives, what's v
    - <explicitly excluded>
    ```
    Oversize spec → sub-issue or linked in-repo doc, never a loose file. There is always an issue; user approves. When the shape is obvious, Goal and Done when can each collapse to one line. A scope trim that moves work to another issue re-scopes this issue's playtest/QA Done-when to the changes it still owns, because "no change requested" can't pass while the moved work is pending (dog-eat-dog#10).
-2. **Plan in plan mode; execute the approved plan.** No plan file persists: a cold session resumes from the last commit's `Next:` plus the issue's Done-when.
+2. **Plan in plan mode; execute the approved plan.** Execution start = grab: `node ~/code/claude-config/scripts/board.mjs start <repo>#N` (label + In Progress).
 3. **Every green step is its own commit**, body written so a cold session can resume from it alone:
    ```
    What: <mechanism, not just the symptom>

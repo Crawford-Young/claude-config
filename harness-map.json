@@ -512,6 +512,17 @@
    "summary": "End-of-wave sweep report; kill-port and remove-worktree options."
   },
   {
+   "id": "script:board",
+   "kind": "script",
+   "label": "board.mjs",
+   "file": "scripts/board.mjs",
+   "summary": "Issue status on the All tickets board (project 7): start (grab = in-progress label + In Progress), set, sweep (adds open live-repo issues, reports drift; --apply fixes it).",
+   "rules": [
+    "Never sets Done on an open issue (Auto-close would close it)",
+    "Reads back by item node id; repos and issues never via search"
+   ]
+  },
+  {
    "id": "script:verify-frontmatter",
    "kind": "script",
    "label": "verify-frontmatter.mjs",
@@ -1331,6 +1342,35 @@
    "to": "store:transcripts",
    "kind": "reads",
    "label": "day spend, detached worker"
+  },
+  {
+   "from": "script:cleanup",
+   "to": "script:board",
+   "kind": "invokes",
+   "label": "sweep"
+  },
+  {
+   "from": "skill:plan",
+   "to": "script:board",
+   "kind": "invokes",
+   "label": "start at grab"
+  },
+  {
+   "from": "skill:git-ops",
+   "to": "script:board",
+   "kind": "invokes",
+   "label": "set qa/done in prod repos"
+  },
+  {
+   "from": "script:board",
+   "to": "store:github-issues",
+   "kind": "writes",
+   "label": "board status, in-progress label"
+  },
+  {
+   "from": "script:board",
+   "to": "script:lib",
+   "kind": "reads"
   }
  ]
 }

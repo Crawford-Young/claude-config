@@ -4,9 +4,12 @@
 //   node cleanup.mjs [--kill-port <n>] [--remove-worktree <path>]
 //
 // Reports, in one pass: uncommitted changes in every workspace repo and
-// linked worktrees still registered. Optionally kills a dev-server port
-// holder and removes a finished worktree (via worktree.mjs's safe
-// sequence). Read-only unless a flag asks otherwise.
+// linked worktrees still registered. A plain run (no flag) then runs
+// `board.mjs sweep`: it reports board drift and WRITES to the board, adding
+// open issues of `board`-topic repos that are missing from it; a sweep
+// failure or 60 s timeout (BOARD_SWEEP_TIMEOUT_MS overrides) only warns.
+// A flag kills a dev-server port holder or removes a finished worktree (via
+// worktree.mjs's safe sequence) and skips the sweep. Nothing else is written.
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +44,17 @@ for (const repo of repos) {
 }
 
 if (dirtyCount === 0) log('workspace clean: no uncommitted changes, no extra worktrees.');
+
+if (!args['kill-port'] && !args['remove-worktree']) sweepBoard();
+
+/** board.mjs sweep, bounded; any failure (timeout included) is one non-fatal line. */
+function sweepBoard() {
+  const timeout = Number(process.env.BOARD_SWEEP_TIMEOUT_MS) || 60_000;
+  const r = spawnSync(process.execPath, [join(scriptsDir, 'board.mjs'), 'sweep'], { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', timeout });
+  if (r.status === 0) return;
+  const why = r.error?.code === 'ETIMEDOUT' ? `timed out after ${timeout} ms` : (r.stderr || r.error?.message || `exit ${r.status}`).trim().split(/\r?\n/)[0];
+  log(`board sweep failed (non-fatal): ${why}`);
+}
 
 function killPort(port) {
   if (!Number.isInteger(port)) die('--kill-port needs a port number');
