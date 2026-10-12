@@ -473,6 +473,35 @@ test('transcriptWindows: a resumed file\'s replayed records stay with the transc
   }
 });
 
+test('transcriptWindows: a replay belongs to the original transcript whatever the files\' names sort to (#142)', async () => {
+  // the original and its resume, written under names in both orders; the resume's replay
+  // carries the original's records unchanged, so it is the file span that tells them apart
+  const run = async (originalName, resumeName) => {
+    const root = mkdtempSync(join(tmpdir(), 'audit-order-'));
+    try {
+      const proj = join(root, 'C--proj');
+      mkdirSync(proj, { recursive: true });
+      const original = [{ type: 'user', uuid: 'o-u0', timestamp: T(0), message: { content: 'go' } }, asst('o1', usage({ input_tokens: 1e6 }), { ts: T(1) })];
+      writeFileSync(join(proj, `${originalName}.jsonl`), jsonl(...original, title('one')));
+      writeFileSync(join(proj, `${resumeName}.jsonl`), jsonl(...original, title('one'), title('two'),
+        { type: 'user', uuid: 'r-u0', timestamp: T(10), message: { content: 'resumed' } }, asst('r1', usage({ input_tokens: 1e6 }), { ts: T(11) })));
+      const r = await auditRoot(root);
+      const wall = new Map(r.time.sessions.map((s) => [s.sessionId, s.wallMs / 60e3]));
+      return {
+        shape: (await windowShape(root)).map(([file, , name, n]) => [file.replace(`${originalName}.jsonl`, 'ORIGINAL').replace(`${resumeName}.jsonl`, 'RESUME'), name, n]).sort(),
+        rows: r.sessions.map((s) => [s.title, s.requests, wall.get(s.sessionId)]).sort(),
+      };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const originalFirst = await run('a', 'b');
+  const resumeFirst = await run('b', 'a'); // the resume sorts first by name
+  assert.deepEqual(originalFirst.shape, [['ORIGINAL', 'one', 3], ['RESUME', 'two', 4]]);
+  assert.deepEqual(originalFirst.rows, [['one', 1, 1], ['two', 1, 1]]);
+  assert.deepEqual(resumeFirst, originalFirst);
+});
+
 test('transcriptWindows: a uuid repeated within one file is read once, as a replay is', async () => {
   const root = mkdtempSync(join(tmpdir(), 'audit-repeat-'));
   try {

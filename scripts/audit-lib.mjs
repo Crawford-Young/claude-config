@@ -8,7 +8,8 @@
 // - Subagents live in <session>/subagents/agent-<id>.jsonl next to a
 //   .meta.json carrying agentType; their records never appear in the parent file.
 // - Resumed/forked sessions replay earlier records into a new file. transcriptWindows
-//   leaves a replayed uuid with the transcript read first (strate stores a uuid once);
+//   leaves a replayed uuid with the transcript read first, and reads the oldest file
+//   first (by first and last stamp, #142), not in name order (strate stores a uuid once);
 //   the collector still dedupes non-request records on uuid, tool calls on tool_use id.
 // - A user-set name (/rename) is a {type:'custom-title'} record. One file can hold
 //   several units (/rename without /clear), so it splits into a window at each
@@ -794,6 +795,28 @@ export function windowSplitter() {
   };
 }
 
+/** Main transcripts oldest first, so a replayed uuid stays with the original whatever
+ *  the file names sort to (#142). A resume replays the original's records unchanged and
+ *  appends later ones: it starts with the original's stamp (or later) and ends after it,
+ *  so (first stamp, last stamp) orders an original before its resume; a file with no
+ *  stamp goes last, and the path settles a tie. (No resume is on disk to confirm that
+ *  replays keep their stamps; the fixture assumes they do, the harder case.) */
+async function inReadOrder(mains) {
+  const spans = new Map();
+  for (const { file } of mains) {
+    let lo = Infinity, hi = -Infinity;
+    for await (const rec of readListed(file)) {
+      const t = stampOf(rec);
+      if (t !== null) [lo, hi] = [Math.min(lo, t), Math.max(hi, t)];
+    }
+    spans.set(file, [lo, hi]);
+  }
+  return mains.sort((a, b) => {
+    const [x, y] = [spans.get(a.file), spans.get(b.file)];
+    return x[0] === y[0] ? (x[1] === y[1] ? a.file.localeCompare(b.file) : x[1] - y[1]) : x[0] < y[0] ? -1 : 1;
+  });
+}
+
 /** Yields { file, windows, records } for every transcript under root. windows is the
  *  ctx of each /rename window, gaining window (the key its rows go under: the bare
  *  sessionId, then sessionId#2, #3…) and name (its custom-title). records streams
@@ -808,9 +831,9 @@ export function windowSplitter() {
  *  final one). Main transcripts come first so their windows are known when subagents
  *  are placed. */
 export async function* transcriptWindows(root) {
-  const subs = [], windowsOf = new Map(), held = new Set();
-  for await (const { file, ctx } of walkTranscripts(root)) {
-    if (ctx.agent) { subs.push({ file, ctx }); continue; }
+  const mains = [], subs = [], windowsOf = new Map(), held = new Set();
+  for await (const t of walkTranscripts(root)) (t.ctx.agent ? subs : mains).push(t);
+  for (const { file, ctx } of await inReadOrder(mains)) {
     const split = windowSplitter(), replays = new Set();
     let i = 0;
     for await (const rec of readListed(file)) {
