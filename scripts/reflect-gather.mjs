@@ -5,7 +5,8 @@
 //
 // Prints one markdown payload: the transcript audit of every window renamed
 // <session-name> (audit.mjs --session) with its cost and time (#97), then
-// per-repo git log + diffstat since the unit's first window.
+// per-repo git log + diffstat since the unit's first window, then the repo's
+// open `debt` issues that name a file those commits touched (#137).
 
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -17,6 +18,54 @@ import { die, git, isMain, log, parseArgs } from './lib.mjs';
  *  started has null stderr and status, so fall back to its error. */
 export function auditFailure(r) {
   return { text: r.stderr || `${r.error?.message || 'audit.mjs failed'}\n`, code: r.status || 1 };
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Split open debt issues into those whose title or body names a touched path
+ *  (on a path boundary: `a.md` does not match `data.md`, but a directory prefix or
+ *  blob URL before `scripts/a.md` still matches; a root-level `README.md` does not
+ *  match `scripts/README.md`, so it takes no prefix) and a count of the rest. */
+export function matchDebt(issues, touched) {
+  const matched = [];
+  for (const { number, title, body } of issues) {
+    const text = `${title}\n${body ?? ''}`;
+    const paths = touched.filter((p) => new RegExp(`(?<![\\w.${p.includes('/') ? '' : '/'}-])${escapeRe(p)}(?![\\w-])`).test(text));
+    if (paths.length) matched.push({ number, title, paths });
+  }
+  return { matched, other: issues.length - matched.length };
+}
+
+const DEBT_LIMIT = 200;
+const GH_TIMEOUT_MS = 15000;
+
+/** Open `debt` issues of the repo at `cwd`. Returns { issues, truncated } or { error } — never throws. */
+export function fetchDebt(cwd, run = spawnSync) {
+  const r = run('gh', ['issue', 'list', '--label', 'debt', '--state', 'open', '--json', 'number,title,body', '--limit', String(DEBT_LIMIT)], { cwd, encoding: 'utf8', timeout: GH_TIMEOUT_MS });
+  if (r.error || r.status !== 0) return { error: (r.error?.message || r.stderr || `gh exited ${r.status}`).trim() };
+  try {
+    const issues = JSON.parse(r.stdout);
+    return { issues, truncated: issues.length >= DEBT_LIMIT };
+  } catch (e) {
+    return { error: `unreadable gh output: ${e.message}` };
+  }
+}
+
+export function renderDebt({ matched, other, error, truncated }) {
+  if (error) return `(debt lookup skipped: ${error})`;
+  if (!matched.length && !other) return '(no open debt issues)';
+  const lines = matched.length ? matched.map((m) => `- #${m.number} ${m.title} (${m.paths.join(', ')})`) : ['(none name touched files)'];
+  if (other) lines.push(`${other} other open debt issue(s) not naming touched files`);
+  if (truncated) lines.push(`(gh returned the ${DEBT_LIMIT}-issue limit; the list may be truncated and the counts undercount)`);
+  return lines.join('\n');
+}
+
+/** The rendered debt lines for one repo: issues naming files its commits touched since `since`. */
+export function debtSection(repo, since, run = spawnSync) {
+  const names = git(repo, ['log', '--name-only', '--format=', `--since=${since}`]).out;
+  const touched = [...new Set(names.split('\n').filter(Boolean))];
+  const debt = fetchDebt(repo, run);
+  return renderDebt(debt.error ? debt : { ...matchDebt(debt.issues, touched), truncated: debt.truncated });
 }
 
 const minutes = (ms) => `${Math.round(ms / 60e3)} min`;
@@ -68,5 +117,14 @@ function main() {
     const dirty = git(repo, ['status', '--porcelain']).out;
     if (dirty) log(`uncommitted: ${dirty.split('\n').filter(Boolean).length} file(s)`);
   }
-  if (repos.length === 0) log('(no --repo given)');
+  if (repos.length === 0) {
+    log('(no --repo given)');
+    return;
+  }
+
+  log('\n## Open debt in touched code');
+  for (const repo of repos) {
+    log(`\n### ${repo}`);
+    log(debtSection(repo, since));
+  }
 }

@@ -77,6 +77,102 @@ test('auditFailure: a failed spawn (null stderr) still yields text and a non-zer
   assert.deepEqual(auditFailure({ status: 1, stderr: 'no session named x\n' }), { text: 'no session named x\n', code: 1 });
 });
 
+test('matchDebt: an issue matches when its title or body names a touched path, on a path boundary', async () => {
+  const { matchDebt } = await import('../reflect-gather.mjs');
+  const issues = [
+    { number: 1, title: 'flaky retry in scripts/lib.mjs', body: '' },
+    { number: 2, title: 'cleanup', body: 'see `hooks/a.mjs` and skills/x/SKILL.md' },
+    { number: 3, title: 'unrelated', body: 'metadata.md is stale' },
+    { number: 4, title: 'null body', body: null },
+  ];
+  const r = matchDebt(issues, ['scripts/lib.mjs', 'hooks/a.mjs', 'skills/x/SKILL.md', 'data.md', 'a.md']);
+  assert.deepEqual(r.matched, [
+    { number: 1, title: 'flaky retry in scripts/lib.mjs', paths: ['scripts/lib.mjs'] },
+    { number: 2, title: 'cleanup', paths: ['hooks/a.mjs', 'skills/x/SKILL.md'] },
+  ]);
+  assert.equal(r.other, 2);
+});
+
+test('matchDebt: a path cited with a directory prefix or a blob URL still matches', async () => {
+  const { matchDebt } = await import('../reflect-gather.mjs');
+  const issues = [
+    { number: 1, title: 'see claude-config/scripts/lib.mjs', body: '' },
+    { number: 2, title: 'x', body: 'at ~/code/x/scripts/lib.mjs:12' },
+    { number: 3, title: 'x', body: 'https://github.com/o/r/blob/main/scripts/lib.mjs#L3' },
+    { number: 4, title: 'x', body: 'myscripts/lib.mjs is different' },
+  ];
+  const r = matchDebt(issues, ['scripts/lib.mjs']);
+  assert.deepEqual(r.matched.map((m) => m.number), [1, 2, 3]);
+});
+
+test('matchDebt: a root-level touched file does not match a same-named file in a directory', async () => {
+  const { matchDebt } = await import('../reflect-gather.mjs');
+  const issues = [
+    { number: 1, title: 'x', body: 'scripts/README.md is stale' },
+    { number: 2, title: 'README.md is stale', body: '' },
+  ];
+  assert.deepEqual(matchDebt(issues, ['README.md']).matched.map((m) => m.number), [2]);
+});
+
+test('fetchDebt: passes a timeout to gh and flags a list at the limit as possibly truncated', async () => {
+  const { fetchDebt, renderDebt } = await import('../reflect-gather.mjs');
+  let opts;
+  fetchDebt('/r', (_c, _a, o) => ((opts = o), { status: 0, stdout: '[]' }));
+  assert.ok(opts.timeout > 0 && opts.timeout <= 30000);
+  const full = JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ number: i, title: 't', body: '' })));
+  assert.equal(fetchDebt('/r', () => ({ status: 0, stdout: full })).truncated, true);
+  assert.equal(fetchDebt('/r', () => ({ status: 0, stdout: '[]' })).truncated, false);
+  assert.match(renderDebt({ matched: [], other: 200, truncated: true }), /may be truncated/);
+  assert.match(fetchDebt('/r', () => ({ status: null, error: new Error('spawnSync gh ETIMEDOUT') })).error, /ETIMEDOUT/);
+});
+
+test('debtSection: files the fixture repo committed reach matchDebt, so the matching issue prints', async () => {
+  const { debtSection } = await import('../reflect-gather.mjs');
+  const f = fixture();
+  try {
+    const issues = [
+      { number: 11, title: 'f.txt is a mess', body: '' },
+      { number: 12, title: 'old.txt predates the unit', body: '' },
+      { number: 13, title: 'elsewhere', body: 'nothing here' },
+    ];
+    const out = debtSection(f.repo, '2026-10-03T00:00:00Z', () => ({ status: 0, stdout: JSON.stringify(issues) }));
+    assert.equal(out, '- #11 f.txt is a mess (f.txt)\n2 other open debt issue(s) not naming touched files');
+  } finally {
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('fetchDebt: parses gh JSON, and turns every failure into an error string instead of throwing', async () => {
+  const { fetchDebt } = await import('../reflect-gather.mjs');
+  const ok = fetchDebt('/r', () => ({ status: 0, stdout: '[{"number":3,"title":"t","body":"b"}]' }));
+  assert.deepEqual(ok, { issues: [{ number: 3, title: 't', body: 'b' }], truncated: false });
+  assert.match(fetchDebt('/r', () => ({ status: null, error: new Error('spawn gh ENOENT') })).error, /spawn gh ENOENT/);
+  assert.match(fetchDebt('/r', () => ({ status: 1, stderr: 'gh auth login required\n' })).error, /gh auth login required/);
+  assert.match(fetchDebt('/r', () => ({ status: 0, stdout: 'not json' })).error, /./);
+});
+
+test('renderDebt: lists matches with paths and counts the rest; reports the empty and error cases', async () => {
+  const { renderDebt } = await import('../reflect-gather.mjs');
+  assert.equal(
+    renderDebt({ matched: [{ number: 5, title: 'T', paths: ['a.mjs', 'b.mjs'] }], other: 2 }),
+    '- #5 T (a.mjs, b.mjs)\n2 other open debt issue(s) not naming touched files',
+  );
+  assert.equal(renderDebt({ matched: [], other: 0 }), '(no open debt issues)');
+  assert.equal(renderDebt({ matched: [], other: 3 }), '(none name touched files)\n3 other open debt issue(s) not naming touched files');
+  assert.equal(renderDebt({ error: 'gh not found' }), '(debt lookup skipped: gh not found)');
+});
+
+test('the gather prints the debt section per repo whatever gh answers, and still exits 0', () => {
+  const f = fixture();
+  try {
+    const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /## Open debt in touched code\n[\s\S]*### .*repo\n(- #|\(|\d+ other)/);
+  } finally {
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
 test('an unknown session name fails with the audit filter\'s message', () => {
   const f = fixture();
   try {
