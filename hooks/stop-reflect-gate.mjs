@@ -21,8 +21,9 @@
 //
 // Second gate (issue #122): once reflect has run for the merge (read after it,
 // or the merge is reflect's own landing PR), the turn may not end until an
-// AskUserQuestion offering fresh-session-or-continue (question or option text matching
-// /fresh/ or /clear/, the older wording, and /continu/) was asked after that read and the merge. The tool call is
+// AskUserQuestion offering fresh-session-or-continue (an option labelled fresh session,
+// or clear in the older wording, plus one labelled continue: the labels skills/continuation/SKILL.md
+// names, #178) was asked after that read and the merge. The tool call is
 // matched, not a marker word: the continuation skill mandates the call. One
 // block per merge, tracked under `cont` in the same state file.
 
@@ -96,8 +97,18 @@ export function lastReflectAt(text) {
   return at;
 }
 
-/** Was an AskUserQuestion offering a fresh session (or, in older transcripts, a clear) and
- *  continue asked after `after` (epoch ms)? */
+const FRESH_OPTION = /\bfresh (?:session|window)\b|^\/?clear\b/i;
+const CONTINUE_OPTION = /^continu/i;
+
+/** Is this AskUserQuestion question the continuation ask's shape: one option labelled
+ *  fresh session (or, the older wording, clear) and another labelled continue? Loose words
+ *  are not enough: "File a fresh debt issue, or continue without one?" is a reflect ask (#178). */
+export function isContinuationQuestion(q) {
+  const labels = (Array.isArray(q?.options) ? q.options : []).map((x) => x?.label).filter((x) => typeof x === 'string').map((x) => x.replace(/^[\s*_]+/, ''));
+  return labels.some((f, i) => FRESH_OPTION.test(f) && labels.some((c, j) => j !== i && CONTINUE_OPTION.test(c)));
+}
+
+/** Was the continuation ask (isContinuationQuestion) asked after `after` (epoch ms)? */
 export function continuationAsked(text, after) {
   for (const l of text.split('\n')) {
     if (!l.includes('AskUserQuestion')) continue;
@@ -111,12 +122,7 @@ export function continuationAsked(text, after) {
     if (Number.isNaN(t) || t <= after) continue;
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
       if (c.type !== 'tool_use' || c.name !== 'AskUserQuestion') continue;
-      for (const q of Array.isArray(c.input?.questions) ? c.input.questions : []) {
-        const words = [q?.question, ...(Array.isArray(q?.options) ? q.options.flatMap((x) => [x?.label, x?.description]) : [])]
-          .filter((x) => typeof x === 'string')
-          .join('\n');
-        if (/\b(?:fresh|clear)\b/i.test(words) && /\bcontinu/i.test(words)) return true;
-      }
+      if ((Array.isArray(c.input?.questions) ? c.input.questions : []).some(isContinuationQuestion)) return true;
     }
   }
   return false;

@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Continuation
 
-Ask first, with one AskUserQuestion: fresh session (`/exit`, run the launch line, paste) or continue. Emit the block only if the user picks the fresh session — never in the same reply as the ask, and never unprompted.
+Ask first, with one AskUserQuestion whose options are labelled `Fresh session` and `Continue` (stop-reflect-gate matches those labels). A fresh session means `/exit`, run the launch line, paste. Emit the block only if the user picks the fresh session — never in the same reply as the ask, and never unprompted.
 
 ## If continue
 

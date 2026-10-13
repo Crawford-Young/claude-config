@@ -142,19 +142,36 @@ const ask = (min, input) => ({
   timestamp: ago(min),
   message: { content: [{ type: 'tool_use', id: `q${min}`, name: 'AskUserQuestion', input }] },
 });
-const clearQ = { questions: [{ question: 'Clear or continue in this session?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+const clearQ = { questions: [{ question: 'Clear or continue in this session?', options: [{ label: '/clear' }, { label: 'Continue' }] }] };
 const optionsOnly = { questions: [{ question: 'Next step?', options: [{ label: 'Clear context' }, { label: 'Continue here', description: 'keep going' }] }] };
-const freshQ = { questions: [{ question: 'Fresh session (/exit, run the launch line, paste) or continue?', options: [{ label: 'Fresh session' }, { label: 'Continue' }] }] };
+const freshQ = { questions: [{ question: 'What next?', options: [{ label: 'End here (Recommended)' }, { label: 'Fresh session' }, { label: 'Continue' }] }] };
 const unrelated = { questions: [{ question: 'Which branch name?', options: [{ label: 'a' }, { label: 'b' }] }] };
+const debtQ = { questions: [{ question: 'File a fresh debt issue, or continue without one?', options: [{ label: 'File a fresh debt issue' }, { label: 'Continue without one' }] }] };
+const wordsOnly = { questions: [{ question: 'Fresh session or continue?', options: [{ label: 'Yes' }, { label: 'No', description: 'clear it and continue later' }] }] };
+const labelled = (...labels) => ({ questions: [{ question: 'Next?', options: labels.map((label) => ({ label })) }] });
+/** continuationAsked over a transcript holding one ask `min` minutes ago, with a 20-min cutoff. */
+const asked = (min, input) => continuationAsked(JSON.stringify(ask(min, input)), Date.now() - 20 * 60_000);
 
-test('continuationAsked: question text or option labels with clear and continue, after the cutoff only', () => {
-  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
-  const cut = Date.now() - 20 * 60_000;
-  assert.equal(continuationAsked(tx(ask(5, clearQ)), cut), true, 'words in question text');
-  assert.equal(continuationAsked(tx(ask(5, optionsOnly)), cut), true, 'words only in option labels');
-  assert.equal(continuationAsked(tx(ask(5, freshQ)), cut), true, 'the fresh-session-or-continue wording');
-  assert.equal(continuationAsked(tx(ask(5, unrelated)), cut), false, 'unrelated ask');
-  assert.equal(continuationAsked(tx(ask(30, clearQ)), cut), false, 'asked before the cutoff');
+test('continuationAsked: an option labelled fresh session (or clear) plus one labelled continue, after the cutoff only', () => {
+  assert.equal(asked(5, freshQ), true, 'the fresh-session-or-continue labels');
+  assert.equal(asked(5, clearQ), true, 'the older clear label');
+  assert.equal(asked(5, optionsOnly), true, 'clear and continue leading longer labels');
+  assert.equal(asked(5, labelled(' **Fresh session**', ' Continue')), true, 'padded or bold labels');
+  assert.equal(asked(5, unrelated), false, 'unrelated ask');
+  assert.equal(asked(30, freshQ), false, 'asked before the cutoff');
+});
+
+test('continuationAsked: a reflect-dialogue ask holding both words is not the continuation ask (#178)', () => {
+  assert.equal(asked(5, debtQ), false, 'fresh debt issue / continue without one');
+  assert.equal(asked(5, wordsOnly), false, 'the words in question text and descriptions, not the labels');
+  assert.equal(asked(5, labelled('Continue in a fresh session')), false, 'one option cannot be both');
+});
+
+test('continuationAsked accepts the option labels skills/continuation/SKILL.md names, so a wording change there fails here', () => {
+  const skill = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills', 'continuation', 'SKILL.md'), 'utf8');
+  const m = skill.match(/AskUserQuestion whose options are labelled `([^`]+)` and `([^`]+)`/);
+  assert.ok(m, 'the continuation skill names its option labels');
+  assert.equal(asked(5, labelled(m[1], m[2])), true, `labels ${m[1]} / ${m[2]}`);
 });
 
 test('after reflect read post-merge: blocks once for the continuation ask, then stays quiet', () => {
@@ -184,9 +201,11 @@ test('a fresh-session-or-continue ask after reflect satisfies the gate (old clea
   }
 });
 
-test('an unrelated ask, or a clear-or-continue ask before the reflect read, still blocks', () => {
+test('an unrelated ask, a reflect debt ask, or a clear-or-continue ask before the reflect read, still blocks', () => {
   const h1 = mkdtempSync(join(tmpdir(), 'gate-home-'));
   assert.equal(runHook({ transcript_path: transcript(...mergeAt('c4', 30), reflectRead('r', 10), ask(2, unrelated)) }, h1).code, 2);
+  const h3 = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c4b', 30), reflectRead('r', 10), ask(2, debtQ)) }, h3).code, 2, 'the #178 debt ask');
   const h2 = mkdtempSync(join(tmpdir(), 'gate-home-'));
   assert.equal(runHook({ transcript_path: transcript(...mergeAt('c5', 30), ask(20, clearQ), reflectRead('r', 10)) }, h2).code, 2);
 });
