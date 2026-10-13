@@ -16,11 +16,12 @@
 // sync:  verify the live edits match origin/main for those paths, then
 //        restore tracked copies and fast-forward the main checkout. Untracked
 //        copies of incoming additions (named or not) are adopted if identical,
-//        refused before any reset if not. Other sessions' live edits in files
-//        the incoming commits also touch are saved as patches, reset, and
-//        3-way re-applied after the merge.
+//        refused before any reset if not, as is an untracked file where they
+//        add a directory. Other sessions' live edits in files the incoming
+//        commits also touch are saved as patches, reset, and 3-way re-applied
+//        after the merge.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -168,12 +169,39 @@ function zList(repo, args) {
 // precondition. Each goes through classifySyncPaths' untracked branch: adopted
 // if identical, a die() before any reset if not. A path staged in the index is
 // left out — it is tracked, and ff-only refusing over it is the right answer.
-function incomingAdditions(named) {
+function incomingAdditions(named, added) {
   const skip = new Set(named);
-  return zList(cfg, ['diff', '--name-only', '--diff-filter=A', '--no-renames', 'HEAD', 'origin/main']).filter(
+  return added.filter(
     (f) =>
       !skip.has(f) && existsSync(join(cfg, f)) && git(cfg, ['ls-files', '--error-unmatch', f]).code !== 0,
   );
+}
+
+// An untracked FILE where HEAD..origin/main adds a DIRECTORY (`sub` on disk,
+// `sub/new.md` incoming) also makes `merge --ff-only` refuse, and nothing sits
+// at the added path itself for incomingAdditions to see (claude-config#183).
+// lstat, not stat: git never follows a symlink, so one in the prefix blocks too.
+// A prefix HEAD tracks is not a block: to add beneath it the incoming range
+// must delete it, and carryPaths owns a locally-modified deletion.
+function fileDirBlocks(added) {
+  const blocks = new Map();
+  for (const f of added) {
+    const parts = f.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join('/');
+      const st = lstatSync(join(cfg, prefix), { throwIfNoEntry: false });
+      if (!st) break;
+      if (st.isDirectory()) continue;
+      if (!blocks.has(prefix) && git(cfg, ['cat-file', '-e', `HEAD:${prefix}`]).code !== 0) blocks.set(prefix, f);
+      break;
+    }
+  }
+  if (blocks.size) {
+    die(
+      `untracked files sit where incoming commits add a directory — nothing was reset; reconcile by hand (never discard):\n` +
+        [...blocks].map(([p, f]) => `  ${p}  (incoming ${f})`).join('\n'),
+    );
+  }
 }
 
 // Another session's uncommitted edit in a file the incoming range also touches
@@ -260,7 +288,9 @@ function describeKept(kept) {
 function cmdSync() {
   const files = paths();
   gitOrDie(cfg, ['fetch', 'origin']);
-  const { tracked, adopt } = classifySyncPaths([...files, ...incomingAdditions(files)]);
+  const added = zList(cfg, ['diff', '--name-only', '--diff-filter=A', '--no-renames', 'HEAD', 'origin/main']);
+  fileDirBlocks(added);
+  const { tracked, adopt } = classifySyncPaths([...files, ...incomingAdditions(files, added)]);
 
   if (tracked.length) {
     const drift = git(cfg, ['diff', 'origin/main', '--numstat', '--', ...tracked]);

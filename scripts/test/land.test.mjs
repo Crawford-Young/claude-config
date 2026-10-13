@@ -596,12 +596,33 @@ test('sync refuses, resetting nothing, when the incoming range deletes a locally
   assert.deepEqual(readFileSync(join(cfg, 'mine.md')), before.mine, 'not even the named path was reset');
 });
 
-test('sync puts a carried edit back when the ff-merge itself fails after the reset', () => {
+test('sync refuses, resetting nothing, when an untracked file sits where incoming commits add a directory', () => {
   const { root, origin, cfg, env } = overlapRepo(SHARED.replace('one', 'ONE upstream'));
-  pushUpstream(root, origin, { 'sub/new.md': 'upstream\n' }, 'feat: add sub/new.md');
-  // An untracked FILE where the incoming commits add a DIRECTORY: no addition
-  // exists on disk to pre-check, so ff-only refuses only AFTER sync reset shared.md.
+  pushUpstream(root, origin, { 'sub/deep/new.md': 'upstream\n' }, 'feat: add sub/deep/new.md');
+  // claude-config#183: nothing sits at sub/deep/new.md itself, so only a prefix
+  // walk sees that ff-only would refuse over the FILE `sub`.
   writeFileSync(join(cfg, 'sub'), 'someone else\r\n');
+  writeFileSync(join(cfg, 'shared.md'), crlf(SHARED.replace('seven', 'SEVEN foreign')));
+  const before = { head: head(cfg), shared: readFileSync(join(cfg, 'shared.md')), mine: readFileSync(join(cfg, 'mine.md')) };
+
+  const out = syncFails(env, ['mine.md']);
+
+  assert.match(out, /nothing was reset/);
+  assert.match(out, /^ {2}sub {2}\(incoming sub\/deep\/new\.md\)$/m, 'names the blocking path');
+  assert.equal(head(cfg), before.head, 'no merge happened');
+  assert.deepEqual(readFileSync(join(cfg, 'shared.md')), before.shared, 'the overlapping edit was never reset');
+  assert.deepEqual(readFileSync(join(cfg, 'mine.md')), before.mine, 'not even the named path was reset');
+  assert.equal(readFileSync(join(cfg, 'sub'), 'utf8'), 'someone else\r\n');
+});
+
+test('sync puts a carried edit back when the ff-merge itself fails after the reset', () => {
+  const { cfg, env } = overlapRepo(SHARED.replace('one', 'ONE upstream'));
+  // A named path whose worktree matches origin/main (the drift check passes)
+  // but whose index holds a third version: restore resets only the worktree,
+  // so ff-only refuses the index entry AFTER sync reset shared.md.
+  writeFileSync(join(cfg, 'mine.md'), 'v3\r\n');
+  sh(cfg, 'git', ['add', 'mine.md']);
+  writeFileSync(join(cfg, 'mine.md'), 'v2\r\n');
   const edited = crlf(SHARED.replace('seven', 'SEVEN foreign'));
   writeFileSync(join(cfg, 'shared.md'), edited);
   const before = head(cfg);
@@ -612,5 +633,4 @@ test('sync puts a carried edit back when the ff-merge itself fails after the res
   assert.match(out, /Carried edits were put back\./, 'the reset-then-restore branch really ran');
   assert.equal(head(cfg), before, 'still on the old commit');
   assert.equal(lf(readFileSync(join(cfg, 'shared.md'), 'utf8')), lf(edited), 'the carried edit is back');
-  assert.equal(readFileSync(join(cfg, 'sub'), 'utf8'), 'someone else\r\n');
 });
