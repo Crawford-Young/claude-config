@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:net';
 import { commitlintConfig, servePorts } from '../worktree.mjs';
 
 function writeSession(sessionsDir, pid, name, nameSource) {
@@ -104,11 +105,13 @@ test('bare remove dies with the usage line instead of targeting the cwd', () => 
 
 /**
  * Run `fn` while a child node process holds `dir` as its cwd, then kill it and wait for it
- * to exit. The exit promise exists from spawn time, so a child that already died cannot hang
+ * to exit (or, with `lifetimeMs`, it exits by itself after that long). The exit promise exists
+ * from spawn time, so a child that already died cannot hang
  * the wait.
  */
-async function withHolder(dir, fn) {
-  const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: dir, stdio: 'ignore' });
+async function withHolder(dir, fn, lifetimeMs = 0) {
+  const hold = lifetimeMs ? `setTimeout(() => {}, ${lifetimeMs})` : 'setInterval(() => {}, 1000)';
+  const holder = spawn(process.execPath, ['-e', hold], { cwd: dir, stdio: 'ignore' });
   const exited = new Promise((res) => holder.once('exit', res));
   holder.on('error', () => {});
   try {
@@ -138,6 +141,21 @@ test('remove names the likely holder when the directory delete fails', heldOpts,
   const wt = join(root, '.worktrees', 'app-held');
 
   await withHolder(wt, () => assertHolderMessage(spawnHarness(script, ['remove', wt], { env })));
+});
+
+test('remove retries a pinned-dir EPERM until the holder exits', heldOpts, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'pinned'], { encoding: 'utf8', env });
+  const wt = join(root, '.worktrees', 'app-pinned');
+
+  // The holder lets go on its own 1.5 s in, while remove's retries are still running.
+  await withHolder(wt, () => {
+    const r = spawnHarness(script, ['remove', wt], { env });
+    assert.equal(r.status, 0, r.stderr);
+  }, 1500);
+  assert.ok(!existsSync(wt), 'worktree dir removed once the holder exited');
 });
 
 test('retry on a held, already-unregistered empty dir names the holder and keeps the dir', heldOpts, async () => {
@@ -465,6 +483,18 @@ test('servePorts reads serve-type Justfile recipes and package.json scripts only
   assert.equal(commitlintConfig(dir), null, 'package.json with no commitlint key');
 });
 
+/** An OS-assigned free port, so concurrent suites never bind the same one. */
+function freePort() {
+  return new Promise((res, rej) => {
+    const srv = createServer();
+    srv.once('error', rej);
+    srv.listen(0, () => {
+      const { port } = srv.address();
+      srv.close(() => res(port));
+    });
+  });
+}
+
 /** A node server on `port` with `cwd` as its working directory, like the `npx serve` left behind. */
 async function startListener(cwd, port) {
   const child = spawn(process.execPath, ['-e', `require('node:http').createServer().listen(${port}, () => console.log('up'))`], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -484,18 +514,19 @@ test('remove --dry-run names the serve-port listener; remove stops it, then remo
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'serve'], { env });
   const wt = join(root, '.worktrees', 'app-serve');
-  writeFileSync(join(wt, 'Justfile'), 'serve:\n    npx serve build/web -p 8065\n');
+  const port = await freePort();
+  writeFileSync(join(wt, 'Justfile'), `serve:\n    npx serve build/web -p ${port}\n`);
 
-  const { child, exited } = await startListener(wt, 8065);
+  const { child, exited } = await startListener(wt, port);
   try {
     const dry = execHarness(script, ['remove', wt, '--dry-run'], { env });
-    assert.match(dry, /would stop \S+ \(PID \d+\) listening on port 8065/);
+    assert.match(dry, new RegExp(`would stop \\S+ \\(PID \\d+\\) listening on port ${port}`));
     assert.match(dry, /would remove /);
     assert.ok(existsSync(wt), 'dry run removes nothing');
     assert.equal(child.exitCode, null, 'dry run stops nothing');
 
     const out = execHarness(script, ['remove', wt], { env });
-    assert.match(out, new RegExp(`stopped \\S+ \\(PID ${child.pid}\\) listening on port 8065`));
+    assert.match(out, new RegExp(`stopped \\S+ \\(PID ${child.pid}\\) listening on port ${port}`));
     await exited;
     assert.ok(!existsSync(wt), 'worktree dir removed');
   } finally {

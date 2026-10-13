@@ -21,7 +21,8 @@
 // worktree (registration gone, directory left behind) deletes it if empty, or lists
 // what remains if not.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -317,7 +318,7 @@ function stopServePorts(wtPath, dryRun) {
   }
 }
 
-function cmdRemove() {
+async function cmdRemove() {
   if (!args._[1]) die('usage: worktree.mjs remove <worktree-path> [--port <n>] [--dry-run]');
   const wtPath = resolve(args._[1]);
   if (!existsSync(wtPath)) die(`worktree path not found: ${wtPath}`);
@@ -356,8 +357,10 @@ function cmdRemove() {
   if (r.code !== 0 || existsSync(wtPath)) {
     // Windows: node_modules file locks and >260-char paths defeat git's removal.
     // fs.rm with retries handles both (node uses \\?\ long paths internally).
+    // Async rm, not rmSync: on Node 24 rmSync ignores maxRetries for a folder another
+    // process holds as its cwd, so only the async form waits out a holder that is exiting (#197).
     try {
-      rmSync(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      await rm(wtPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch (e) {
       die(holderMessage(wtPath, e));
     }
@@ -411,7 +414,7 @@ function readdirSafe(dir) {
 if (isMain(import.meta.url)) {
   if (cmd === 'new') cmdNew();
   else if (cmd === 'prepush') cmdPrepush();
-  else if (cmd === 'remove') cmdRemove();
+  else if (cmd === 'remove') await cmdRemove();
   else if (cmd === 'list') cmdList();
   else die('usage: worktree.mjs new <repo> <slug> | prepush <path> | remove <path> | list [repo]');
 }
