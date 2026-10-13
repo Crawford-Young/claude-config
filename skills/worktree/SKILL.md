@@ -22,13 +22,21 @@ After creating:
 - Web repos need Playwright browsers before their first e2e — `pnpm exec playwright install chromium`.
 - Give the dev server its own port; never reuse another session's. Verify who holds a port before trusting any URL or e2e run against it.
 
+## Push
+
+```
+node ~/code/claude-config/scripts/worktree.mjs prepush <path> && git -C <path> push -u origin <branch>
+```
+
+Runs commitlint over `origin/<base>..HEAD` when the repo has a commitlint config and fails the chain on a bad subject, so CI is never the first place it surfaces. The worktree's own `node_modules` wins; without one it borrows the main checkout's install, and with neither it fails closed. Reword, then re-run. The push stays a separate command, so its approval gate still applies.
+
 ## Remove
 
 ```
-node ~/code/claude-config/scripts/worktree.mjs remove <path>
+node ~/code/claude-config/scripts/worktree.mjs remove <path> [--port <n>] [--dry-run]
 ```
 
-Encodes the Windows-safe sequence (git remove → force → recursive delete → prune). Remove the worktree BEFORE deleting its branch — a checked-out branch can't be deleted. Move the session out first: a Bash call that `cd`s into the worktree makes it the session's tracked cwd, which holds the directory (EPERM/EBUSY) — run a separate `cd ~/code` call before `remove`. A re-run finishes a half-removed (empty, pointer-less) directory.
+First stops whatever listens on the worktree's serve port, read from a serve/dev/start/preview recipe in the Justfile or package.json (`-p`, `--port` or `PORT=`), plus any `--port`. Stopping a `just serve` wrapper can leave its server alive and holding the directory. `--dry-run` names what it would stop and remove. Then it runs the Windows-safe sequence (git remove → force → recursive delete → prune). Remove the worktree BEFORE deleting its branch — a checked-out branch can't be deleted. Move the session out first: a Bash call that `cd`s into the worktree makes it the session's tracked cwd, which holds the directory (EPERM/EBUSY) — run a separate `cd ~/code` call before `remove`. A re-run finishes a half-removed (empty, pointer-less) directory.
 
 ## Session name
 

@@ -1,12 +1,13 @@
 // node --test scripts/test/worktree.test.mjs — end-to-end against a temp repo.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { execHarness, spawnHarness } from './_spawn.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { commitlintConfig, servePorts } from '../worktree.mjs';
 
 function writeSession(sessionsDir, pid, name, nameSource) {
   mkdirSync(sessionsDir, { recursive: true });
@@ -349,4 +350,169 @@ test('new says nothing when the session registry file is missing', () => {
 
   const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
   assert.doesNotMatch(out, /WARNING: session name/);
+});
+
+// ---- prepush: commitlint over origin/<base>..HEAD (#170) ----
+
+/** A stand-in @commitlint/cli under `dir`: fails any subject in `git log from..to` that isn't
+ *  a lowercase conventional one, and echoes the range and cwd it ran with. */
+function fakeCommitlint(dir) {
+  const pkg = join(dir, 'node_modules', '@commitlint', 'cli');
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@commitlint/cli', bin: { commitlint: './cli.js' } }));
+  writeFileSync(join(pkg, 'cli.js'), `
+const { execFileSync } = require('node:child_process');
+const a = process.argv.slice(2);
+const from = a[a.indexOf('--from') + 1];
+const to = a[a.indexOf('--to') + 1];
+console.log('range ' + from + '..' + to.slice(0, 7) + ' cwd ' + process.cwd());
+const subjects = execFileSync('git', ['log', '--format=%s', from + '..' + to], { encoding: 'utf8' }).split('\\n').filter(Boolean);
+const bad = subjects.filter((s) => !/^[a-z]+(\\(.+\\))?: [a-z]/.test(s));
+for (const s of bad) console.log('x subject-case: ' + s);
+process.exit(bad.length ? 1 : 0);
+`);
+}
+
+function commitIn(wt, file, msg) {
+  writeFileSync(join(wt, file), `${msg}\n`);
+  sh(wt, 'git', ['add', file]);
+  sh(wt, 'git', ['commit', '-m', msg]);
+}
+
+test('prepush skips a checkout with no commitlint config', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'nolint'], { env });
+  const wt = join(root, '.worktrees', 'app-nolint');
+  commitIn(wt, 'a.txt', 'Not Conventional At All');
+
+  const r = spawnHarness(script, ['prepush', wt], { env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /commitlint: no config in .* skipped/);
+});
+
+test('prepush blocks a bad subject over origin/main..HEAD and passes once it is reworded', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'lint'], { env });
+  const wt = join(root, '.worktrees', 'app-lint');
+  writeFileSync(join(wt, 'commitlint.config.js'), "module.exports = { extends: ['@commitlint/config-conventional'] };\n");
+  fakeCommitlint(wt);
+
+  assert.match(execHarness(script, ['prepush', wt], { env }), /commitlint: no commits over origin\/main\.\.HEAD/);
+
+  commitIn(wt, 'a.txt', 'feat: good one');
+  commitIn(wt, 'b.txt', 'feat(hud): HIT/MISS readout'); // the dog-eat-dog#23 subject-case failure
+  const bad = spawnHarness(script, ['prepush', wt], { env });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /commitlint failed over origin\/main\.\.HEAD/);
+  assert.match(bad.stderr, /range origin\/main\.\.[0-9a-f]{7}/);
+  assert.match(bad.stderr, /subject-case: feat\(hud\): HIT\/MISS readout/);
+  assert.doesNotMatch(bad.stderr, /subject-case: (feat: good one|init)/, 'only the range is linted');
+
+  sh(wt, 'git', ['commit', '--amend', '-m', 'feat(hud): hit/miss readout']);
+  const good = spawnHarness(script, ['prepush', wt], { env });
+  assert.equal(good.status, 0, good.stderr);
+  assert.match(good.stdout, /commitlint: 2 commits clean over origin\/main\.\.HEAD \(commitlint\.config\.js\)/);
+});
+
+test('prepush fails closed with commitlint uninstalled, and borrows the main checkout install', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'borrow'], { env });
+  const wt = join(root, '.worktrees', 'app-borrow');
+  writeFileSync(join(wt, 'package.json'), JSON.stringify({ commitlint: { extends: ['@commitlint/config-conventional'] } }));
+  commitIn(wt, 'a.txt', 'fix: one');
+
+  const none = spawnHarness(script, ['prepush', wt], { env });
+  assert.equal(none.status, 1);
+  assert.match(none.stderr, /commitlint config package\.json found but @commitlint\/cli is not installed/);
+
+  fakeCommitlint(repo);
+  const borrowed = spawnHarness(script, ['prepush', wt], { env });
+  assert.equal(borrowed.status, 0, borrowed.stderr);
+  assert.match(borrowed.stdout, /cwd .*app\s*$/m, 'ran from the main checkout');
+  assert.match(borrowed.stdout, /1 commit clean over origin\/main\.\.HEAD \(package\.json\)/);
+});
+
+// ---- remove: stop the serve-port listener first (#170) ----
+
+test('servePorts reads serve-type Justfile recipes and package.json scripts only', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wt-ports-'));
+  writeFileSync(join(dir, 'Justfile'), [
+    'port := "1234"',
+    'set shell := ["bash", "-c"]',
+    '',
+    '# run the game',
+    'run:',
+    '    godot --path . -p 1111',
+    '',
+    '# serve the web build locally',
+    'serve:',
+    '    npx serve build/web -p 8060',
+    '',
+    'deploy host:',
+    '    ssh -p 22 {{host}}',
+  ].join('\r\n'));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({
+    scripts: { dev: 'next dev --port 3001', preview: 'vite preview --port=4173', start: 'PORT=5000 node server.js', test: 'vitest -p 9999' },
+  }));
+  assert.deepEqual(servePorts(dir), [3001, 4173, 5000, 8060]);
+  assert.deepEqual(servePorts(mkdtempSync(join(tmpdir(), 'wt-ports-'))), [], 'no Justfile or package.json');
+  assert.equal(commitlintConfig(dir), null, 'package.json with no commitlint key');
+});
+
+/** A node server on `port` with `cwd` as its working directory, like the `npx serve` left behind. */
+async function startListener(cwd, port) {
+  const child = spawn(process.execPath, ['-e', `require('node:http').createServer().listen(${port}, () => console.log('up'))`], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exited = new Promise((res) => child.once('exit', res));
+  child.on('error', () => {});
+  await new Promise((res, rej) => {
+    child.stdout.once('data', res);
+    child.once('exit', (code) => rej(new Error(`listener exited ${code} before listening on ${port}`)));
+  });
+  return { child, exited };
+}
+
+const lsofMissing = process.platform !== 'win32' && spawnSync('lsof', ['-v']).error;
+test('remove --dry-run names the serve-port listener; remove stops it, then removes the worktree', { skip: lsofMissing && 'lsof not installed', timeout: 60_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'serve'], { env });
+  const wt = join(root, '.worktrees', 'app-serve');
+  writeFileSync(join(wt, 'Justfile'), 'serve:\n    npx serve build/web -p 8065\n');
+
+  const { child, exited } = await startListener(wt, 8065);
+  try {
+    const dry = execHarness(script, ['remove', wt, '--dry-run'], { env });
+    assert.match(dry, /would stop \S+ \(PID \d+\) listening on port 8065/);
+    assert.match(dry, /would remove /);
+    assert.ok(existsSync(wt), 'dry run removes nothing');
+    assert.equal(child.exitCode, null, 'dry run stops nothing');
+
+    const out = execHarness(script, ['remove', wt], { env });
+    assert.match(out, new RegExp(`stopped \\S+ \\(PID ${child.pid}\\) listening on port 8065`));
+    await exited;
+    assert.ok(!existsSync(wt), 'worktree dir removed');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await exited;
+  }
+});
+
+test('remove --port rejects a value that is not a port', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'badport'], { env });
+  const wt = join(root, '.worktrees', 'app-badport');
+
+  const r = spawnHarness(script, ['remove', wt, '--port', '80x'], { env });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--port needs a port number/);
+  assert.ok(existsSync(wt), 'nothing removed');
 });

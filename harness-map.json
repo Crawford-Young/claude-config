@@ -477,7 +477,7 @@
    "kind": "script",
    "label": "worktree.mjs",
    "file": "scripts/worktree.mjs",
-   "summary": "Create, remove and list feature worktrees from origin's default branch; new prints the unit's claude -n launch line and warns (never blocks) on a session name that won't join the unit."
+   "summary": "Create, pre-push lint, remove and list feature worktrees from origin's default branch; new prints the unit's claude -n launch line and warns (never blocks) on a session name that won't join the unit; prepush runs commitlint over origin/<base>..HEAD; remove first stops the serve-port listener."
   },
   {
    "id": "script:qa",
@@ -1126,7 +1126,7 @@
    "from": "script:worktree",
    "to": "script:lib",
    "kind": "reads",
-   "label": "sessionName, parseSessionName, isChosenName, issueNumber, generalSessionName, slugify"
+   "label": "sessionName, parseSessionName, isChosenName, issueNumber, generalSessionName, slugify, isMain, listenerPidFromNetstat"
   },
   {
    "from": "script:qa",
