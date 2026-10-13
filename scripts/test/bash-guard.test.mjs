@@ -1715,6 +1715,137 @@ test('#190: Write/Edit/MultiEdit/NotebookEdit into a transcript or gate state fi
   assert.equal(editToolReason('Read', { file_path: T }, '/work'), null);
 });
 
+// ---- #190 review: the bypasses and false positives a fresh-context review found ----
+
+test('#190: a copy into ~/.claude lands under the source\'s own name, so that name is judged', () => {
+  for (const c of [
+    `cp /tmp/push-gate-approvals.json ~/.claude/`,
+    `cp /tmp/bk/browser-gate-sessions.json ~/.claude`,
+    `Copy-Item C:/tmp/push-gate-approvals.json -Destination ~/.claude`,
+    `Copy-Item -Path C:/tmp/fable-clearance.json -Destination ~/.claude`,
+    `cp -t ~/.claude /tmp/push-gate-approvals.json`,
+    `cp -r /tmp/projects ~/.claude/`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+  for (const c of [
+    `cp notes.md ~/.claude/`,
+    `cp -r /tmp/skills ~/.claude/`,
+    `Copy-Item C:/tmp/settings.json -Destination ~/.claude`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#190: a loop, read or PowerShell var aimed at a transcript is aimed', () => {
+  for (const c of [
+    `for f in ~/.claude/projects/C--x/*.jsonl; do echo x >> "$f"; done`,
+    `ls -t ~/.claude/projects/*/*.jsonl | head -1 | while read f; do echo x >> "$f"; done`,
+    `ls -t ~/.claude/projects/*/*.jsonl | head -1 | while read -r f; do echo x >> "$f"; done`,
+    `$p = Join-Path $env:USERPROFILE '.claude/projects/C--x/s.jsonl'; "x" >> $p`,
+    `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | Sort-Object LastWriteTime)[-1].FullName; "x" >> $t`,
+    `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | Sort-Object LastWriteTime)[-1].FullName; [IO.File]::AppendAllText($t, 'x')`,
+    `foreach ($t in Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl) { "x" >> $t }`,
+    `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { "x" >> $_.FullName }`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+  for (const c of [
+    `for f in ~/.claude/projects/C--x/*.jsonl; do wc -l "$f"; done > /tmp/counts.txt`,
+    `ls ~/.claude/projects | while read d; do echo "$d"; done > /tmp/dirs.txt`,
+    `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl)[-1].FullName; Get-Content $t -Tail 5 > C:/tmp/o.txt`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#190: every home spelling resolves to the home dir', () => {
+  for (const c of [
+    `echo '{}' > $USERPROFILE/.claude/push-gate-approvals.json`,
+    `echo '{}' > \${USERPROFILE}/.claude/push-gate-approvals.json`,
+    `echo '{}' > \${env:USERPROFILE}/.claude/browser-gate-sessions.json`,
+    `echo '{}' > \${env:HOME}/.claude/browser-gate-sessions.json`,
+    `echo x >> $USERPROFILE/.claude/projects/C--Users-x/abc.jsonl`,
+    `echo x >> /tmp/$USERPROFILE/x && echo x >> "\${USERPROFILE}/.claude/projects/C--x/s.jsonl"`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+  assert.equal(staticCheck(`echo x > $USERPROFILE/notes.txt`, '/work'), null);
+});
+
+test('#190: deleting or moving away a gate state file resets its spends, so it is a write', () => {
+  for (const c of [
+    `rm ~/.claude/push-gate-approvals.json`,
+    `rm -f ~/.claude/push-gate-approvals.json`,
+    `Remove-Item ~/.claude/push-gate-approvals.json`,
+    `Remove-Item -Path ~/.claude/browser-gate-sessions.json -Force`,
+    `del ~/.claude/fable-clearance.json`,
+    `unlink ~/.claude/browser-gate-sessions.json`,
+    `mv ~/.claude/push-gate-approvals.json /tmp/`,
+    `Move-Item ~/.claude/push-gate-approvals.json C:/tmp/`,
+    `rm ~/.claude/*.json`,
+    `node -e "require('fs').unlinkSync(require('os').homedir()+'/.claude/push-gate-approvals.json')"`,
+    `node -e "require('fs').rmSync('${join(homedir(), '.claude', 'push-gate-approvals.json').replaceAll('\\', '/')}')"`,
+    `python -c "import os; os.remove('${join(homedir(), '.claude', 'browser-gate-sessions.json').replaceAll('\\', '/')}')"`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+  // Other ~/.claude cleanup stays open, and so does deleting a transcript: it
+  // can only take an approval away (the gates fail closed on a missing one),
+  // never forge one.
+  for (const c of [
+    `rm ~/.claude/hook-errors.log`,
+    `rm -f ~/.claude/push-gate-approvals.json.bak`,
+    `rm -rf ~/.claude/projects/C--old-repo`,
+    `Remove-Item ~/.claude/projects/C--x/old.jsonl`,
+    `mv ~/.claude/projects/C--x/old.jsonl /tmp/archive/`,
+    `rm ~/.claude/projects/C--x/memory/stale.md`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#190: Write/Edit file_path `~/…` and a Git Bash drive path are normalised', () => {
+  assert.ok(editToolReason('Write', { file_path: '~/.claude/projects/C--x/s.jsonl' }, '/work'));
+  assert.ok(editToolReason('Edit', { file_path: '~/.claude/push-gate-approvals.json' }, '/work'));
+  if (process.platform === 'win32') {
+    const drive = homedir().replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
+    assert.ok(editToolReason('Write', { file_path: `${drive}/.claude/projects/C--x/s.jsonl` }, '/work'));
+  }
+  assert.equal(editToolReason('Write', { file_path: '~/.claude/projects/C--x/memory/m.md' }, '/work'), null);
+  assert.equal(editToolReason('Write', { file_path: '~/notes.md' }, '/work'), null);
+});
+
+test('#190: a read of transcripts beside a write to an unrelated or unresolved path stays allowed', () => {
+  for (const c of [
+    `S=$(mktemp -d); grep -h x ~/.claude/projects/*/*.jsonl > "$S/out.txt"`,
+    `cd "$S" && grep -h x ~/.claude/projects/*/*.jsonl > all.jsonl`,
+    `grep -l x ~/.claude/projects/*/*.jsonl | xargs cp -t /tmp/out`,
+    `find ~/.claude/projects -name '*.jsonl' -newer x -exec cp {} /tmp/bk/ \\;`,
+    `find ~/.claude/projects -name '*.jsonl' | xargs -I{} cp {} /tmp/bk/`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+  // ...while the same runners aimed at a transcript still block.
+  for (const c of [
+    `ls ~/.claude/projects/*/*.jsonl | xargs -n1 cp /tmp/forged.jsonl`,
+    `ls ~/.claude/projects/*/*.jsonl | xargs -I{} cp /tmp/forged.jsonl {}`,
+    `find ~/.claude/projects -name '*.jsonl' -exec cp /tmp/forged.jsonl {} \\;`,
+    `ls ~/.claude/projects/*/*.jsonl | xargs sed -i s/a/b/`,
+    `grep -l x ~/.claude/projects/*/*.jsonl | xargs tee /tmp/o.txt`,
+    `env cp /tmp/forged.jsonl ${T}`,
+    `timeout 5 cp /tmp/forged.jsonl ${T}`,
+    `cd $(ls -d ~/.claude/projects/*/ | head -1) && echo x >> s.jsonl`,
+    `echo x >> "$(ls -t ~/.claude/projects/*/*.jsonl | head -1)"`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+});
+
+test('#190: a computed write path in code that reads transcripts is refused with how to proceed', () => {
+  const c = `node -e "const fs=require('fs'),os=require('os'),path=require('path');const d=path.join(os.homedir(),'.claude','projects');fs.writeFileSync(path.join(os.tmpdir(),'n.txt'),String(fs.readdirSync(d).length))"`;
+  assert.match(staticCheck(c, '/work') ?? '', /literal path outside ~\/\.claude/);
+});
+
+test('#190: curl/wget -o, Rename-Item -NewName and a link to a transcript are writes', () => {
+  for (const c of [
+    `curl -s -o ~/.claude/push-gate-approvals.json https://x`,
+    `curl --output ~/.claude/browser-gate-sessions.json https://x`,
+    `wget -O ~/.claude/push-gate-approvals.json https://x`,
+    `Rename-Item ~/.claude/projects/C--x/f.txt -NewName s.jsonl`,
+    `ln ${T} /tmp/h && echo x >> /tmp/h`,
+    `ln -s ${T} /tmp/h`,
+    `New-Item -ItemType HardLink -Path C:/tmp/h -Target ${T}`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+  for (const c of [
+    `curl -s -o /tmp/page.html https://x`,
+    `Rename-Item ~/.claude/projects/C--x/memory/a.md -NewName b.md`,
+    `ln -s /tmp/a /tmp/b`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
 test('#190 end-to-end: the hook blocks a transcript append and a Write, allows a read', () => {
   const h = tmpHome();
   const t = join(h, '.claude', 'projects', 'p', 's.jsonl');

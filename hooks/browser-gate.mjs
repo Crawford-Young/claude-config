@@ -9,8 +9,8 @@
 // ~/.claude/browser-gate-sessions.json (CLAUDE_BROWSER_GATE_STATE overrides) —
 // so later calls in that session pass without re-asking. The model can't
 // write that file or the transcript: bash-guard rule 11 blocks it (#190).
-// Read-only context
-// calls (tabs_context_mcp, list_connected_browsers) are never gated.
+// Read-only context calls (tabs_context_mcp, list_connected_browsers) are
+// never gated.
 // bash-guard.mjs applies the same rule to headed Playwright via the shared
 // _hooklib.mjs browserGateReason.
 //

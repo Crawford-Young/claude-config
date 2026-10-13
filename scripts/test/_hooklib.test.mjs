@@ -88,7 +88,23 @@ test('run() with failClosed blocks instead, naming the hook', () => {
   const r = runHook(throwingHook(h, 'closey', ', { failClosed: true }'), '{}', h);
   assert.equal(r.code, 2, 'an opted-in guard must not fail open');
   assert.match(r.stderr, /closey/);
+  assert.doesNotMatch(r.stderr, /not gated/, 'bash-guard gates the Edit tool now (#190)');
   assert.match(readFileSync(errorLog(h), 'utf8'), /closey: Error: boom/);
+});
+
+test('bash-guard fails OPEN on the file tools: a throwing check allows the Write', () => {
+  const h = home();
+  const file = join(h, 'file-tool.mjs');
+  writeFileSync(
+    file,
+    `import { fileToolReason } from ${JSON.stringify(pathToFileURL(bashGuard).href)};\n` +
+      `const r = fileToolReason('Write', { file_path: 'x' }, '/work', () => { throw new Error('boom'); });\n` +
+      `process.stdout.write(String(r));\n`,
+  );
+  const r = runHook(file, '', h);
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, 'null', 'a crashed check must never lock out the Edit tool that fixes it');
+  assert.match(readFileSync(errorLog(h), 'utf8'), /bash-guard: Error: boom/);
 });
 
 test('bash-guard fails closed on an unreadable payload rather than allowing', () => {

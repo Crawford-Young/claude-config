@@ -104,7 +104,7 @@ export function run(hookName, fn, { failClosed = false } = {}) {
       logError(hookName, err);
       if (failClosed) {
         block(
-          `${hookName} failed before it could check this action (${err?.message || err}) — this guard fails closed, so the action is blocked rather than silently allowed. Fix hooks/${hookName}.mjs (the Edit tool is not gated by it) or ask the user; the trace is in ~/.claude/hook-errors.log.`,
+          `${hookName} failed before it could check this action (${err?.message || err}) — this guard fails closed, so the action is blocked rather than silently allowed. Fix hooks/${hookName}.mjs with the Edit tool (a guard wired on the file tools fails open for them, so the fix stays reachable) or ask the user; the trace is in ~/.claude/hook-errors.log.`,
         );
       }
     })
@@ -141,6 +141,9 @@ export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || joi
 const normPath = (p) => resolve(String(p).replaceAll('\\', '/')).replaceAll('\\', '/').toLowerCase();
 const under = (p, root) => p === root || p.startsWith(`${root}/`);
 
+const gateStates = () =>
+  [clearanceFile, browserGateStateFile(), pushGateStateFile(), join(claudeDir, 'browser-gate-sessions.json'), join(claudeDir, 'push-gate-approvals.json')].map(normPath);
+
 /** Is `p` (absolute) a file the approval gates trust — a session transcript
  *  (`*.jsonl` anywhere under a projects dir, subagent ones included) or a gate
  *  state file (push spends, browser grants, the billed-model clearance)? A
@@ -152,7 +155,7 @@ export function isGateRecord(p, dirTarget = false) {
   const roots = [join(claudeDir, 'projects'), env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, 'projects'), env.CLAUDE_PROJECTS_DIR]
     .filter(Boolean)
     .map(normPath);
-  const states = [clearanceFile, browserGateStateFile(), pushGateStateFile(), join(claudeDir, 'browser-gate-sessions.json'), join(claudeDir, 'push-gate-approvals.json')].map(normPath);
+  const states = gateStates();
   const n = normPath(p);
   const inMemory = (q, root) => q.slice(root.length).split('/').includes('memory');
   const glob = n.search(/[*?[]/);
@@ -164,6 +167,24 @@ export function isGateRecord(p, dirTarget = false) {
   const root = roots.find((r) => under(n, r));
   if (!root || inMemory(n, root)) return false;
   return dirTarget || n.endsWith('.jsonl');
+}
+
+/** Does removing (or moving away) `p` (absolute) take a gate state file with
+ *  it — the file, a dir holding one, or a glob that could match one? Deleting
+ *  push-gate-approvals.json forgets every single-use spend, so it counts as a
+ *  write. A transcript doesn't: deleting one can only take an approval away
+ *  (the gates fail closed on a missing transcript), never forge one. #190. */
+export function removesGateState(p) {
+  const states = gateStates();
+  const n = normPath(p);
+  const glob = n.search(/[*?[]/);
+  if (glob === -1) return states.some((f) => under(f, n));
+  const dir = n.slice(0, n.lastIndexOf('/', glob)) || '/';
+  const name = n.slice(dir.length + 1);
+  if (name.includes('/')) return states.some((f) => under(f, dir));
+  // A glob in the last segment only: match it against each state file's name.
+  const re = new RegExp(`^${name.replace(/[.+^${}()|\\]/g, '\\$&').replaceAll('*', '[^/]*').replaceAll('?', '[^/]')}$`);
+  return states.some((f) => f.slice(0, f.lastIndexOf('/')) === dir && re.test(f.slice(f.lastIndexOf('/') + 1)));
 }
 
 /** Walk a transcript JSONL file backward for the most recent user record
