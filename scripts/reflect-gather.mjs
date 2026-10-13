@@ -6,8 +6,9 @@
 // Prints one markdown payload: the transcript audit of every window named
 // <session-name> (audit.mjs --session, which joins legacy and typed forms of one
 // unit's name, #175) with its cost and time (#97), then per-repo git log + diffstat
-// of the commits since the unit's first window whose subject names the unit's issue
-// (a ticket or epic name's repo and number: `(#N)` or `<repo>#N`), then the repo's
+// of the commits since the unit's first window whose message names the unit's issue
+// (a ticket or epic name's repo and number: `(#N)` or `<repo>#N`, or a body line
+// `Refs #N` / `Closes #N`), then the repo's
 // open `debt` issues that name a file those commits touched (#137). A name with no
 // issue takes the whole window, unless --issue <N> names the issue (one session that
 // worked several): it overrides the name's number, and the `<prefix>#N` form then
@@ -71,16 +72,17 @@ export function parseUnit(name) {
   return p.type === 'ticket' || p.type === 'epic' ? { prefix: p.repo, issue: String(p.issue) } : null;
 }
 
-/** Whether a commit subject names the unit's issue: `(#N)` or `<prefix>#N`, on a number boundary. */
-export function namesIssue(subject, { prefix, issue }) {
-  return new RegExp(`\\(#${issue}\\)|(?<![\\w-])${escapeRe(prefix)}#${issue}(?!\\d)`).test(subject);
+/** Whether a commit message names the unit's issue, on a number boundary: `(#N)` or `<prefix>#N`
+ *  anywhere, or a line led by a reference keyword (`Refs #N`, `Closes #16, #N`) — the body-trailer convention (#169). */
+export function namesIssue(message, { prefix, issue }) {
+  return new RegExp(`\\(#${issue}\\)|(?<![\\w-])${escapeRe(prefix)}#${issue}(?!\\d)|^(?:refs|close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\b.*?(?<![\\w-])#${issue}(?!\\d)`, 'im').test(message);
 }
 
-/** Commits of `repo` since `since`, split into those naming the unit's issue and a count of the rest. */
+/** Commits of `repo` since `since`, split into those whose message names the unit's issue and a count of the rest. */
 export function unitCommits(repo, since, unit) {
-  const rows = git(repo, ['log', '--format=%h\t%s', '--no-decorate', `--since=${since}`]).out.split('\n').filter(Boolean)
-    .map((row) => { const [sha, ...s] = row.split('\t'); return { sha, subject: s.join('\t') }; });
-  const commits = rows.filter((c) => namesIssue(c.subject, unit));
+  const rows = git(repo, ['log', '--format=%h%x00%s%x00%b%x1e', '--no-decorate', `--since=${since}`]).out.split('\x1e').map((r) => r.trim()).filter(Boolean)
+    .map((row) => { const [sha, subject, body] = row.split('\0'); return { sha, subject, body }; });
+  const commits = rows.filter((c) => namesIssue(`${c.subject}\n${c.body}`, unit)).map(({ sha, subject }) => ({ sha, subject }));
   return { commits, other: rows.length - commits.length };
 }
 

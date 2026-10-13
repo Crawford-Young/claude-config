@@ -163,6 +163,40 @@ test('parseUnit / namesIssue: a ticket or epic name (typed or legacy) gives the 
   assert.ok(!namesIssue('fix x (#1)', parseUnit('claude-config-13')));
 });
 
+test('namesIssue: a body trailer line (Refs #N, Closes #M, #N) names the issue; a passing mention does not', async () => {
+  const { parseUnit, namesIssue } = await import('../reflect-gather.mjs');
+  const u = parseUnit('dog-eat-dog-17');
+  assert.ok(namesIssue('feat: wave A burst\n\nWhat: x\nRefs #17', u));
+  assert.ok(namesIssue('fix: y\n\nCloses #16, #17', u));
+  assert.ok(namesIssue('fix: y\n\nfixes #17', u));
+  assert.ok(!namesIssue('feat: z\n\nRefs #170', u), '#17 is not #170');
+  assert.ok(!namesIssue('feat: z\n\nRefs strate#17', u), 'another repo\'s #17');
+  assert.ok(!namesIssue('feat: z\n\nNext: look at #17 later', u), 'a mention outside a reference line');
+});
+
+test('a commit naming the issue only in its body trailer is the unit\'s, and its files feed the diffstat and debt match', async () => {
+  const { parseUnit, unitCommits, commitChanges } = await import('../reflect-gather.mjs');
+  const f = fixture();
+  try {
+    const when = '2026-10-04T09:00:00Z';
+    const env = { ...process.env, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when };
+    writeFileSync(join(f.repo, 'h.txt'), 'x');
+    spawnSync('git', ['-C', f.repo, 'add', '.'], { env });
+    spawnSync('git', ['-C', f.repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'feat: trailer-only work', '-m', 'What: h\nRefs #7'], { env });
+    const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /feat: trailer-only work/);
+    assert.match(r.stdout, /feat: unit work \(#7\)/);
+    assert.match(r.stdout, /2 files changed/);
+    assert.doesNotMatch(r.stdout, /no commits naming #7/);
+    const { commits, other } = unitCommits(f.repo, '2026-10-03T00:00:00Z', parseUnit('repo-7'));
+    assert.equal(other, 1, 'the (#8) commit stays out');
+    assert.deepEqual(commitChanges(f.repo, commits).files.sort(), ['f.txt', 'h.txt'], 'the debt match runs over the trailer commit\'s files too');
+  } finally {
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
 test('a legacy-named window and a typed-name window of one unit gather together', () => {
   const f = fixture();
   try {
