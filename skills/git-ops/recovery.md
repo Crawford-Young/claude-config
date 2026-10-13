@@ -25,14 +25,6 @@ Fix — squash-integrate onto fresh main:
 holds files, close it and re-run. Never `robocopy /MIR` a tree that still
 contains junctions — targets get destroyed.
 
-## `merge --ff-only` refuses over an untracked file
-
-A merged PR that ADDED a file leaves the local untracked copy in the way.
-Byte-verify (`git cat-file -p origin/main:<path>` vs the local file), delete
-the local copy, re-run the merge — it re-materializes the tracked version.
-If a restore re-materializes CRLF over the index's LF, normalize via
-`git show HEAD:<file> > <file>` and retry.
-
 ## `land.mjs sync` and another session's live edit in an incoming file
 
 No manual steps: sync saves the edit as a patch under

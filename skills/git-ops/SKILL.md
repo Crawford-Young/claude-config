@@ -48,4 +48,3 @@ Load [`recovery.md`](./recovery.md) only when one of these actually fires:
 
 - A rebase onto main conflicts on **every** touched file → squash-based-branch integration.
 - `git worktree remove` fails on Windows → `worktree.mjs remove` already encodes the sequence.
-- `merge --ff-only` refuses over an untracked file identical to an incoming one → byte-verify, delete local copy, re-merge.

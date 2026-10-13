@@ -14,9 +14,11 @@
 //        checkout's diff for the named paths (untracked files copied) →
 //        commit. Pushing and opening the PR stay with the user's approval.
 // sync:  verify the live edits match origin/main for those paths, then
-//        restore tracked copies and fast-forward the main checkout. Other
-//        sessions' live edits in files the incoming commits also touch are
-//        saved as patches, reset, and 3-way re-applied after the merge.
+//        restore tracked copies and fast-forward the main checkout. Untracked
+//        copies of incoming additions (named or not) are adopted if identical,
+//        refused before any reset if not. Other sessions' live edits in files
+//        the incoming commits also touch are saved as patches, reset, and
+//        3-way re-applied after the merge.
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -158,6 +160,22 @@ function zList(repo, args) {
   return r.out.split('\0').filter(Boolean);
 }
 
+// Paths HEAD..origin/main ADDS that already sit untracked on disk, whether or
+// not the caller named them. The named list can't be trusted to cover these:
+// claude-config#175's caller built it before sync's own fetch, so it named the
+// previous commit's paths, the PR's two new files were never classified, and
+// `merge --ff-only` aborted over them. Deriving them here makes the check a
+// precondition. Each goes through classifySyncPaths' untracked branch: adopted
+// if identical, a die() before any reset if not. A path staged in the index is
+// left out — it is tracked, and ff-only refusing over it is the right answer.
+function incomingAdditions(named) {
+  const skip = new Set(named);
+  return zList(cfg, ['diff', '--name-only', '--diff-filter=A', '--no-renames', 'HEAD', 'origin/main']).filter(
+    (f) =>
+      !skip.has(f) && existsSync(join(cfg, f)) && git(cfg, ['ls-files', '--error-unmatch', f]).code !== 0,
+  );
+}
+
 // Another session's uncommitted edit in a file the incoming range also touches
 // makes `merge --ff-only` refuse. Those are the paths to carry across the merge:
 // locally modified (worktree or index vs HEAD), touched by HEAD..origin/main,
@@ -242,7 +260,7 @@ function describeKept(kept) {
 function cmdSync() {
   const files = paths();
   gitOrDie(cfg, ['fetch', 'origin']);
-  const { tracked, adopt } = classifySyncPaths(files);
+  const { tracked, adopt } = classifySyncPaths([...files, ...incomingAdditions(files)]);
 
   if (tracked.length) {
     const drift = git(cfg, ['diff', 'origin/main', '--numstat', '--', ...tracked]);

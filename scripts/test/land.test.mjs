@@ -418,6 +418,71 @@ test('the third failure mode is real: ff-only refuses an incoming path that exis
   assert.throws(() => sh(cfg, 'git', ['merge', '--ff-only', 'origin/main']));
 });
 
+// --- sync: incoming additions the caller never named --------------------------
+//
+// claude-config#175: the caller built its path list before sync's own fetch, so
+// it named the PREVIOUS commit's paths. The two files the PR added sat untracked
+// and identical on disk, were never classified, and ff-only aborted. sync now
+// derives HEAD..origin/main's additions itself instead of trusting the list.
+
+test('sync adopts an unnamed untracked file identical to an incoming addition', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(
+    root,
+    origin,
+    { 'a.md': 'v2\n', 'scripts/session-name.mjs': 'export {};\n', 'scripts/test/session-name.test.mjs': 'ok\n' },
+    'feat: session-name',
+  );
+  writeFileSync(join(cfg, 'a.md'), 'v2\r\n');
+  mkdirSync(join(cfg, 'scripts', 'test'), { recursive: true });
+  writeFileSync(join(cfg, 'scripts', 'session-name.mjs'), 'export {};\r\n');
+  writeFileSync(join(cfg, 'scripts', 'test', 'session-name.test.mjs'), 'ok\r\n');
+
+  runSync(env, ['a.md']); // the stale list: neither addition is named
+
+  assert.ok(headsMatch(cfg), 'checkout should be fast-forwarded to origin/main');
+  sh(cfg, 'git', ['ls-files', '--error-unmatch', 'scripts/session-name.mjs', 'scripts/test/session-name.test.mjs']);
+  assert.equal(porcelain(cfg), '', 'the adopted files are clean tracked copies');
+});
+
+test('sync adopts an unnamed incoming addition despite CRLF-vs-LF storage', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n', 'hooks/new.mjs': 'alpha\nbeta\n' }, 'feat: add hook');
+  writeFileSync(join(cfg, 'a.md'), 'v2\r\n');
+  mkdirSync(join(cfg, 'hooks'), { recursive: true });
+  writeFileSync(join(cfg, 'hooks', 'new.mjs'), 'alpha\r\nbeta\r\n');
+
+  // Same fixture guard as the named-path case: a byte compare must disagree.
+  const onDisk = readFileSync(join(cfg, 'hooks', 'new.mjs'));
+  sh(cfg, 'git', ['fetch', 'origin']);
+  const blob = sh(cfg, 'git', ['cat-file', '-p', 'origin/main:hooks/new.mjs']);
+  assert.ok(onDisk.includes('\r\n') && !blob.includes('\r\n'), 'fixture must be CRLF on disk, LF in the blob');
+  assert.notEqual(onDisk.length, Buffer.byteLength(blob));
+
+  runSync(env, ['a.md']);
+
+  assert.ok(headsMatch(cfg), 'checkout should be fast-forwarded to origin/main');
+  sh(cfg, 'git', ['ls-files', '--error-unmatch', 'hooks/new.mjs']);
+});
+
+test('sync refuses, resetting nothing, when an unnamed incoming addition differs locally', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n', 'hooks/new.mjs': 'upstream version\n' }, 'feat: add hook');
+  writeFileSync(join(cfg, 'a.md'), 'v2\r\n');
+  const mine = join(cfg, 'hooks', 'new.mjs');
+  mkdirSync(join(cfg, 'hooks'), { recursive: true });
+  writeFileSync(mine, 'my unpushed work\r\n');
+  const before = { head: head(cfg), a: readFileSync(join(cfg, 'a.md')) };
+
+  const out = syncFails(env, ['a.md']);
+
+  assert.match(out, /hooks\/new\.mjs differs from origin\/main/);
+  assert.match(out, /never discard/);
+  assert.equal(readFileSync(mine, 'utf8'), 'my unpushed work\r\n', 'the divergent file is untouched');
+  assert.equal(head(cfg), before.head, 'no merge happened');
+  assert.deepEqual(readFileSync(join(cfg, 'a.md')), before.a, 'not even the named path was reset');
+});
+
 // --- sync: another session's live edit in a file the incoming range touches --
 //
 // The main checkout is shared: while one session syncs, another can hold an
@@ -533,9 +598,10 @@ test('sync refuses, resetting nothing, when the incoming range deletes a locally
 
 test('sync puts a carried edit back when the ff-merge itself fails after the reset', () => {
   const { root, origin, cfg, env } = overlapRepo(SHARED.replace('one', 'ONE upstream'));
-  pushUpstream(root, origin, { 'new.md': 'upstream\n' }, 'feat: add new.md');
-  // An unnamed untracked file in the way: ff-only refuses AFTER sync reset shared.md.
-  writeFileSync(join(cfg, 'new.md'), 'someone else\r\n');
+  pushUpstream(root, origin, { 'sub/new.md': 'upstream\n' }, 'feat: add sub/new.md');
+  // An untracked FILE where the incoming commits add a DIRECTORY: no addition
+  // exists on disk to pre-check, so ff-only refuses only AFTER sync reset shared.md.
+  writeFileSync(join(cfg, 'sub'), 'someone else\r\n');
   const edited = crlf(SHARED.replace('seven', 'SEVEN foreign'));
   writeFileSync(join(cfg, 'shared.md'), edited);
   const before = head(cfg);
@@ -546,5 +612,5 @@ test('sync puts a carried edit back when the ff-merge itself fails after the res
   assert.match(out, /Carried edits were put back\./, 'the reset-then-restore branch really ran');
   assert.equal(head(cfg), before, 'still on the old commit');
   assert.equal(lf(readFileSync(join(cfg, 'shared.md'), 'utf8')), lf(edited), 'the carried edit is back');
-  assert.equal(readFileSync(join(cfg, 'new.md'), 'utf8'), 'someone else\r\n');
+  assert.equal(readFileSync(join(cfg, 'sub'), 'utf8'), 'someone else\r\n');
 });
