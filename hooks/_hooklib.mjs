@@ -10,7 +10,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 
 export const claudeDir = join(homedir(), '.claude');
 
@@ -126,8 +126,45 @@ export function appendTrimmed(file, line, { maxBytes = 512 * 1024, keepLines = 2
 }
 
 // ---- user-approval gates (bash-guard push/PR, browser-gate) -----------------
-// Approval is the user's most recent AskUserQuestion answer — a record the
-// model cannot forge. Shared so every gate reads it, and refusals, alike.
+// Approval is the user's most recent AskUserQuestion answer (or typed prompt),
+// read from the session transcript. Claude Code writes that file, but so could
+// the model — one appended line would read as approval — so bash-guard refuses
+// any write it can see into a transcript or a gate's state file (#190,
+// isGateRecord). Shared so every gate reads approvals, and refusals, alike.
+
+export const browserGateStateFile = () => process.env.CLAUDE_BROWSER_GATE_STATE || join(claudeDir, 'browser-gate-sessions.json');
+export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
+
+/** A path as one comparable string: forward slashes, absolute, lowercased —
+ *  case-folded everywhere, since a Windows path matches in any case and a
+ *  Linux false match under ~/.claude costs only a refused write. */
+const normPath = (p) => resolve(String(p).replaceAll('\\', '/')).replaceAll('\\', '/').toLowerCase();
+const under = (p, root) => p === root || p.startsWith(`${root}/`);
+
+/** Is `p` (absolute) a file the approval gates trust — a session transcript
+ *  (`*.jsonl` anywhere under a projects dir, subagent ones included) or a gate
+ *  state file (push spends, browser grants, the billed-model clearance)? A
+ *  `dirTarget` (a cp/mv destination) counts anywhere under a projects dir, and
+ *  a glob counts when it could reach one. The auto-memory dirs
+ *  (`projects/<slug>/memory/`) stay writable. #190. */
+export function isGateRecord(p, dirTarget = false) {
+  const env = process.env;
+  const roots = [join(claudeDir, 'projects'), env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, 'projects'), env.CLAUDE_PROJECTS_DIR]
+    .filter(Boolean)
+    .map(normPath);
+  const states = [clearanceFile, browserGateStateFile(), pushGateStateFile(), join(claudeDir, 'browser-gate-sessions.json'), join(claudeDir, 'push-gate-approvals.json')].map(normPath);
+  const n = normPath(p);
+  const inMemory = (q, root) => q.slice(root.length).split('/').includes('memory');
+  const glob = n.search(/[*?[]/);
+  if (glob !== -1) {
+    const prefix = n.slice(0, n.lastIndexOf('/', glob)) || '/';
+    return [...states, ...roots].some((f) => under(f, prefix)) || roots.some((r) => under(prefix, r) && !inMemory(prefix, r));
+  }
+  if (states.includes(n)) return true;
+  const root = roots.find((r) => under(n, r));
+  if (!root || inMemory(n, root)) return false;
+  return dirTarget || n.endsWith('.jsonl');
+}
 
 /** Walk a transcript JSONL file backward for the most recent user record
  *  carrying an AskUserQuestion answer (`toolUseResult.answers`: question text
@@ -212,8 +249,6 @@ const BROWSER_RE = /\b(browser|chrome|launch|playwright|headed)\b/i;
 export function isBrowserApproving(answers) {
   return Object.values(answers).some((v) => BROWSER_RE.test(v) && !denies(v, BROWSER_RE));
 }
-
-export const browserGateStateFile = () => process.env.CLAUDE_BROWSER_GATE_STATE || join(claudeDir, 'browser-gate-sessions.json');
 
 const browserRemedy =
   'Ask the user with AskUserQuestion — give it an option that approves opening the browser (answer wording like "launch"/"browser"/"Chrome", without "hold"/"wait"/"no") — then retry. One approval covers the rest of the session.';

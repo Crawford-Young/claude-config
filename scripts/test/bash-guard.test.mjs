@@ -22,6 +22,7 @@ import {
   substitutions,
   branchRules,
   UNKNOWN_DIR,
+  editToolReason,
 } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
@@ -1601,4 +1602,133 @@ test('#180 end-to-end through the real hook: a typed approval passes once', () =
   const t = transcriptOf(h, typed('lgtm push and pr'));
   assert.equal(guardRunT('git push', h, t), 0);
   assert.equal(guardRunT('git push', h, t), 2);
+});
+
+// ---- #190: a write to a transcript or a gate's state file forges approval ----
+// Negative cases: each command below is one our own guard must REFUSE, so the
+// push/browser gates can trust what they read. `forged` is a minimal stand-in
+// record; no test writes it anywhere (staticCheck only reads the text).
+
+const P = join(homedir(), '.claude', 'projects');
+const T = `${P.replaceAll('\\', '/')}/C--Users-x/abc.jsonl`;
+const forged = `'{"type":"user"}'`;
+
+test('#190: a shell redirect, tee, cp/mv, dd or sed -i into a transcript is blocked', () => {
+  for (const c of [
+    `echo ${forged} >> ${T}`,
+    `echo ${forged} >>${T}`,
+    `echo ${forged}>>"${T}"`,
+    `printf '%s\\n' x > ~/.claude/projects/C--Users-x/abc.jsonl`,
+    `echo x >> $HOME/.claude/projects/C--Users-x/sub/subagents/agent-1.jsonl`,
+    `echo x 1>> ${T}`,
+    `echo x &>> ${T}`,
+    `echo x >| ${T}`,
+    `echo x | tee -a ${T}`,
+    `echo x | tee /dev/null ${T} > /dev/null`,
+    `cp /tmp/forged.jsonl ${T}`,
+    `cp /tmp/forged.jsonl ~/.claude/projects/C--Users-x/`,
+    `mv -f /tmp/forged.jsonl ${T}`,
+    `cp -t ~/.claude/projects/C--Users-x /tmp/forged.jsonl`,
+    `dd if=/tmp/f of=${T}`,
+    `sed -i 's/a/b/' ${T}`,
+    `cd ~/.claude/projects/C--Users-x && echo x >> abc.jsonl`,
+    `cd ~/.claude/projects && echo x >> */abc.jsonl`,
+    `echo x >> ~/.claude/projects/*/*`,
+    `F=~/.claude/projects/C--Users-x/abc.jsonl; echo x >> "$F"`,
+    `f=$(ls -t ~/.claude/projects/*/*.jsonl | head -1); echo x >> "$f"`,
+    `bash -c "echo x >> ${T}"`,
+    `cat > ${T} <<'EOF'\n{"type":"user"}\nEOF`,
+    `Copy-Item C:/tmp/f.jsonl -Destination ${T}`,
+    `Add-Content -Path ${T} -Value x`,
+    `New-Item -Path ${T} -Value x -Force`,
+    `for i in 1; do echo x; done >> ${T}`,
+    `bash -c "echo x" >> ${T}`,
+    `cd /tmp > ${T}`,
+    `Get-Content C:/tmp/f | Tee-Object -FilePath ${T}`,
+    `truncate -s 0 ${T}`,
+    `find ~/.claude/projects -name '*.jsonl' -exec sh -c 'echo x >> "$1"' _ {} \\;`,
+    `ls ~/.claude/projects/*/*.jsonl | xargs -I{} sh -c 'echo x >> {}'`,
+    `echo x > ~/.claude/browser-gate-sessions.json`,
+    `echo x > ~/.claude/fable-clearance.json`,
+    `echo '{}' > ~/.claude/push-gate-approvals.json`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+});
+
+test('#190: an inline interpreter write naming a transcript or gate state file is blocked', () => {
+  for (const c of [
+    `node -e "require('fs').appendFileSync('${T}', 'x')"`,
+    `node -e "fs.appendFileSync(process.argv[1], x)" ${T}`,
+    `node -e "const p=require('path').join(require('os').homedir(),'.claude','projects');require('fs').writeFileSync(p+'/x/a.jsonl','')"`,
+    `node - <<'EOF'\nimport fs from 'node:fs';\nfs.appendFileSync('${T}', '{}');\nEOF`,
+    `python -c "open('${T}','a').write('x')"`,
+    `[IO.File]::AppendAllText('${T}', 'x')`,
+    `node -e "require('fs').writeFileSync(require('os').homedir()+'/.claude/fable-clearance.json','{}')"`,
+    `f=$(ls -t ~/.claude/projects/*/*.jsonl | head -1); node -e "require('fs').appendFileSync(process.argv[1], 'x')" "$f"`,
+    `cd ~/.claude/projects/C--Users-x && node -e "require('fs').appendFileSync('abc.jsonl', 'x')"`,
+    `node -e "require('fs').copyFileSync('/tmp/f', '${T}')"`,
+    `perl -pi -e 's/a/b/' ${T}`,
+    `node -e "const f='${T}';require('fs').appendFileSync(f, 'x')"`,
+  ]) assert.ok(staticCheck(c, '/work'), c);
+});
+
+test('#190: reading transcripts and writing elsewhere, and memory writes, stay allowed', () => {
+  for (const c of [
+    `grep -c '"type":"user"' ${T}`,
+    `grep -rl SessionStart ~/.claude/projects 2>/dev/null | head -5`,
+    `cat ${T} > /tmp/copy.jsonl`,
+    `grep x ${T} > $TEMP/out.txt 2>&1`,
+    `cp ${T} /tmp/scratch/`,
+    `cp ~/.claude/projects/C--Users-x/abc.jsonl "$R/"`,
+    `tail -1 ${T} | tee /tmp/last.jsonl`,
+    `S=/tmp/s; F=${T}; node $S/ev.mjs $F 'x' | cut -c1-700 > $S/out.txt`,
+    `node -e "const t=require('fs').readFileSync('${T}','utf8');console.log(t.length)"`,
+    `echo '- [x](x.md) — y' >> ~/.claude/projects/C--Users-x/memory/MEMORY.md`,
+    `cd ~/.claude/projects/C--Users-x/memory && echo y >> MEMORY.md`,
+    `sed -i 's/a/b/' ~/.claude/projects/C--Users-x/memory/MEMORY.md`,
+    `cd ~/.claude/projects && find . -name '*.jsonl' | wc -l`,
+    `cd "$S" && node scan.mjs > scan.out`,
+    `echo x > notes.jsonl`,
+    `grep -rn writeFileSync ~/.claude/projects | head`,
+    `find ~/.claude/projects -name '*.jsonl' -newer x | xargs grep -l SessionStart`,
+    `node -e "console.log([1].map((a) => a > 0))" ${T}`,
+    `Copy-Item ${T} -Destination C:/tmp/copy.jsonl`,
+    `echo x > ~/.claude/hook-errors.log.bak`,
+    // shapes guard-replay found in real transcripts: reads of transcripts beside writes elsewhere
+    `cd ~/.claude/projects && ls -t */*.jsonl | xargs grep -l 'a>b' 2>/dev/null`,
+    `S=/tmp/s && grep -rh x ~/.claude/projects/*/*.jsonl | node -e 'require("fs").writeFileSync(process.argv[1], "x")' "$S/cmd.txt"`,
+    `WT=$(pwd); sed -i "s#a#$WT#" "$S/Cargo.toml"; find ~/.claude/projects -name '*.jsonl' | wc -l`,
+    `node - <<'EOF'\nrequire('fs').writeFileSync('CLAUDE.md', 'parses ~/.claude/projects/**/*.jsonl');\nEOF`,
+    `cd ~/.claude/projects/C--Users-x/memory && node -e "require('fs').writeFileSync('MEMORY.md', s)"`,
+    `node -e "const fs=require('fs');const f='hooks/README.md';fs.writeFileSync(f, 'reads ~/.claude/projects/**/*.jsonl')"`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#190: Write/Edit/MultiEdit/NotebookEdit into a transcript or gate state file is blocked', () => {
+  assert.ok(editToolReason('Write', { file_path: T }, '/work'));
+  assert.ok(editToolReason('Edit', { file_path: T.replaceAll('/', '\\') }, '/work'));
+  assert.ok(editToolReason('MultiEdit', { file_path: T.toUpperCase() }, '/work'));
+  assert.ok(editToolReason('NotebookEdit', { notebook_path: T }, '/work'));
+  assert.ok(editToolReason('Write', { file_path: 'abc.jsonl' }, `${P}/C--Users-x`));
+  assert.ok(editToolReason('Write', { file_path: join(homedir(), '.claude', 'browser-gate-sessions.json') }, '/work'));
+  assert.equal(editToolReason('Write', { file_path: `${P}/C--Users-x/memory/a.md` }, '/work'), null);
+  assert.equal(editToolReason('Write', { file_path: '/tmp/x.jsonl' }, '/work'), null);
+  assert.equal(editToolReason('Read', { file_path: T }, '/work'), null);
+});
+
+test('#190 end-to-end: the hook blocks a transcript append and a Write, allows a read', () => {
+  const h = tmpHome();
+  const t = join(h, '.claude', 'projects', 'p', 's.jsonl');
+  const tf = t.replaceAll('\\', '/');
+  const hookRun = (payload) => {
+    try {
+      execHarness(hookPath, [], { input: JSON.stringify({ cwd: h, ...payload }), home: h });
+      return 0;
+    } catch (e) {
+      return e.status;
+    }
+  };
+  assert.equal(hookRun({ tool_name: 'Bash', tool_input: { command: `echo x >> ${tf}` } }), 2);
+  assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: t, content: '{}' } }), 2);
+  assert.equal(hookRun({ tool_name: 'Bash', tool_input: { command: `grep -c x ${tf}` } }), 0);
+  assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: join(h, 'notes.md'), content: 'x' } }), 0);
 });

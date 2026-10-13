@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // bash-guard.mjs — consolidated PreToolUse guard for Bash/PowerShell commands.
-// Port + extension of pretooluse-guard.ps1. Wire with matcher "Bash|PowerShell".
+// Port + extension of pretooluse-guard.ps1. Wire with matcher
+// "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit" (the file tools get rule 11 only).
 //
 // Blocks (exit 2):
 //   1. git add -A/--all/. and git commit -a/--all/-am, any flag order (sweeps
@@ -32,8 +33,7 @@
 //      approve blocks, and so does a typed prompt that refuses; a neutral
 //      typed prompt defers to the older. A typed approval is ship words only
 //      ("lgtm push and pr", "ok, merge it"), with no question mark.
-//      Residual: nothing stops a model appending a forged line to its own
-//      transcript file — true of the answer path since it was written.
+//      Rule 11 keeps the model from writing that transcript (#190).
 //      Approval is single-use per verb, spent from a small state file keyed
 //      by the approving record's uuid, so one approval covers push → pr
 //      create → pr merge once each.
@@ -50,6 +50,23 @@
 //  10. A heredoc body holding a doubled backslash — the Bash tool's shell spawn
 //      collapses it, silently corrupting the file or commit message; use Write
 //      (#123, #137, #147).
+//  11. A write into a session transcript (`~/.claude/projects/**/*.jsonl`,
+//      auto-memory dirs exempt) or a gate state file (push-gate-approvals,
+//      browser-gate-sessions, fable-clearance): rules 8 and 9 trust those, so
+//      one appended line would forge approval (#190). Read off parsed calls —
+//      redirects, tee, cp/mv/install/ln, dd of=, sed/perl -i, truncate,
+//      Copy-Item/Move-Item/New-Item/Tee-Object — with the target resolved
+//      through cd and literal vars; a target that can't resolve blocks only
+//      when it looks aimed (a substitution, a var set to a substitution or a
+//      transcript path, a *.jsonl or glob name) in a command naming one. Inline
+//      interpreter code (`node -e`, `python -c`, `node - <<EOF`, PowerShell
+//      [IO.File]) blocks on a write call whose literal path is one, or whose
+//      computed path sits in a call naming one; a runner (`find -exec`,
+//      `xargs`, `env`) blocks on a write in its payload. Static, so
+//      best-effort: a script file that builds the path at runtime is out of
+//      its sight. Wired on Write|Edit|MultiEdit|NotebookEdit too
+//      (editToolReason), where it fails OPEN, so a broken guard never locks
+//      out the Edit tool that fixes it.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -83,14 +100,18 @@ import {
   BILLED_MODEL,
   block,
   browserGateReason,
-  claudeDir,
   consumeClearance,
   denies,
+  isGateRecord,
   logBilled,
+  logError,
+  pushGateStateFile,
   readState,
   run,
   writeState,
 } from './_hooklib.mjs';
+
+export { pushGateStateFile };
 
 const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code');
 
@@ -270,6 +291,8 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
       cur += ch;
     } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
       cur += ch;
+    } else if (ch === '|' && cmd[i - 1] === '>') {
+      cur += ch; // `>|` is a clobbering redirect, not a pipe
     } else if (pipes && ch === '|' && cmd[i + 1] !== '|') {
       cur += ch;
       if (cmd[i + 1] === '&') cur += cmd[++i];
@@ -392,7 +415,7 @@ function expandHome(p) {
   return p;
 }
 
-export function staticCheck(raw) {
+export function staticCheck(raw, cwd = null) {
   if (!raw) return null;
   if (heredocHasDoubledBackslash(raw)) {
     return 'A heredoc body holding a doubled backslash arrives with it collapsed to one (the Bash tool\'s shell spawn eats it), so the file or message written is wrong. Write the file with the Write tool (or Edit) instead of a heredoc.';
@@ -436,7 +459,8 @@ export function staticCheck(raw) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
-  return null;
+  // 11. a write into a transcript or a gate state file (#190)
+  return forgeWrite(raw, cwd);
 }
 
 /** 7. The billed model a shell-launched `claude` would run on, or null. `claude`
@@ -452,6 +476,276 @@ export function billedLaunch(raw) {
   const hit = [...flag, ...env].find((m) => BILLED_MODEL.test(m.toLowerCase()));
   if (!hit) return null;
   return hit.toLowerCase().match(/[^\s"'=]*(?:fable|mythos)[^\s"']*/)[0];
+}
+
+// ---- 11. writes into a gate's records (#190) --------------------------------
+
+/** Does `text` name a transcript or a gate state file? `.claude…projects`
+ *  (any separators, `'.claude','projects'` too) unless the path goes on into
+ *  an auto-memory dir, or a state file under `.claude`. */
+function namesGateRecord(text) {
+  for (const m of text.matchAll(/\.claude[\s'"`,+/\\]*projects(?![\w-])([^\s'"`;|&<>()]*)/gi)) {
+    if (!/^[/\\][^/\\]+[/\\]memory(?:[/\\]|$)/i.test(m[1])) return true;
+  }
+  return /\.claude[\s'"`,+/\\]*(?:browser-gate-sessions|push-gate-approvals|fable-clearance)/i.test(text);
+}
+const INTERPRETER = /^(?:node|nodejs|deno|bun|python[\d.]*|py|perl|ruby|php)(?:\.exe)?$/i;
+/** Flags that hand an interpreter its code inline: -e/--eval/-p (node, perl
+ *  -ne/-pe/-pi -e), -c (python), -r (php). */
+const EVAL_FLAG = /^(?:-[a-zA-Z]*e|--eval(?:=.*)?|-p|--print|-c|-r)$/;
+/** Inline code's file writes (JS, Python, Ruby, .NET), by where the path is:
+ *  the first argument, a write-mode open's first argument, or the second (a
+ *  copy, rename or link destination). */
+const CODE_PATH_FIRST = /\b(?:(?:writeFile|appendFile|truncate|writeTextFile)(?:Sync)?|createWriteStream|(?:Write|Append)All(?:Text|Lines|Bytes)|Bun\.write|File\.write)\s*\(/gi;
+const CODE_OPEN = /\b(?:open|openSync|fopen)\s*\(/gi;
+const CODE_PATH_SECOND = /\b(?:(?:copyFile|cp|rename|symlink|link)(?:Sync)?|shutil\.\w+|os\.(?:replace|rename)|IO\.File\]::(?:Copy|Move|Replace))\s*\(/gi;
+/** Writes whose path is no argument: a receiver (`Path(p).write_text`), a
+ *  subprocess (any shell write), a .NET stream, a Perl `open(F, '>>…')`. */
+const CODE_OPAQUE = /\.write_(?:text|bytes)\s*\(|\.open\s*\(\s*(?:mode\s*=\s*)?['"][rbt]*[wax+]|child_process|subprocess|\b(?:execSync|execFileSync|spawnSync|spawn|system|popen)\s*\(|StreamWriter|FileStream|\bopen\s*\(?\s*(?:my\s+)?[$\w]+\s*,\s*['"]\+?>/i;
+/** PowerShell's .NET file calls, which run as the command itself. */
+const DOTNET_FILE = /\[(?:System\.)?IO\.(?:File|StreamWriter|FileStream)\]|New-Object\s+(?:System\.)?IO\.(?:StreamWriter|FileStream)/i;
+/** Commands that run another command from their args (`env cp …`,
+ *  `find -exec sh -c '… >> {}'`, `xargs`); their payload's write is read as text. */
+const RUNNER = /^(?:find|xargs|env|timeout|nice|ionice|stdbuf|parallel|watch|script|unbuffer)$/i;
+const RUNNER_WRITE = /\b(?:ba|z|da)?sh(?:\.exe)?\s+-c\s[\s\S]*>|\b(?:tee|cp|mv|dd|truncate|install|ln|Copy-Item|Move-Item|New-Item|Tee-Object)\b|\bsed\s+-\w*i|\b(?:write|append)\w*\s*\(/i;
+const COPY = /^(?:cp|mv|install|ln|rsync|scp|copy|move|cpi|mi|copy-item|move-item)$/i;
+const TEE = /^(?:tee|tee-object)$/i;
+const IN_PLACE = /^(?:sed|perl)$/i;
+const NEW_ITEM = /^(?:new-item|ni|truncate)$/i;
+/** PowerShell params whose value is a path to write (`-Destination x`, `-Destination:x`). */
+const PS_DEST = /^-dest\w*(?::(.*))?$/i;
+const PS_PATH = /^-(?:path|literalpath|filepath)(?::(.*))?$/i;
+
+/** The file targets of a clause's unquoted redirects (`>`, `>>`, `>|`, `&>`,
+ *  `2>`), as words; an fd dup (`>&2`, `2>&1`) and a `>(…)` substitution
+ *  are no file. */
+function redirectTargets(text) {
+  const out = [];
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"') i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    const sub = substitutionAt(text, i, false);
+    if (sub) {
+      i = sub.end - 1;
+      continue;
+    }
+    if (ch !== '>') continue;
+    let j = i + 1;
+    if (text[j] === '>' || text[j] === '|') j++;
+    if (text[j] === '&') {
+      i = j;
+      continue;
+    }
+    while (text[j] === ' ' || text[j] === '\t') j++;
+    let k = j;
+    for (let q = null; k < text.length; k++) {
+      if (q) {
+        if (text[k] === q) q = null;
+      } else if (text[k] === '"' || text[k] === "'") q = text[k];
+      else if (/[\s;|&<>()]/.test(text[k])) break;
+    }
+    if (k > j) out.push(words(text.slice(j, k))[0] ?? '');
+    i = k - 1;
+  }
+  return out;
+}
+
+/** A call's args up to its first redirect word — what follows is the redirect's. */
+function ownArgs(w) {
+  const end = w.findIndex((a, i) => i > 0 && /^[\d&]*[<>]/.test(a));
+  return w.slice(1, end === -1 ? w.length : end);
+}
+
+/** The paths a command call writes, as { word, dirTarget }: its redirects,
+ *  and the destination of tee, cp/mv/Copy-Item/Move-Item (a dir counts),
+ *  dd of=, sed/perl -i, truncate and New-Item. */
+function writeTargets({ cmd, words: w, text }) {
+  const out = redirectTargets(text).map((word) => ({ word, dirTarget: false }));
+  if (!w.length) return out;
+  const args = ownArgs(w);
+  const add = (word, dirTarget = false) => word !== undefined && out.push({ word, dirTarget });
+  const positional = args.filter((a, i) => !a.startsWith('-') && !PS_DEST.test(args[i - 1] ?? '') && !PS_PATH.test(args[i - 1] ?? ''));
+  const flagValue = (re) => {
+    const i = args.findIndex((a) => re.test(a));
+    return i === -1 ? undefined : (args[i].match(re)[1] ?? args[i + 1]);
+  };
+  if (COPY.test(cmd)) {
+    const t = args.findIndex((a) => a === '-t' || a.startsWith('--target-directory'));
+    const dest = t !== -1 ? (args[t].split('=')[1] ?? args[t + 1]) : (flagValue(PS_DEST) ?? positional.at(-1));
+    add(dest, true);
+  } else if (TEE.test(cmd)) {
+    for (const p of positional) add(p);
+    add(flagValue(PS_PATH));
+  } else if (cmd === 'dd') {
+    for (const a of args) if (a.startsWith('of=')) add(a.slice(3));
+  } else if (IN_PLACE.test(cmd) && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) {
+    // The files, not the script: an -e/-f value, else sed's first positional.
+    const script = new Set(args.flatMap((a, i) => (/^(?:-[a-zA-Z]*[ef]|--expression|--file)$/.test(a) ? [i + 1] : [])));
+    const files = args.filter((a, i) => !a.startsWith('-') && !script.has(i));
+    for (const p of script.size || !/^sed$/i.test(cmd) ? files : files.slice(1)) add(p);
+  } else if (NEW_ITEM.test(cmd)) {
+    for (const p of positional) add(p);
+    add(flagValue(PS_PATH));
+  }
+  return out;
+}
+
+/** Is a write to `word` from `dir` a write into a gate's records? 'forge'
+ *  when it resolves to one; 'unknown' when it can't resolve and looks aimed —
+ *  a substitution, a var this command assigned (`f=$(ls …); echo >> "$f"`),
+ *  or a `*.jsonl`/glob name; null otherwise (`> $TEMP/out.txt` stays open). */
+function targetVerdict({ word, dirTarget }, dir, vars, cmd) {
+  const p = toDir(dir, word, vars);
+  if (typeof p === 'string') return isGateRecord(p, dirTarget) ? 'forge' : null;
+  const aimed = [...word.matchAll(VAR_REF)].some(([, braced, bare]) => {
+    const name = (braced ?? bare).replace(/^env:/i, '');
+    return assignedValues(cmd, name).some((value) => /\$\(|`/.test(value) || namesGateRecord(value));
+  });
+  const last = word.split(/[/\\]/).pop();
+  return /\$\(|`/.test(word) || aimed || /\.jsonl$|[*?[]/i.test(last) ? 'unknown' : null;
+}
+
+/** The value texts a command assigns to `name` (default: any name), bash
+ *  `NAME=…` or PowerShell `$NAME = …`; a substitution's runs to its first `)`.
+ *  Read off the text: words() splits `f=$(ls …)` at its spaces, so such an
+ *  assignment never reaches `vars`. */
+function assignedValues(cmd, name = String.raw`\w+`) {
+  const set = new RegExp(String.raw`(?:^|[\s;&|({])(?:\$(?:env:)?${name}\s*=\s*|${name}=)("[^"]*"|'[^']*'|\$\([^)]*\)?|\S*)`, 'gi');
+  return [...cmd.matchAll(set)].map(([, value]) => value);
+}
+
+/** Does the command set a var to a gate-record path? */
+const setsGateRecordVar = (cmd) => assignedValues(cmd).some(namesGateRecord);
+
+/** The argument texts of the call whose `(` is at `open`, split on top-level
+ *  commas (quotes and nested brackets respected). */
+function callArgs(text, open) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (let i = open + 1, q = null; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '\\') cur += ch + (text[++i] ?? '');
+      else {
+        if (ch === q) q = null;
+        cur += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') q = ch;
+    else if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) {
+      if (depth === 0) break;
+      depth--;
+    } else if (ch === ',' && depth === 0) {
+      out.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out.filter(Boolean);
+}
+
+/** A code argument that is one plain string literal, as its text, else null.
+ *  A shell-escaped quote (`\"x\"` inside a double-quoted `-e`) counts. */
+function literal(arg) {
+  const m = /^(['"`])([^'"`]*)\1$/.exec(arg.replace(/\\(["'`])/g, '$1'));
+  return m && !(m[1] === '`' && m[2].includes('${')) ? m[2].replaceAll('\\\\', '\\') : null;
+}
+
+/** Inline code's verdict: 'forge' when a write call's literal path is a gate
+ *  record, 'opaque' when a write's path isn't a literal (or it runs a
+ *  subprocess), else null. Literal paths resolve from `dir`. */
+function codeVerdict(code, dir) {
+  let opaque = CODE_OPAQUE.test(code);
+  const judge = (arg, dirTarget = false) => {
+    if (arg === undefined) return null;
+    // A bare name set only from literals (`const f='README.md'; …(f, s)`) is
+    // judged by those literals.
+    if (/^[A-Za-z_$][\w$]*$/.test(arg)) {
+      const set = [...code.matchAll(new RegExp(String.raw`(?<![\w$.])${arg.replace(/\$/g, '\\$')}\s*=(?![=>])\s*([^,;\n]*)`, 'g'))].map((m) => m[1].trim());
+      if (set.length && set.every((v) => literal(v) !== null)) return set.some((v) => judge(v, dirTarget) === 'forge') ? 'forge' : null;
+    }
+    const lit = literal(arg);
+    const p = lit === null ? null : toDir(dir, lit);
+    if (typeof p === 'string') return isGateRecord(p, dirTarget) ? 'forge' : null;
+    opaque ||= lit === null || /\.jsonl$/i.test(lit);
+    return null;
+  };
+  const end = (m) => m.index + m[0].length - 1;
+  for (const m of code.matchAll(CODE_PATH_FIRST)) if (judge(callArgs(code, end(m))[0]) === 'forge') return 'forge';
+  for (const m of code.matchAll(CODE_OPEN)) {
+    const [path, mode] = callArgs(code, end(m));
+    const modeText = mode === undefined ? null : literal(mode.replace(/^mode\s*=\s*/, ''));
+    if (modeText !== null && /[wax+]/.test(modeText) && judge(path) === 'forge') return 'forge';
+  }
+  for (const m of code.matchAll(CODE_PATH_SECOND)) if (judge(callArgs(code, end(m))[1], true) === 'forge') return 'forge';
+  return opaque ? 'opaque' : null;
+}
+
+const FORGE_REASON =
+  'This writes into a session transcript (~/.claude/projects/**/*.jsonl) or an approval gate\'s state file (push-gate-approvals, browser-gate-sessions, fable-clearance). The push and browser gates read user approval from those files, so the model never writes them (#190). Read them freely; write any copy elsewhere (the scratchpad).';
+
+/** 11. Does a command write into a transcript or a gate state file? Read off
+ *  parsed calls: a redirect, tee, cp/mv, dd, sed -i, truncate or PowerShell
+ *  Copy-Item/Move-Item/New-Item/Tee-Object whose target resolves to one (or
+ *  can't resolve and looks aimed at one, in a command naming one); a runner
+ *  (`find -exec`, `xargs`, `env`) carrying a write; or inline interpreter code
+ *  (`node -e`, `python -c`, `node - <<EOF`, PowerShell [IO.File]) whose
+ *  write call names one as a literal path, or writes a computed path while
+ *  the command names one. Static, so best-effort: a path built at runtime by
+ *  a script file is out of its sight. */
+export function forgeWrite(raw, cwd = null) {
+  const cmd = scrub(raw);
+  const named = namesGateRecord(cmd);
+  for (const call of commands(cmd, cwd)) {
+    for (const t of writeTargets(call)) {
+      const v = targetVerdict(t, call.dir, call.vars, cmd);
+      if (v === 'forge' || (v === 'unknown' && named)) return FORGE_REASON;
+    }
+    if (call.aside) continue;
+    const args = ownArgs(call.words);
+    if (named && RUNNER.test(call.cmd) && RUNNER_WRITE.test(args.join(' '))) return FORGE_REASON;
+    // The inline code: an eval flag's argument, PowerShell's own .NET call, or
+    // for code read from stdin (`node - <<EOF`, a bare `python`) the raw text,
+    // since a heredoc body is scrubbed out of `cmd`.
+    let code = null;
+    if (DOTNET_FILE.test(call.text)) code = call.text;
+    else if (INTERPRETER.test(call.cmd)) {
+      const e = args.findIndex((a) => EVAL_FLAG.test(a));
+      if (e !== -1) code = args[e + 1] ?? '';
+      else if (/^deno/i.test(call.cmd) && args[0] === 'eval') code = args.slice(1).join(' ');
+      else if (args.includes('-') || !args.some((a) => !a.startsWith('-'))) code = raw;
+    }
+    if (code === null) continue;
+    const v = codeVerdict(code, call.dir);
+    // A computed path is aimed when this call or its code names a gate record,
+    // or a var the command set does (`f=$(ls …/projects/…)`, then `"$f"`).
+    if (v === 'forge' || (v === 'opaque' && (namesGateRecord(call.text) || namesGateRecord(code) || setsGateRecordVar(cmd)))) return FORGE_REASON;
+  }
+  return null;
+}
+
+/** 11, for the file tools: Write/Edit/MultiEdit/NotebookEdit into a
+ *  transcript or a gate state file. A relative path resolves against `cwd`. */
+export function editToolReason(tool, input, cwd) {
+  if (!/^(?:Write|Edit|MultiEdit|NotebookEdit)$/.test(tool || '')) return null;
+  const raw = input?.file_path ?? input?.notebook_path;
+  if (typeof raw !== 'string' || !raw) return null;
+  const p = raw.replaceAll('\\', '/');
+  return isGateRecord(isAbsolute(p) ? p : resolve(cwd || '.', p)) ? FORGE_REASON : null;
 }
 
 /** Words that only wrap the real command (subshell/group openers, env
@@ -794,6 +1088,13 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       else if (w.length && /^(?:fi|esac)\)*$/.test(cmd)) ifs = Math.max(0, ifs - 1);
       else if (/^case$/.test(cmd)) ifs++;
       if (!w.length) continue;
+      // A clause the branches below consume unemitted can still redirect
+      // (`done > f`, `bash -c "…" >> f`): an `aside` entry carries it to rule
+      // 11. No git/gh/gate rule matches its command word; rule 3 sees it as
+      // the pipeline segment it is.
+      if (c.includes('>') && (/^(?:for|done\)*)$/i.test(cmd) || LOCATION.test(cmd) || SHELL_C.test(cmd))) {
+        out.push({ cmd, words: [...w], text: c, dir: scope.dir, vars: scope.vars, pipe, seg, aside: true });
+      }
       if (/^for$/i.test(cmd)) {
         w.shift();
         if (/^[A-Za-z_]\w*$/.test(w[0] ?? '')) setVar(scope, `sh:${w[0]}`, UNKNOWN_DIR); // the loop var
@@ -813,7 +1114,7 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
         continue;
       }
       // `vars` as they stand here, for a git call's -C (gitCalls).
-      const call = { cmd, words: w, dir: scope.dir, vars: scope.vars, pipe, seg, viaOr, loop };
+      const call = { cmd, words: w, text: c, dir: scope.dir, vars: scope.vars, pipe, seg, viaOr, loop };
       // Only a commit that decides the pipeline's exit status — run directly (not
       // in a substitution or block body), in its last segment, not under `!` —
       // makes a following `||` its fallback.
@@ -1071,8 +1372,6 @@ export function latestApproval(transcriptPath) {
   return null;
 }
 
-export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
-
 /** The state file's side table: `"<uuid>|<verb>"` -> the tool_use_id of the call
  *  that spent it, so a later gated call can refund a spend whose call errored. */
 const IDS_KEY = '@ids';
@@ -1283,10 +1582,23 @@ if (isMain(import.meta.url)) {
     (payload) => {
       const cmd = payload?.tool_input?.command || '';
       const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
+      const tool = payload?.tool_name;
+      if (tool && tool !== 'Bash' && tool !== 'PowerShell') {
+        // The file tools fail OPEN here: a crashed guard must never lock the
+        // Edit tool out, since that is how the guard gets fixed.
+        let fileReason = null;
+        try {
+          fileReason = editToolReason(tool, payload?.tool_input, cwd);
+        } catch (err) {
+          logError('bash-guard', err);
+        }
+        if (fileReason) block(fileReason);
+        return;
+      }
       const browser = browserCommand(cmd, cwd);
       // Browser before push: a blocked command never spends a push approval.
       const reason =
-        staticCheck(cmd) ||
+        staticCheck(cmd, cwd) ||
         branchRules(cmd, cwd) ||
         (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
         pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);

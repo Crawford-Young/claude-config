@@ -9,13 +9,13 @@ seems silent. **Guards opt into fail-closed** (`bash-guard.mjs`,
 true })`): a fail-open guard failure is silent and unbounded (a crashed
 `bash-guard` waves through `git add -A`; a crashed `agent-model-guard` waves
 through an unclearanced usage-billed dispatch), while a fail-closed failure
-is loud, immediate, and recoverable — the Edit tool is not gated by
-`bash-guard`, so a guard can never lock anyone in.
+is loud, immediate, and recoverable — `bash-guard` checks the file tools
+(Write/Edit) fail-OPEN, so a crashed guard can never lock anyone in.
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). |
-| `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`); a write into a session transcript (`~/.claude/projects/**/*.jsonl`, auto-memory dirs exempt) or a gate state file (`push-gate-approvals.json`, `browser-gate-sessions.json`, `fable-clearance.json`) by redirect, tee, cp/mv, dd, sed/perl -i, truncate, PowerShell item cmdlets, inline interpreter code (`node -e`, `python -c`, heredoc-fed, `[IO.File]`) or Write/Edit, since the push and browser gates trust those files (#190; static, so best-effort; the file tools fail open). |
+| `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. bash-guard keeps the model from writing that file or the transcript (#190). `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | A model-omitted dispatch on a frontmatter-less type gets `model: sonnet` via `updatedInput` (with `permissionDecision: allow`, which is the only documented pairing; ledger line `FILL`) when the session model is known and not billed. Otherwise it blocks (#74). Also blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
@@ -134,7 +134,7 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
 ```json
 "hooks": {
   "PreToolUse": [
-    { "matcher": "Bash|PowerShell", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/bash-guard.mjs"] }] },
+    { "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/bash-guard.mjs"] }] },
     { "matcher": "Agent", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs"] }] },
     { "matcher": "mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/browser-gate.mjs"] }] }
   ],
@@ -158,7 +158,9 @@ PreModelSwitch and PostModelSwitch take no matcher. The
 run through `bash -c` (wiring in `statusline/README.md`).
 
 Keep the settings `deny` rules for `git add -A` forms — the two layers
-(deny rule + guard regex) deliberately overlap; change both or neither.
+(deny rule + guard regex) deliberately overlap; change both or neither. The
+same holds for the #190 file-tool deny rules (`Edit(~/.claude/projects/**/*.jsonl)`
+and one per gate state file) beside bash-guard rule 11.
 
 ## Conventions
 

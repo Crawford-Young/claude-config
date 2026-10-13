@@ -221,3 +221,22 @@ test('shellSkillReads: segment-start wrappers (sudo/time/env, parens, braces, $v
   assert.deepEqual(shellSkillReads('sleep 1 & cat skills/f/SKILL.md'), ['f']);
   assert.deepEqual(shellSkillReads('sudo grep x skills/a/SKILL.md'), []);
 });
+
+// #190: the files the approval gates trust, and only those
+test('isGateRecord: transcripts, globs that reach them and gate state files; never memory or elsewhere', async () => {
+  const { isGateRecord, claudeDir } = await import(hooklibUrl);
+  const p = join(claudeDir, 'projects');
+  assert.ok(isGateRecord(join(p, 'C--x', 's.jsonl')));
+  assert.ok(isGateRecord(join(p, 'C--x', 's', 'subagents', 'agent-1.jsonl')));
+  assert.ok(isGateRecord(`${p}/*/*.jsonl`));
+  assert.ok(isGateRecord(`${claudeDir}/*.json`), 'a glob that can reach a state file');
+  assert.ok(isGateRecord(join(p, 'C--x'), true), 'a cp/mv destination dir');
+  for (const f of ['push-gate-approvals.json', 'browser-gate-sessions.json', 'fable-clearance.json']) assert.ok(isGateRecord(join(claudeDir, f)), f);
+  assert.equal(isGateRecord(join(p, 'C--x', 'memory', 'MEMORY.md')), false);
+  assert.equal(isGateRecord(join(p, 'C--x', 'memory'), true), false);
+  assert.equal(isGateRecord(`${p}/C--x/memory/*.md`), false);
+  assert.equal(isGateRecord(join(p, 'C--x', 'notes.txt')), false);
+  assert.equal(isGateRecord(join(claudeDir, 'hook-errors.log')), false);
+  assert.equal(isGateRecord(join(tmpdir(), 'x.jsonl')), false);
+  assert.equal(isGateRecord(join(tmpdir(), '*.jsonl')), false);
+});
