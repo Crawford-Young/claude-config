@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { spawnHarness } from './_spawn.mjs';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,10 @@ const bar = (pct) => {
   return '▰'.repeat(n) + '▱'.repeat(10 - n);
 };
 const tmp = () => mkdtempSync(join(tmpdir(), 'statusline-'));
+/** Cleanup for tests that spawn the detached spend worker: its cwd is the spend dir and it
+ *  drops the lock before it exits, so Windows pins the dir (EPERM) for a moment after (#172, #143).
+ *  Async rm: Node 24's rmSync throws that EPERM at once, ignoring maxRetries. */
+const rmWorkerRoot = (dir) => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 
 /** Fixture with cwd/current_dir repointed — location resolves from the real dir.
  *  session_name is dropped so the row leads with the location. */
@@ -422,7 +427,7 @@ test('spend: a stale cache spawns the detached worker, which fills it and drops 
     }
     assert.ok(Math.abs(JSON.parse(readFileSync(day, 'utf8')).usd - (cost(50) + cost(20, 'claude-sonnet-5-5'))) < 1e-9);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await rmWorkerRoot(root);
   }
 });
 
@@ -457,7 +462,7 @@ test('spend: a corrupt day cache counts as stale and kicks a refresh', async () 
     }
     assert.ok(plain(render(json('no-rate-limits.json'), { ...env, CLAUDE_SPEND_NO_REFRESH: '1' })).includes('day $'));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await rmWorkerRoot(root);
   }
 });
 
