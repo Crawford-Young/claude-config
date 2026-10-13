@@ -164,6 +164,90 @@ export function parseArgs(argv) {
   return args;
 }
 
+// ---- session names (#175) -------------------------------------------------------
+// The one source of the session-name format. A unit's windows carry it as their
+// custom title (written by `claude -n` or /rename); spend, reflect, the worktree check
+// and the statusline all read it back through parseSessionName.
+
+const SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*';
+const ISSUE = '[1-9]\\d*';
+const SLUG_RE = new RegExp(`^${SLUG}$`);
+const TYPED_RE = new RegExp(`^(?:(director|general)-(${SLUG})|(epic|ticket)-(${SLUG})-(${ISSUE}))$`);
+const LEGACY_RE = new RegExp(`^(${SLUG})-(${ISSUE})$`);
+
+/** Lowercase kebab slug of free text, cut to its first `maxWords` words. */
+export function slugify(text, maxWords = Infinity) {
+  return String(text ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, maxWords).join('-');
+}
+
+/** Words in a general session's topic. */
+export const TOPIC_WORDS = 4;
+
+/** An issue number as sessionName takes it: leading zeros dropped (`0175` → '175'),
+ *  null for 0 or anything that isn't a whole number. */
+export function issueNumber(v) {
+  const m = /^0*([1-9]\d*)$/.exec(typeof v === 'number' || typeof v === 'string' ? String(v) : '');
+  return m ? m[1] : null;
+}
+
+/** The general session name for free text: slugified, first TOPIC_WORDS words. Throws on empty. */
+export function generalSessionName(text) {
+  return sessionName('general', slugify(text, TOPIC_WORDS));
+}
+
+function slugArg(what, v) {
+  if (typeof v !== 'string' || !SLUG_RE.test(v)) throw new Error(`session name ${what} must be a lowercase kebab slug, got ${JSON.stringify(v)}`);
+  return v;
+}
+
+/** A unit's session name: ('director', scope) | ('epic'|'ticket', repo, N) | ('general', topic).
+ *  Throws on anything that would not parse back to the same type. */
+const ARITY = new Map([['director', 1], ['general', 1], ['epic', 2], ['ticket', 2]]);
+
+export function sessionName(type, ...args) {
+  const want = ARITY.get(type);
+  if (!want) throw new Error(`unknown session type ${JSON.stringify(type)}: director | epic | ticket | general`);
+  if (args.length > want) throw new Error(`too many arguments for a ${type} session name`);
+  if (want === 1) return `${type}-${slugArg(type === 'director' ? 'scope' : 'topic', args[0])}`;
+  const repo = slugArg('repo', args[0]);
+  const n = issueNumber(args[1]);
+  if (!n) throw new Error(`session name issue must be a positive issue number, got ${JSON.stringify(args[1])}`);
+  return `${type}-${repo}-${n}`;
+}
+
+/** Parsed identity of a session name, case-folded. name is the canonical typed form
+ *  (the join key) and raw the input as given. A legacy `<slug>-<N>` is a ticket
+ *  (legacy: true). Missing, empty or unparseable → { type: 'general', topic: null, name: null }. */
+export function parseSessionName(input) {
+  const raw = typeof input === 'string' ? input : '';
+  const s = raw.trim().toLowerCase();
+  const m = TYPED_RE.exec(s);
+  if (m?.[1] === 'director') return { type: 'director', scope: m[2], name: s, raw };
+  if (m?.[1] === 'general') return { type: 'general', topic: m[2], name: s, raw };
+  if (m) return { type: m[3], repo: m[4], issue: Number(m[5]), legacy: false, name: s, raw };
+  const l = LEGACY_RE.exec(s);
+  if (l) return { type: 'ticket', repo: l[1], issue: Number(l[2]), legacy: true, name: `ticket-${l[1]}-${l[2]}`, raw };
+  return { type: 'general', topic: null, name: null, raw };
+}
+
+/** Whether a session name was chosen for its unit, given the registry's nameSource
+ *  (undefined when unknown). A typed name is, whatever its source: what a `claude -n`
+ *  launch records is unverified. A legacy-form name is only when user- or peer-set,
+ *  since derived auto names (`code-42`) take the same shape. The failsafe never is. */
+export function isChosenName(name, nameSource) {
+  const p = parseSessionName(name);
+  if (!p.name) return false;
+  return !p.legacy || nameSource === 'user' || nameSource === 'peer';
+}
+
+/** Grouping key for a window's custom title: its typed name when it parses (a legacy
+ *  and a typed window of one unit share it), the trimmed title when it doesn't, null
+ *  when there is none. */
+export function sessionKey(title) {
+  const p = parseSessionName(title);
+  return p.name ?? (p.raw.trim() || null);
+}
+
 /** Resolve a repo argument (relative or absolute) and verify it is a repo. */
 export function resolveRepo(p) {
   const abs = resolve(p || '.');

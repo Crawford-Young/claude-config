@@ -308,18 +308,18 @@ test('session titles come from custom-title over ai-title', () => {
   assert.equal(c.report().sessions[0].title, 'claude-config-62');
 });
 
-test('sessions group by their custom-title name across windows; unnamed sessions stay out of the grouping', () => {
+test('sessions group by their parsed custom-title name across windows (legacy and typed join); unnamed sessions stay out of the grouping', () => {
   const c = createCollector({ prices: PRICES });
   c.add(asst('a1', usage({ input_tokens: 1e6 }), { ts: '2026-10-02T09:00:00Z' }), { sessionId: 'w1', agent: null });
   c.add({ type: 'custom-title', sessionId: 'w1', customTitle: 'claude-config-67' }, { sessionId: 'w1', agent: null });
   c.add(asst('a2', usage({ input_tokens: 2e6 }), { ts: '2026-10-04T09:00:00Z' }), { sessionId: 'w2', agent: null });
-  c.add({ type: 'custom-title', sessionId: 'w2', customTitle: 'claude-config-67' }, { sessionId: 'w2', agent: null });
+  c.add({ type: 'custom-title', sessionId: 'w2', customTitle: 'ticket-claude-config-67' }, { sessionId: 'w2', agent: null });
   c.add({ type: 'agent-name', sessionId: 'w3', agentName: 'auto-name' }, { sessionId: 'w3', agent: null });
   c.add({ type: 'ai-title', sessionId: 'w3', aiTitle: 'Auto title' }, { sessionId: 'w3', agent: null });
   c.add(asst('a3', usage({ input_tokens: 1e6 })), { sessionId: 'w3', agent: null });
   const r = c.report();
-  assert.deepEqual(r.names, [{ name: 'claude-config-67', windows: 2, requests: 2, usd: 15, subagentUsd: 0, first: '2026-10-02', last: '2026-10-04' }]);
-  assert.match(renderMarkdown(r), /## Per session name[\s\S]*\| claude-config-67 \| 2 \| 2026-10-02 \| 2026-10-04 \| 2 \| \$15\.00 \|/);
+  assert.deepEqual(r.names, [{ name: 'ticket-claude-config-67', windows: 2, requests: 2, usd: 15, subagentUsd: 0, first: '2026-10-02', last: '2026-10-04' }]);
+  assert.match(renderMarkdown(r), /## Per session name[\s\S]*\| ticket-claude-config-67 \| 2 \| 2026-10-02 \| 2026-10-04 \| 2 \| \$15\.00 \|/);
 });
 
 // ---- /rename windows (#115) ----------------------------------------------------
@@ -776,7 +776,7 @@ test('time: per-day and per-name rows split at UTC midnight and sum every window
   const r = c.report();
   const t = r.time;
   assert.deepEqual(t.days.map((d) => [d.day, sec(d.activeMs)]), [['2026-10-01', 60], ['2026-10-02', 90]]);
-  assert.deepEqual(t.names.map((g) => [g.name, g.windows, sec(g.activeMs), sec(g.wallMs)]), [['repo-5', 2, 150, 150]]);
+  assert.deepEqual(t.names.map((g) => [g.name, g.windows, sec(g.activeMs), sec(g.wallMs)]), [['ticket-repo-5', 2, 150, 150]]);
   assert.equal(sec(t.totals.activeMs), 150);
   const md = renderMarkdown(r);
   for (const h of ['## Time', '**Per day**', '**Per session name**', '**Agent time**', '**Tool latency**', '**Retry and block cost**']) assert.ok(md.includes(h), h);

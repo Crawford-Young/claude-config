@@ -309,7 +309,10 @@ test('with no window source the absolute bands still fire: 160k nudges, 260k blo
   const b = runHook('keep building', line(usage(0, 260_000)), { window: null });
   assert.equal(b.code, 2);
   assert.match(b.stderr, /260k/);
-  assert.match(b.stderr, /\/clear/);
+  assert.match(b.stderr, /fresh-session-or-continue/);
+  assert.match(b.stderr, /\/exit, run the launch line/);
+  assert.match(b.stderr, /\/compact/);
+  assert.doesNotMatch(b.stderr, /clear-vs-continue|\/clear\b/);
   assert.match(b.stderr, /CONTEXT OK/);
 });
 
@@ -348,10 +351,12 @@ test('PostToolUse emits additionalContext JSON per band and exits 0', () => {
 
   const w = JSON.parse(runPost(line(usage(0, 210_000)), { window: null }).stdout);
   assert.match(w.hookSpecificOutput.additionalContext, /continuation\/SKILL\.md/);
+  assert.match(w.hookSpecificOutput.additionalContext, /fresh-session-or-continue/);
+  assert.doesNotMatch(w.hookSpecificOutput.additionalContext, /clear-or-continue/);
 
   const blockRun = runPost(line(usage(0, 260_000)), { window: null });
   assert.equal(blockRun.code, 0); // a tool that already ran can't be blocked
-  assert.match(JSON.parse(blockRun.stdout).hookSpecificOutput.additionalContext, /260k.*\/clear/s);
+  assert.match(JSON.parse(blockRun.stdout).hookSpecificOutput.additionalContext, /260k.*\/exit/s);
 
   assert.equal(runPost(line(usage(0, 100_000)), { window: null }).stdout.trim(), '');
 });
@@ -398,7 +403,7 @@ test('a block announced on PostToolUse is announced once, and UserPromptSubmit s
     assert.equal(runPost(line(usage(0, 262_000)), { home }).stdout.trim(), '');
     const prompt = runHook('keep building', line(usage(0, 262_000)), { home });
     assert.equal(prompt.code, 2);
-    assert.match(prompt.stderr, /\/clear/);
+    assert.match(prompt.stderr, /\/exit/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

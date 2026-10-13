@@ -35,7 +35,7 @@ test('--session keeps only the windows renamed to that name, subagents included'
     const j = JSON.parse(r.stdout);
     assert.equal(j.files, 3);
     assert.equal(j.totals.requests, 3);
-    assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['repo-7', 2]]);
+    assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['ticket-repo-7', 2]]);
     assert.deepEqual(j.sessions.map((s) => s.sessionId).sort(), ['a', 'b']);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -56,7 +56,7 @@ test('--session --json carries the time dimension for the named windows; --idle-
     const dflt = run();
     assert.equal(dflt.idleGapMin, 10);
     assert.deepEqual([dflt.totals.wallMs, dflt.totals.activeMs, dflt.totals.modelMs], [21 * 60e3, 2 * 60e3, 2 * 60e3]);
-    assert.deepEqual(dflt.names.map((g) => [g.name, g.windows]), [['repo-8', 1]]);
+    assert.deepEqual(dflt.names.map((g) => [g.name, g.windows]), [['ticket-repo-8', 1]]);
     for (const k of ['days', 'sessions', 'agents', 'agentRuns', 'tools', 'commands', 'retry']) assert.ok(k in dflt, k);
     const lenient = run('--idle-gap', '30');
     assert.deepEqual([lenient.idleGapMin, lenient.totals.activeMs, lenient.totals.userMs], [30, 21 * 60e3, 19 * 60e3]);
@@ -91,7 +91,7 @@ test('--session keeps only the /rename windows of that name inside a renamed tra
     assert.deepEqual([ten.files, ten.totals.requests, ten.sessions.map((s) => s.sessionId)], [1, 2, ['r']]);
     const eleven = run('unit-11');
     assert.deepEqual([eleven.files, eleven.totals.requests, eleven.sessions.map((s) => s.sessionId)], [2, 3, ['r#2']]);
-    assert.deepEqual(eleven.names.map((g) => [g.name, g.windows, g.requests]), [['unit-11', 1, 3]]);
+    assert.deepEqual(eleven.names.map((g) => [g.name, g.windows, g.requests]), [['ticket-unit-11', 1, 3]]);
     const twelve = run('unit-12');
     // a slice of a transcript is not checked against the whole file's cost-state
     assert.equal(twelve.costState.files, 0);
@@ -103,12 +103,39 @@ test('--session keeps only the /rename windows of that name inside a renamed tra
   }
 });
 
+test('--session joins on the parsed name: a legacy repo-5 window and a typed ticket-repo-5 window are one unit', () => {
+  const root = fixture();
+  try {
+    const proj = join(root, 'C--proj');
+    writeFileSync(join(proj, 'l.jsonl'), lines(...req('l1', 'l', 'repo-5')));
+    writeFileSync(join(proj, 't.jsonl'), lines(...req('t1', 't', 'ticket-repo-5')));
+    writeFileSync(join(proj, 'e.jsonl'), lines(...req('e1', 'e', 'epic-repo-5')));
+    for (const name of ['ticket-repo-5', 'repo-5']) {
+      const r = spawnHarness(cli, ['--root', root, '--session', name, '--json']);
+      assert.equal(r.status, 0, r.stderr);
+      const j = JSON.parse(r.stdout);
+      assert.deepEqual(j.sessions.map((s) => s.sessionId).sort(), ['l', 't'], name);
+      assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['ticket-repo-5', 2]], name);
+      assert.deepEqual(j.time.names.map((g) => [g.name, g.windows]), [['ticket-repo-5', 2]], name);
+    }
+    const epic = JSON.parse(spawnHarness(cli, ['--root', root, '--session', 'epic-repo-5', '--json']).stdout);
+    assert.deepEqual(epic.sessions.map((s) => s.sessionId), ['e'], 'an epic on the same issue is its own unit');
+    // a custom name still groups by itself, and an unnamed window stays out of the grouping
+    const all = JSON.parse(spawnHarness(cli, ['--root', root, '--json']).stdout);
+    assert.deepEqual(all.names.map((g) => g.name).sort(), ['epic-repo-5', 'other', 'ticket-repo-5', 'ticket-repo-7']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('--session with no matching window exits 1 and says so', () => {
   const root = fixture();
   try {
     const r = spawnHarness(cli, ['--root', root, '--session', 'repo-404']);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /no session named repo-404/);
+    assert.match(r.stderr, /session-name\.mjs/, 'points at the launch line');
+    assert.doesNotMatch(r.stderr, /\/rename/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

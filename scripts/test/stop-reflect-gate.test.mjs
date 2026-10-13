@@ -144,6 +144,7 @@ const ask = (min, input) => ({
 });
 const clearQ = { questions: [{ question: 'Clear or continue in this session?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
 const optionsOnly = { questions: [{ question: 'Next step?', options: [{ label: 'Clear context' }, { label: 'Continue here', description: 'keep going' }] }] };
+const freshQ = { questions: [{ question: 'Fresh session (/exit, run the launch line, paste) or continue?', options: [{ label: 'Fresh session' }, { label: 'Continue' }] }] };
 const unrelated = { questions: [{ question: 'Which branch name?', options: [{ label: 'a' }, { label: 'b' }] }] };
 
 test('continuationAsked: question text or option labels with clear and continue, after the cutoff only', () => {
@@ -151,6 +152,7 @@ test('continuationAsked: question text or option labels with clear and continue,
   const cut = Date.now() - 20 * 60_000;
   assert.equal(continuationAsked(tx(ask(5, clearQ)), cut), true, 'words in question text');
   assert.equal(continuationAsked(tx(ask(5, optionsOnly)), cut), true, 'words only in option labels');
+  assert.equal(continuationAsked(tx(ask(5, freshQ)), cut), true, 'the fresh-session-or-continue wording');
   assert.equal(continuationAsked(tx(ask(5, unrelated)), cut), false, 'unrelated ask');
   assert.equal(continuationAsked(tx(ask(30, clearQ)), cut), false, 'asked before the cutoff');
 });
@@ -161,6 +163,8 @@ test('after reflect read post-merge: blocks once for the continuation ask, then 
   const first = runHook({ transcript_path }, home);
   assert.equal(first.code, 2);
   assert.match(first.stderr, /continuation\/SKILL\.md/);
+  assert.match(first.stderr, /fresh-session-or-continue/);
+  assert.doesNotMatch(first.stderr, /clear-or-continue|\/clear/);
   assert.equal(runHook({ transcript_path }, home).code, 0, 'one block per merge');
 });
 
@@ -172,8 +176,8 @@ test('reflect landing PR (merge within 60 min after the read) also needs the con
   assert.match(r.stderr, /continuation/);
 });
 
-test('a clear-or-continue ask after reflect satisfies the gate (either shape)', () => {
-  for (const input of [clearQ, optionsOnly]) {
+test('a fresh-session-or-continue ask after reflect satisfies the gate (old clear wording too)', () => {
+  for (const input of [freshQ, clearQ, optionsOnly]) {
     const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
     const transcript_path = transcript(...mergeAt('c3', 30), reflectRead('r', 10), ask(2, input));
     assert.equal(runHook({ transcript_path }, home).code, 0);

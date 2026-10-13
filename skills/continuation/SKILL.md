@@ -1,22 +1,22 @@
 ---
 name: continuation
-description: Use whenever anything remains to be done after a `/clear` — wave close, spec approval, heavy-session boundary. Produces a paste-ready prompt (never a file) so the next session resumes without loss.
+description: Use whenever anything remains to be done after a session ends — wave close, spec approval, heavy-session boundary. Produces a paste-ready prompt (never a file) so the next session resumes without loss.
 disable-model-invocation: true
 ---
 
 # Continuation
 
-Ask first, with one AskUserQuestion: clear or continue. Emit the block only if the user picks clear — never in the same reply as the ask, and never unprompted.
+Ask first, with one AskUserQuestion: fresh session (`/exit`, run the launch line, paste) or continue. Emit the block only if the user picks the fresh session — never in the same reply as the ask, and never unprompted.
 
 ## If continue
 
 Say so in one line. No block.
 
-## If clear
+## If fresh session
 
-Produce a **copy-paste prompt** the user pastes after `/clear`. No handoff file — the GitHub issue and the last commit body already record durable state; the prompt points at them and carries only what exists nowhere on disk.
+Produce a **copy-paste prompt** the user pastes into the fresh session. No handoff file — the GitHub issue and the last commit body already record durable state; the prompt points at them and carries only what exists nowhere on disk.
 
-Tell the user to type `/rename <repo>-<issue>` as its own message first (agents can't run slash commands), then paste the block below as a second message.
+Print the launch line from `node ~/code/claude-config/scripts/session-name.mjs <type> <args>` (type: `ticket` for an issue unit, `epic` for an epic, `director` for a director, else `general`). The user runs it from the repo root in a fresh terminal, then pastes the block below as the first message (an agent can't run `/rename`, and `-n` names the session at launch).
 
 Emit the prompt, fenced, self-contained, first and last lines the literal markers below — the terminal renders fences invisibly, so the markers are the only visible copy boundary:
 
@@ -40,4 +40,4 @@ Blockers first: <uncommitted work, unmerged branch, unrun migration>
 
 Every line must pass one test: does the next session need this to **act**? Mission briefing, not session diary.
 
-Auto-compact thrashing despite the context gauge (e.g. one huge paste): recover via chunked reads → focused `/compact` → subagent offload → `/clear`.
+Auto-compact thrashing despite the context gauge (e.g. one huge paste): recover via chunked reads → focused `/compact` → subagent offload → fresh session.

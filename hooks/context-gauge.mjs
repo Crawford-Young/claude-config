@@ -5,7 +5,7 @@
 //
 // Why a gauge at all: cost and quality. The user works at a ~200k max per
 // session, and $/request rises from $0.083 (100-200k) to $0.105-0.144 above
-// 200k. A wave boundary is a /clear with a continuation prompt, not a drift.
+// 200k. A wave boundary is a fresh session from the continuation skill, not a drift.
 //
 // Bands are ABSOLUTE tokens, independent of the window size:
 //   150k  nudge  quiet note into context, once: stop at the next green commit
@@ -244,7 +244,7 @@ export function warnText(tokens, t, window = null) {
   return [
     `[context-gauge] Session context is ~${fmt(tokens)} tokens (warn line ${fmt(t.warn)})${floorNote(window)}.`,
     `Checkpoint now: commit with the resume block (What/Verified/Next/Ruled out) and comment open blockers on the issue.`,
-    `Then run the continuation skill: Read ~/code/claude-config/skills/continuation/SKILL.md and ask the clear-or-continue AskUserQuestion.`,
+    `Then run the continuation skill: Read ~/code/claude-config/skills/continuation/SKILL.md and ask the fresh-session-or-continue AskUserQuestion.`,
     `Blocking at ${fmt(t.blockAt)}.`,
   ].join(' ');
 }
@@ -255,8 +255,8 @@ export function blockText(tokens, t, window = null) {
     ``,
     `Past ~200k a session costs more per request ($0.083 at 100-200k, $0.105-0.144 above) and its answers degrade. Close out deliberately:`,
     `  1. Commit with the resume block (What/Verified/Next/Ruled out); comment open blockers and deviations on the issue.`,
-    `  2. Run the continuation skill (it asks clear-vs-continue).`,
-    `  3. /clear  — or  /compact <focus for the NEXT task>  if unrecorded conversational state remains.`,
+    `  2. Run the continuation skill (it asks fresh-session-or-continue).`,
+    `  3. Fresh session: /exit, run the launch line, paste the prompt  — or  /compact <focus for the NEXT task>  if unrecorded conversational state remains.`,
     ``,
     `To override and keep going in this session, include CONTEXT OK in your message.`,
   ].join('\n');
@@ -320,7 +320,7 @@ export function main(payload) {
       }
       return;
     }
-    // Slash commands must always reach the CLI — /clear is the way out.
+    // Slash commands must always reach the CLI — /exit, /clear and /compact are the ways out.
     if (!bypassed && !prompt.trimStart().startsWith('/')) {
       writeState(sid, { ...state, fired: 'block', lastTokens: tokens });
       block(blockText(tokens, t, floored));

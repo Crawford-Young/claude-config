@@ -132,7 +132,7 @@
    "id": "phase:cleanup-continuation",
    "kind": "phase",
    "label": "cleanup / continuation",
-   "summary": "Workspace sweep, then a paste-ready resume prompt before /clear.",
+   "summary": "Workspace sweep, then the launch line and a paste-ready resume prompt for a fresh session.",
    "rules": [
     "Continuation is a prompt, never a file"
    ]
@@ -198,9 +198,9 @@
    "kind": "skill",
    "label": "continuation",
    "file": "skills/continuation/SKILL.md",
-   "summary": "Paste-ready resume prompt for after /clear.",
+   "summary": "Launch line plus a paste-ready resume prompt for a fresh session.",
    "rules": [
-    "Always asks clear-vs-continue first; never unprompted"
+    "Always asks fresh-session-or-continue first; never unprompted"
    ]
   },
   {
@@ -368,11 +368,11 @@
    "kind": "hook",
    "label": "stop-reflect-gate",
    "file": "hooks/stop-reflect-gate.mjs",
-   "summary": "Stop — reminds once per merged PR (a successful gh pr merge in the transcript) to run reflect, then to ask clear-or-continue.",
+   "summary": "Stop — reminds once per merged PR (a successful gh pr merge in the transcript) to run reflect, then to ask fresh-session-or-continue.",
    "rules": [
     "Blocks once per merge, never repeatedly (since 2026-08-21)",
     "Once per merge: handled tool_use ids (newest 200) kept in ~/.claude/stop-reflect-gate.json",
-    "After merge + reflect, blocks once per merge until a clear-or-continue AskUserQuestion is asked (#122)"
+    "After merge + reflect, blocks once per merge until a fresh-session-or-continue AskUserQuestion (old clear wording still counts) is asked (#122)"
    ]
   },
   {
@@ -477,7 +477,7 @@
    "kind": "script",
    "label": "worktree.mjs",
    "file": "scripts/worktree.mjs",
-   "summary": "Create, remove and list feature worktrees from origin's default branch."
+   "summary": "Create, remove and list feature worktrees from origin's default branch; new prints the unit's claude -n launch line and warns (never blocks) on a session name that won't join the unit."
   },
   {
    "id": "script:qa",
@@ -538,7 +538,14 @@
    "kind": "script",
    "label": "lib.mjs",
    "file": "scripts/lib.mjs",
-   "summary": "Shared helpers for the workflow scripts; Node builtins only."
+   "summary": "Shared helpers for the workflow scripts; Node builtins only. Owns the session-name format: sessionName/parseSessionName/sessionKey/isChosenName (#175)."
+  },
+  {
+   "id": "script:session-name",
+   "kind": "script",
+   "label": "session-name.mjs",
+   "file": "scripts/session-name.mjs",
+   "summary": "Prints a unit's launch line, claude -n <typed name> (director/epic/ticket/general), built by lib's sessionName so no doc restates the format (#175)."
   },
   {
    "id": "store:docs-repo",
@@ -661,14 +668,14 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by /rename session name, --session filters to one unit."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by parsed session name (legacy and typed forms of a unit join), --session filters to one unit."
   },
   {
    "id": "script:audit-lib",
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per /rename (streamed, replays kept with the first transcript read), timestamp timelines for the time dimension."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-name rows keyed by lib's sessionKey, timestamp timelines for the time dimension."
   },
   {
    "id": "store:push-gate-approvals",
@@ -1118,7 +1125,8 @@
   {
    "from": "script:worktree",
    "to": "script:lib",
-   "kind": "reads"
+   "kind": "reads",
+   "label": "sessionName, parseSessionName, isChosenName, issueNumber, generalSessionName, slugify"
   },
   {
    "from": "script:qa",
@@ -1170,13 +1178,14 @@
   {
    "from": "script:reflect-gather",
    "to": "script:lib",
-   "kind": "reads"
+   "kind": "reads",
+   "label": "die, git, isMain, log, parseArgs, parseSessionName, sessionKey"
   },
   {
    "from": "script:statusline",
    "to": "script:lib",
    "kind": "reads",
-   "label": "isMain"
+   "label": "isMain, isChosenName"
   },
   {
    "from": "store:settings-json",
@@ -1371,6 +1380,42 @@
    "from": "script:board",
    "to": "script:lib",
    "kind": "reads"
+  },
+  {
+   "from": "script:session-name",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "die, generalSessionName, isMain, log, parseArgs, sessionName, slugify"
+  },
+  {
+   "from": "script:audit",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "sessionKey"
+  },
+  {
+   "from": "script:audit-lib",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "sessionKey"
+  },
+  {
+   "from": "script:worktree",
+   "to": "script:session-name",
+   "kind": "reads",
+   "label": "launchCommand"
+  },
+  {
+   "from": "skill:continuation",
+   "to": "script:session-name",
+   "kind": "invokes",
+   "label": "launch line"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "script:session-name",
+   "kind": "invokes",
+   "label": "launch line (directing-a-batch)"
   }
  ]
 }

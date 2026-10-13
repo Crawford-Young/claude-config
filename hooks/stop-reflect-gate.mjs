@@ -21,8 +21,8 @@
 //
 // Second gate (issue #122): once reflect has run for the merge (read after it,
 // or the merge is reflect's own landing PR), the turn may not end until an
-// AskUserQuestion offering clear-or-continue (question or option text matching
-// both /clear/ and /continu/) was asked after that read and the merge. The tool call is
+// AskUserQuestion offering fresh-session-or-continue (question or option text matching
+// /fresh/ or /clear/, the older wording, and /continu/) was asked after that read and the merge. The tool call is
 // matched, not a marker word: the continuation skill mandates the call. One
 // block per merge, tracked under `cont` in the same state file.
 
@@ -96,7 +96,8 @@ export function lastReflectAt(text) {
   return at;
 }
 
-/** Was an AskUserQuestion mentioning both clear and continue asked after `after` (epoch ms)? */
+/** Was an AskUserQuestion offering a fresh session (or, in older transcripts, a clear) and
+ *  continue asked after `after` (epoch ms)? */
 export function continuationAsked(text, after) {
   for (const l of text.split('\n')) {
     if (!l.includes('AskUserQuestion')) continue;
@@ -114,7 +115,7 @@ export function continuationAsked(text, after) {
         const words = [q?.question, ...(Array.isArray(q?.options) ? q.options.flatMap((x) => [x?.label, x?.description]) : [])]
           .filter((x) => typeof x === 'string')
           .join('\n');
-        if (/\bclear\b/i.test(words) && /\bcontinu/i.test(words)) return true;
+        if (/\b(?:fresh|clear)\b/i.test(words) && /\bcontinu/i.test(words)) return true;
       }
     }
   }
@@ -148,7 +149,7 @@ function main() {
       }
     }
 
-    // Second gate: reflect ran for this merge, but no clear-or-continue ask followed it.
+    // Second gate: reflect ran for this merge, but no fresh-session-or-continue ask followed it.
     const mergeAt = merge.at ?? Date.now();
     if (reflectAt === null || !(reflectAt > mergeAt || mergeAt - reflectAt < REFLECT_COVERS_MS)) return;
     const cur = readState(stateFile);
@@ -156,7 +157,7 @@ function main() {
     if (asked.includes(id) || continuationAsked(text, Math.max(reflectAt, mergeAt))) return;
     writeState(stateFile, { ...cur, cont: [...asked, id].slice(-200) });
     block(
-      `Reflect has run for the merged PR. Before ending: run the continuation skill now — Read ~/code/claude-config/skills/continuation/SKILL.md and ask its clear-or-continue AskUserQuestion. If reflect's dialogue is still waiting on the user, finish that first and ask clear-or-continue as reflect's last step. This fires once per merge.`,
+      `Reflect has run for the merged PR. Before ending: run the continuation skill now — Read ~/code/claude-config/skills/continuation/SKILL.md and ask its fresh-session-or-continue AskUserQuestion. If reflect's dialogue is still waiting on the user, finish that first and ask fresh-session-or-continue as reflect's last step. This fires once per merge.`,
     );
   });
 }

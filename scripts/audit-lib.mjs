@@ -11,11 +11,12 @@
 //   leaves a replayed uuid with the transcript read first, and reads the oldest file
 //   first (by first and last stamp, #142), not in name order (strate stores a uuid once);
 //   the collector still dedupes non-request records on uuid, tool calls on tool_use id.
-// - A user-set name (/rename) is a {type:'custom-title'} record. One file can hold
-//   several units (/rename without /clear), so it splits into a window at each
-//   change of name (#115; the rule is strate's store/group.rs, settled on real data).
+// - A user-set name (/rename, or a launch name from claude -n / claude --bg -n,
+//   2.1.280) is a {type:'custom-title'} record. One file can hold several units (a
+//   rename without /clear), so it splits into a window at each change of name (#115;
+//   the rule is strate's store/group.rs, settled on real data). Rows group per unit
+//   on lib's sessionKey, so a legacy and a typed name of one unit join (#175).
 //   ai-title and agent-name records carry auto names, not unit names (#73).
-//   A launch name (claude --bg -n <name>) writes the same record (2.1.280).
 //
 // cost-state facts (#116, measured 2026-10-12 on 29 sessions, CC 2.1.263-2.1.295):
 // - A {type:'cost-state'} record is Claude Code's running total for the session,
@@ -49,6 +50,7 @@ import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { shellSkillReads } from '../hooks/_hooklib.mjs';
+import { sessionKey } from './lib.mjs';
 
 const MTOK = 1e6;
 
@@ -264,7 +266,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const timedUuid = new Set();
   const seenUuid = new Set();
   const seenTool = new Set();
-  const custom = new Map(); // window -> its /rename name
+  const custom = new Map(); // window -> its custom title
   const ai = new Map(); // sessionId -> auto title, a per-file fallback label
   const fileOf = new Map(); // window -> sessionId
   const titleOf = (key) => custom.get(key) || ai.get(fileOf.get(key)) || '';
@@ -524,9 +526,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
     const timed = {};
     for (const [h, ms] of Object.entries(hookTimes)) timed[h] = { fires: ms.length, p50: pct(ms, 50), p95: pct(ms, 95) };
-    const names = new Map(); // custom-title -> one row over all its windows
+    const names = new Map(); // session key -> one row over all its windows
     for (const s of sessions.values()) {
-      const name = custom.get(s.sessionId);
+      const name = sessionKey(custom.get(s.sessionId));
       if (!name) continue;
       const g = names.get(name) || { name, windows: 0, requests: 0, usd: 0, subagentUsd: 0, first: s.first, last: s.last };
       g.windows++;
@@ -597,7 +599,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     const { sessions, days, totals, idleOf } = windowTimes(cost);
     const names = new Map();
     for (const s of sessions) {
-      const name = custom.get(s.sessionId);
+      const name = sessionKey(custom.get(s.sessionId));
       if (!name) continue;
       const g = names.get(name) || { name, windows: 0, wallMs: 0, activeMs: 0, ...zeroSplit(), usd: 0 };
       g.windows++;
@@ -759,7 +761,7 @@ export async function* walkTranscripts(root) {
 const earliest = (a, b) => (a === null ? b : b === null ? a : Math.min(a, b));
 const stampOf = (rec) => Date.parse(rec?.timestamp || '') || null;
 
-/** Splits a main transcript into /rename windows (#115), one record at a time in
+/** Splits a main transcript into custom-title windows (#115), one record at a time in
  *  file order so the file is never held whole: push(rec) each record, then
  *  windows() -> [{ name, first (record index), startedAt (earliest ms stamp or null) }].
  *  A window starts at each change of custom-title (a repeat or an empty title is no
@@ -818,7 +820,7 @@ async function inReadOrder(mains) {
 }
 
 /** Yields { file, windows, records } for every transcript under root. windows is the
- *  ctx of each /rename window, gaining window (the key its rows go under: the bare
+ *  ctx of each custom-title window, gaining window (the key its rows go under: the bare
  *  sessionId, then sessionId#2, #3…) and name (its custom-title). records streams
  *  { rec, ctx } in file order when iterated; each ctx is the very object in windows.
  *  A file is read twice, once to split it and once for its records, so none is held

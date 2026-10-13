@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fillBar, formatTokens, gitInfo, historySample, localDay, render, spendLock } from '../../statusline/statusline.mjs';
+import { fillBar, formatTokens, gitInfo, historySample, localDay, registryName, render, spendLock } from '../../statusline/statusline.mjs';
 import { readFrom, refresh } from '../../statusline/spend.mjs';
 import { render as renderSubagents } from '../../statusline/subagent.mjs';
 import { priceUsage } from '../../scripts/audit-lib.mjs';
@@ -262,9 +262,60 @@ test('session name: control and bidi bytes are stripped', () => {
   const dir = registry({ name: '\x1b[31mevil\x07\u009b2J\u202ename\n', nameSource: 'user' });
   try {
     const row1 = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).split('\n')[0];
-    assert.ok(row1.startsWith('\x1b[1m[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
+    assert.ok(row1.startsWith('\x1b[2m~[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('session name: a typed name is chosen whatever its nameSource, and renders as-is', () => {
+  for (const entry of [{ name: 'ticket-claude-config-175', nameSource: 'auto' }, { name: 'director-harness' }, { name: 'claude-config-62', nameSource: 'user' }]) {
+    const dir = registry(entry);
+    try {
+      const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
+      assert.ok(out.startsWith(`\x1b[1m${entry.name}\x1b[0m · `), JSON.stringify(out));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const s = json('no-rate-limits.json');
+  s.session_name = 'general-spend-review';
+  assert.ok(render(s, NOREG).startsWith('\x1b[1mgeneral-spend-review\x1b[0m · '), 'a typed payload title is chosen too');
+});
+
+test('session name: a legacy-form name is dim unless user- or peer-set (derived names look like code-42)', () => {
+  for (const entry of [{ name: 'claude-config-62', nameSource: 'auto' }, { name: 'code-42', nameSource: 'derived' }, { name: 'code-42' }]) {
+    const dir = registry(entry);
+    try {
+      assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith(`\x1b[2m~${entry.name}\x1b[0m · `), JSON.stringify(entry));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const s = json('no-rate-limits.json');
+  s.session_name = 'code-42';
+  assert.ok(render(s, NOREG).startsWith('\x1b[2m~code-42\x1b[0m · '), 'a payload title has no source, so a legacy form stays dim');
+});
+
+test('registryName: the registry entry for this sessionId, with its nameSource', () => {
+  const dir = registry({ name: 'ticket-repo-5', nameSource: 'auto' });
+  try {
+    assert.deepEqual(registryName(SID, dir), { name: 'ticket-repo-5', source: 'auto' });
+    assert.equal(registryName('', dir), null);
+    assert.equal(registryName(SID, join(dir, 'missing')), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('session name: an untyped name (the general failsafe) is dim whatever its nameSource', () => {
+  for (const entry of [{ name: 'code-4c', nameSource: 'auto' }, { name: 'some-other-name', nameSource: 'user' }, { name: 'some-other-name', nameSource: 'peer' }]) {
+    const dir = registry(entry);
+    try {
+      assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith(`\x1b[2m~${entry.name}\x1b[0m · `), entry.nameSource);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 

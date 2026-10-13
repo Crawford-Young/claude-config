@@ -6,7 +6,8 @@
 //   node worktree.mjs list [repo]
 //
 // `new` cuts the branch from origin/<default>, verifies the cut is clean, and
-// copies env files per the repo's .worktreeinclude (default: .env, .env.local).
+// copies env files per the repo's .worktreeinclude (default: .env, .env.local),
+// and prints the unit's `claude -n` launch line (session-name.mjs).
 // `remove` encodes the Windows-safe removal sequence (git remove → force →
 // recursive delete → prune) so node_modules lock/long-path failures never need
 // hand recovery. Re-running `remove` on a half-removed worktree (registration gone,
@@ -20,16 +21,23 @@ import {
   DEFAULT_ENV_FILES,
   defaultBranch,
   die,
+  generalSessionName,
   git,
   gitOrDie,
   log,
+  isChosenName,
+  issueNumber,
   parseArgs,
+  parseSessionName,
   parseWorktreeInclude,
   readIfExists,
   resolveRepo,
+  sessionName,
+  slugify,
   workspaceRoot,
   worktreesDir,
 } from './lib.mjs';
+import { launchCommand } from './session-name.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const cmd = args._[0];
@@ -46,6 +54,7 @@ function cmdNew() {
 
   const repoName = basename(repo);
   const branch = args.branch || `feat/${slug}`;
+  const unit = expectedUnit(repoName, slug, branch); // before any git side effect
   const base = args.base || defaultBranch(repo);
   const wtPath = join(worktreesDir(), `${repoName}-${slug}`);
   if (existsSync(wtPath)) die(`worktree path already exists: ${wtPath}`);
@@ -85,7 +94,8 @@ function cmdNew() {
   }
   log('note:     dev servers in a worktree need their own port; never reuse another session\'s.');
 
-  warnOnSessionName(repoName, slug, branch);
+  log(`launch:   ${launchCommand(unit.name)}`);
+  warnOnSessionName(unit);
 }
 
 /** Directory of session-registry JSON files: ~/.claude/sessions, CLAUDE_SESSIONS_DIR overrides. */
@@ -93,26 +103,30 @@ function sessionsDir() {
   return process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
 }
 
-/** Leading issue number of a slug/branch-tail (`72-foo` -> '72'), or null. */
+/** Leading issue number of a slug/branch-tail (`72-foo` -> '72', `007-foo` -> '7'), or
+ *  null; `0-foo` has none, as sessionName takes only a positive number. */
 function leadingIssueNumber(s) {
   const m = /^(\d+)-/.exec(s || '');
-  return m ? m[1] : null;
+  return m ? issueNumber(m[1]) : null;
 }
 
-/** Expected session name `<repo>-<issue>`, from the slug's leading number, else the branch's. */
-function expectedSessionName(repoName, slug, branch) {
+/** The worktree's unit: a ticket on the slug's leading issue number, else the branch's;
+ *  with neither, a general session on the slug. → { name, repo, issue } (issue null for general). */
+function expectedUnit(repoName, slug, branch) {
   const n = leadingIssueNumber(slug) || leadingIssueNumber((branch || '').replace(/^feat\//, ''));
-  return n ? `${repoName}-${n}` : null;
+  const repo = slugify(repoName);
+  if (n && repo) return { name: sessionName('ticket', repo, n), repo, issue: Number(n) };
+  return { name: generalSessionName(slugify(slug) || 'worktree'), repo, issue: null };
 }
 
-// Warn (never block) when the running session's name is auto-generated or
-// doesn't follow the convention spend and reflect join on: <repo>-<issue>,
-// human-typed via /rename since agents can't run slash commands. Silent on
-// non-Claude shells (no CLAUDE_PID / no registry file), and on a user-set name
-// when the slug carries no issue number to check it against.
-function warnOnSessionName(repoName, slug, branch) {
-  const expected = expectedSessionName(repoName, slug, branch);
-
+// Warn (never block) when the running session's name won't join this unit's spend
+// and reflect: auto-generated, untyped (the parser's general failsafe), or another
+// unit's. A ticket or epic on this repo and issue passes, typed or legacy, and so
+// does an orchestrator cutting a child's worktree (a director, or an epic of this
+// repo); with no issue to check against, any chosen name passes. The fix is the launch line for the
+// next window, or a /rename for this one (agents can't run slash commands). Silent
+// on non-Claude shells (no CLAUDE_PID / no registry file).
+function warnOnSessionName(unit) {
   const pid = process.env.CLAUDE_PID;
   if (!pid) return;
 
@@ -126,13 +140,21 @@ function warnOnSessionName(repoName, slug, branch) {
     return;
   }
 
+  if (!data || typeof data !== 'object') return;
   const { name, nameSource } = data;
+  const p = parseSessionName(name);
   const shown = name ? `session name '${name}'` : 'session has no name and';
+  const userSet = nameSource === 'user' || nameSource === 'peer';
   let problem;
-  if (nameSource === 'auto') problem = `${shown} is auto-generated`;
-  else if (expected && name !== expected) problem = `${shown} doesn't follow <repo>-<issue>`;
-  else return;
-  log(`WARNING: ${problem} — spend and reflect join on <repo>-<issue>. Type:\n  /rename ${expected || `${repoName}-<issue>`}`);
+  if (!isChosenName(name, nameSource)) {
+    if (!userSet) problem = `${shown} is auto-generated`;
+    else problem = name ? `${shown} has no type` : 'session has no name';
+  } else if (unit.issue !== null && !((p.type === 'ticket' || p.type === 'epic') && p.repo === unit.repo && p.issue === unit.issue)) {
+    // a director or an epic of this repo is cutting a child's worktree: it keeps its own name
+    if (p.type === 'director' || (p.type === 'epic' && p.repo === unit.repo)) return;
+    problem = `${shown} names another unit`;
+  } else return;
+  log(`WARNING: ${problem} — spend and reflect join on the parsed session name. Launch the unit as:\n  ${launchCommand(unit.name)}\nor name this session now with:\n  /rename ${unit.name}`);
 }
 
 function cmdRemove() {

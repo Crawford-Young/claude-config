@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // audit.mjs — transcript-replay audit (#62). Rebuilds cost, context depth,
 // per-agent-type cost, skill/doc invocation counts and hook activity from the
-// transcripts Claude Code keeps on disk, grouped by /rename session name (#73),
-// plus time (#97): wall vs active, the model/tools/user/other split, agent and tool
-// latency, retry cost. --session keeps only the windows renamed <name>: a file splits
-// at each /rename (#115), and its subagents follow the window they ran in.
+// transcripts Claude Code keeps on disk, grouped by session name (#73; the parsed
+// identity, #175), plus time (#97): wall vs active, the model/tools/user/other split,
+// agent and tool latency, retry cost. --session keeps only the windows named <name>,
+// legacy and typed forms alike: a file splits at each custom title (#115), and its
+// subagents follow the window they ran in.
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
 // Accounting: audit-lib.mjs.
 //
@@ -19,6 +20,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCollector, renderMarkdown, transcriptWindows } from './audit-lib.mjs';
+import { sessionKey } from './lib.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +38,7 @@ function args(argv) {
 }
 
 const o = args(process.argv.slice(2));
+const wanted = o.session && sessionKey(o.session);
 const skillsDir = join(homedir(), '.claude', 'skills');
 const c = createCollector({
   prices: JSON.parse(readFileSync(join(here, 'prices.json'), 'utf8')),
@@ -50,7 +53,7 @@ const c = createCollector({
 let files = 0;
 const live = new Set(); // sessionIds with a kept window
 for await (const { windows, records } of transcriptWindows(o.root)) {
-  const kept = o.session ? windows.filter((w) => w.name === o.session) : windows;
+  const kept = o.session ? windows.filter((w) => w.name && sessionKey(w.name) === wanted) : windows;
   const { sessionId, agent } = windows[0];
   if (kept.length) {
     files++;
@@ -63,7 +66,7 @@ for await (const { windows, records } of transcriptWindows(o.root)) {
   for await (const { rec, ctx } of records) if (whole || rec?.type !== 'cost-state') c.add(rec, feed.get(ctx.window));
 }
 if (o.session && !files) {
-  console.error(`no session named ${o.session} — rename the unit's windows with /rename ${o.session}`);
+  console.error(`no session named ${o.session} — a unit's windows get their name from its launch line: node ~/code/claude-config/scripts/session-name.mjs <type> <args>`);
   process.exit(1);
 }
 const report = c.report();

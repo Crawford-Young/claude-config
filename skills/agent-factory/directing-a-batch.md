@@ -28,26 +28,26 @@ file-set independence.
 
 ## Write one paste-ready prompt per unit
 
-Self-contained — the receiving session has no memory of this batch. Tell the human to type
-`/rename <repo>-<issue>` as its own message first (an agent can't type a slash command, so this
-is the human's keystroke), then paste the prompt below as a second message. Each prompt names its
-worktree command (`node ~/code/claude-config/scripts/worktree.mjs new <repo> <slug> --branch
-feat/<slug>`), states its allocated port/device/profile from the singleton table, and quotes its
-Done-when from the issue.
+Self-contained — the receiving session has no memory of this batch. Precede each prompt with its
+launch line from `node ~/code/claude-config/scripts/session-name.mjs ticket <repo> <N>` (the
+script owns the name format); the human runs it from the repo root, then pastes the prompt as the
+first message. Each prompt names its worktree command (`node
+~/code/claude-config/scripts/worktree.mjs new <repo> <slug> --branch feat/<slug>`), states its
+allocated port/device/profile from the singleton table, and quotes its Done-when from the issue.
 
-**Or launch it yourself** (when the human asks): `claude --bg -n <repo>-<issue> --permission-mode
-<mode> "<prompt>"` from the repo root. `-n` writes the same `custom-title` record as `/rename`, so
-`audit --session` sees it (#97), and the human answers each unit through `claude agents`. Inline
-the batch rules in the prompt; a unit cannot rely on reading your scratchpad.
+**Or launch it yourself** (when the human asks): the script's `claude -n <name>` line plus `--bg
+--permission-mode <mode> "<prompt>"`, from the repo root. `-n` writes the `custom-title` record,
+so `audit --session` sees it (#97), and the human answers each unit through `claude agents`.
+Inline the batch rules in the prompt; a unit cannot rely on reading your scratchpad.
 
 ### Example unit prompt
 
-Human types first: `/rename web-142`
+Human runs first: the line from `session-name.mjs ticket web 142`
 
 Then pastes:
 
 ```text
-Worktree: node ~/code/claude-config/scripts/worktree.mjs new web checkout-retry --branch feat/checkout-retry
+Worktree: node ~/code/claude-config/scripts/worktree.mjs new web 142-checkout-retry --branch feat/142-checkout-retry
 Port: 3002 (3000/3001 held)
 Issue: Crawford-Young/web#142
 Done when: checkout retries a failed payment once before surfacing the error; test covers it.

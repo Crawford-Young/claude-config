@@ -32,7 +32,7 @@ Encodes the Windows-safe sequence (git remove → force → recursive delete →
 
 ## Session name
 
-Right after creating the worktree, type `/rename <repo>-<issue>` (e.g. `claude-config-72`) — the human types it, since agents can't run slash commands. Lead the worktree slug with the issue number (`<issue>-<topic>`, e.g. `72-issues-tracker`) so `worktree.mjs new` can derive the expected session name and warn (never block) when it doesn't match.
+`worktree.mjs new` prints the session's launch line and warns (never blocks) when the current session name doesn't match. Lead the worktree slug with the issue number (e.g. `72-issues-tracker`) so the script can derive it.
 
 ## Rules
 

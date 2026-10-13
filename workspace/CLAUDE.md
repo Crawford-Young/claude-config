@@ -27,7 +27,7 @@ GitHub issues, via plain `gh`: harness/cross-repo work in claude-config, project
 
 - **Issue = spec:** body `## Goal` / `## Done when` (checkboxes) / `## Out of scope`. Active work carries the `in-progress` label; PRs carry `Closes #N`.
 - **Order:** issue (user approves its Done-when) → plan mode if the shape is open → execute without per-change approval → pause only when done, blocked, or the plan needs revision.
-- **Resume state = commit bodies:** `What:` / `Verified:` (cmd → rc) / `Next:` / `Ruled out:`. A cold session resumes from the last `Next:` plus Done-when. The user renames each unit session `/rename <repo>-<issue>`.
+- **Resume state = commit bodies:** `What:` / `Verified:` (cmd → rc) / `Next:` / `Ruled out:`. A cold session resumes from the last `Next:` plus Done-when.
 - **Bugs and wrong assumptions** found mid-wave → a comment on the issue, or a new `bug` issue. Subagents report `ISSUE:` lines upward instead.
 - **Leave it better:** code a change passes through is brought to standard in the same PR (up to a rewrite, in its own commit), since extended slop compounds. Match the repo's conventions, not its mistakes. A rewrite pins behavior first: tests, or byte-identical output on frozen inputs. Debt outside the touched code → a filed `debt` issue naming its files; commit-body follow-ups never got filed (#137).
 
@@ -45,7 +45,7 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md updated, 
 
 - At a wave boundary: get state on disk (commit body, issue comments), then run the continuation skill — a fresh window, not a compact.
 - Abandoning a wrong implementation path: use `/rewind`, not `/compact` — compacting a wrong path keeps the wrong path's content in the summary that survives.
-- After 2 failed correction attempts on one problem: stop, `/clear` with a continuation prompt, or read the provider's docs first when the fight is against an external service — it's a documented system, not a black box.
+- After 2 failed correction attempts on one problem: stop, restart with a continuation prompt, or read the provider's docs first when the fight is against an external service — it's a documented system, not a black box.
 - Before ending a turn, check the last paragraph you're about to write — if it's a plan, a promise, or a next-step list rather than the work itself, do the work now instead.
 - Switch the session's own model only at a `/clear` boundary — a mid-session switch drops the prior model's thinking blocks and re-reads the whole context uncached.
 

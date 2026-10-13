@@ -13,7 +13,7 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFi
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isMain } from '../scripts/lib.mjs';
+import { isChosenName, isMain } from '../scripts/lib.mjs';
 
 const ESC = '\x1b';
 const RST = `${ESC}[0m`;
@@ -109,11 +109,10 @@ const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u206
 
 /**
  * Session name from the registry (~/.claude/sessions/<pid>.json) matched on
- * sessionId — the id follows /clear while the pid file stays. nameSource is
- * 'user' (/rename) or 'peer' (claude --bg -n); anything else is an auto title.
- * → { name, auto } | null.
+ * sessionId — the id follows /clear while the pid file stays. → { name, source } | null,
+ * source being the entry's nameSource (undefined when it has none).
  */
-export function sessionName(sessionId, dir) {
+export function registryName(sessionId, dir) {
   if (!sessionId) return null;
   let files;
   try {
@@ -128,7 +127,7 @@ export function sessionName(sessionId, dir) {
     try {
       const j = JSON.parse(raw);
       const name = j.sessionId === sessionId && typeof j.name === 'string' ? j.name.replace(UNSAFE, '').trim() : '';
-      if (name) return { name, auto: j.nameSource !== 'user' && j.nameSource !== 'peer' };
+      if (name) return { name, source: j.nameSource };
     } catch {
       /* half-written registry entry */
     }
@@ -136,19 +135,18 @@ export function sessionName(sessionId, dir) {
   return null;
 }
 
-/** Bold for a chosen name; dim, ~-prefixed and cut to 24 for an auto title, so
- *  an un-renamed session shows at a glance. */
+/** Bold, as-is, for a chosen name (lib's isChosenName: a typed name, or a legacy
+ *  form the user or a peer set). Dim, ~-prefixed and cut to 24 otherwise (auto
+ *  titles, untyped names), so an unnamed session shows at a glance. The payload
+ *  title has no source, so only a typed name there is chosen. */
 function namePiece(status, env) {
   const dir = env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
-  let n = sessionName(status.session_id, dir);
-  if (!n && typeof status.session_name === 'string') {
-    const name = status.session_name.replace(UNSAFE, '').trim();
-    if (name) n = { name, auto: true }; // its source is unknown here, so it stays marked
-  }
-  if (!n) return null;
-  if (!n.auto) return `${ESC}[1m${n.name}${RST}`;
-  const chars = [...n.name]; // by code point: a cut must not split a surrogate pair
-  const cut = chars.length > 24 ? `${chars.slice(0, 23).join('')}…` : n.name;
+  const { name, source } = registryName(status.session_id, dir)
+    || { name: typeof status.session_name === 'string' ? status.session_name.replace(UNSAFE, '').trim() : '' };
+  if (!name) return null;
+  if (isChosenName(name, source)) return `${ESC}[1m${name}${RST}`;
+  const chars = [...name]; // by code point: a cut must not split a surrogate pair
+  const cut = chars.length > 24 ? `${chars.slice(0, 23).join('')}…` : name;
   return `${ESC}[2m~${cut}${RST}`;
 }
 

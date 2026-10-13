@@ -3,20 +3,21 @@
 //
 //   node reflect-gather.mjs <session-name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]
 //
-// Prints one markdown payload: the transcript audit of every window renamed
-// <session-name> (audit.mjs --session) with its cost and time (#97), then
-// per-repo git log + diffstat of the commits since the unit's first window whose
-// subject names the unit's issue (the name's trailing number: `(#N)` or
-// `<repo>#N`), then the repo's open `debt` issues that name a file those commits
-// touched (#137). A name with no trailing number takes the whole window, unless
-// --issue <N> names the issue (one session that worked several): it overrides the
-// trailing number, and the `<prefix>#N` form then takes each repo's directory name.
+// Prints one markdown payload: the transcript audit of every window named
+// <session-name> (audit.mjs --session, which joins legacy and typed forms of one
+// unit's name, #175) with its cost and time (#97), then per-repo git log + diffstat
+// of the commits since the unit's first window whose subject names the unit's issue
+// (a ticket or epic name's repo and number: `(#N)` or `<repo>#N`), then the repo's
+// open `debt` issues that name a file those commits touched (#137). A name with no
+// issue takes the whole window, unless --issue <N> names the issue (one session that
+// worked several): it overrides the name's number, and the `<prefix>#N` form then
+// takes each repo's directory name.
 
 import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMarkdown } from './audit-lib.mjs';
-import { die, git, isMain, log, parseArgs } from './lib.mjs';
+import { die, git, isMain, log, parseArgs, parseSessionName, sessionKey } from './lib.mjs';
 
 /** What to print and exit with when the audit spawn failed — a spawn that never
  *  started has null stderr and status, so fall back to its error. */
@@ -64,10 +65,10 @@ export function renderDebt({ matched, other, error, truncated }) {
   return lines.join('\n');
 }
 
-/** `<repo>-<N>` → { prefix, issue }; null when the name has no trailing issue number. */
+/** A ticket or epic session name → { prefix: its repo, issue }; null for any other type. */
 export function parseUnit(name) {
-  const m = /^(.*)-(\d+)$/.exec(name);
-  return m ? { prefix: m[1], issue: m[2] } : null;
+  const p = parseSessionName(name);
+  return p.type === 'ticket' || p.type === 'epic' ? { prefix: p.repo, issue: String(p.issue) } : null;
 }
 
 /** Whether a commit subject names the unit's issue: `(#N)` or `<prefix>#N`, on a number boundary. */
@@ -126,12 +127,13 @@ function main() {
     process.exit(code);
   }
   const report = JSON.parse(audit.stdout);
-  const unit = report.names.find((g) => g.name === name);
-  const time = report.time?.names.find((g) => g.name === name);
+  const key = sessionKey(name); // audit's name rows are keyed the same way
+  const unit = report.names.find((g) => g.name === key);
+  const time = report.time?.names.find((g) => g.name === key);
   if (unit) {
-    log(`## Audit — ${unit.windows} window(s) named ${name}, ${report.files} transcripts${time ? ` · $${unit.usd.toFixed(2)} over ${minutes(time.activeMs)} active of ${minutes(time.wallMs)} wall` : ''}\n`);
+    log(`## Audit — ${unit.windows} window(s) named ${key}, ${report.files} transcripts${time ? ` · $${unit.usd.toFixed(2)} over ${minutes(time.activeMs)} active of ${minutes(time.wallMs)} wall` : ''}\n`);
     log(renderMarkdown(report));
-  } else log(`## Audit — no priced requests in windows named ${name}, ${report.files} transcripts`);
+  } else log(`## Audit — no priced requests in windows named ${key}, ${report.files} transcripts`);
 
   // A bare day (audit days are UTC) gets an explicit UTC midnight: git would
   // otherwise fill in the current time of day and drop that day's earlier commits.

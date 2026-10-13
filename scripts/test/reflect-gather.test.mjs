@@ -45,9 +45,9 @@ test('gathers every window of the unit through the audit filter, with repo activ
   try {
     const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /## Per session name[\s\S]*\| repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
-    assert.match(r.stdout, /## Audit — 2 window\(s\) named repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
-    assert.match(r.stdout, /## Time[\s\S]*\*\*Per session name\*\*[\s\S]*\| repo-7 \| 2 \|/);
+    assert.match(r.stdout, /## Per session name[\s\S]*\| ticket-repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
+    assert.match(r.stdout, /## Audit — 2 window\(s\) named ticket-repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
+    assert.match(r.stdout, /## Time[\s\S]*\*\*Per session name\*\*[\s\S]*\| ticket-repo-7 \| 2 \|/);
     assert.doesNotMatch(r.stdout, /other-1/);
     assert.match(r.stdout, /## Repo activity since 2026-10-03/);
     assert.match(r.stdout, /feat: unit work/, 'a commit on the first window\'s own UTC day is in the window');
@@ -67,7 +67,7 @@ test('a renamed window with no priced requests reports, not crashes', () => {
     const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, /TypeError/);
-    assert.match(r.stdout, /no priced requests in windows named repo-9/);
+    assert.match(r.stdout, /no priced requests in windows named ticket-repo-9/);
   } finally {
     rmSync(f.dir, { recursive: true, force: true });
   }
@@ -144,10 +144,15 @@ test('debtSection: files the fixture repo committed reach matchDebt, so the matc
   }
 });
 
-test('parseUnit / namesIssue: the trailing number is the issue; (#N) and <prefix>#N match on a boundary', async () => {
+test('parseUnit / namesIssue: a ticket or epic name (typed or legacy) gives the issue; (#N) and <prefix>#N match on a boundary', async () => {
   const { parseUnit, namesIssue } = await import('../reflect-gather.mjs');
   assert.deepEqual(parseUnit('claude-config-137'), { prefix: 'claude-config', issue: '137' });
+  assert.deepEqual(parseUnit('ticket-claude-config-137'), { prefix: 'claude-config', issue: '137' });
+  assert.deepEqual(parseUnit('epic-dog-eat-dog-4'), { prefix: 'dog-eat-dog', issue: '4' });
   assert.equal(parseUnit('scratch'), null);
+  assert.equal(parseUnit('director-strate-5'), null, 'a director scope ending in a number names no issue');
+  assert.equal(parseUnit('general-fix-12'), null);
+  assert.equal(parseUnit(''), null);
   const u = parseUnit('claude-config-17');
   assert.ok(namesIssue('fix x (#17)', u));
   assert.ok(namesIssue('rule-history line for claude-config#17', u));
@@ -156,6 +161,23 @@ test('parseUnit / namesIssue: the trailing number is the issue; (#N) and <prefix
   assert.ok(!namesIssue('see strate#17', u), 'another repo\'s #17');
   assert.ok(!namesIssue('see claude-config#170', u));
   assert.ok(!namesIssue('fix x (#1)', parseUnit('claude-config-13')));
+});
+
+test('a legacy-named window and a typed-name window of one unit gather together', () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.proj, 'w7.jsonl'), window('w7', '2026-10-04', 'ticket-repo-7'));
+    for (const name of ['ticket-repo-7', 'repo-7']) {
+      const r = spawnHarness(cli, [name, '--root', f.root, '--repo', f.repo]);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /## Audit — 3 window\(s\) named ticket-repo-7, 3 transcripts/, name);
+      assert.match(r.stdout, /## Repo activity since 2026-10-03/, name);
+      assert.match(r.stdout, /feat: unit work \(#7\)/, name);
+      assert.doesNotMatch(r.stdout, /another unit, same day/, name);
+    }
+  } finally {
+    rmSync(f.dir, { recursive: true, force: true });
+  }
 });
 
 test('a repo with no commit naming the issue says so and counts the window\'s other commits; no debt matches', () => {
