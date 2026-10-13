@@ -43,3 +43,7 @@ jobs:
       # script added or removed without a map entry would hand them a wrong picture silently.
       - name: Harness map matches the repo
         run: node scripts/harness-map.mjs check
+      # A `verified: YYYY-MM (model)` stamp naming a model older than its line's newest in
+      # prices.json is a claim nobody re-checked on the current model (#113).
+      - name: No stale model stamps
+        run: node scripts/audit.mjs --stamps

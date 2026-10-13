@@ -668,7 +668,7 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by parsed session name (legacy and typed forms of a unit join), --session filters to one unit."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by parsed session name (legacy and typed forms of a unit join), --session filters to one unit; agent spend per type × model × effort; --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
   },
   {
    "id": "script:audit-lib",
