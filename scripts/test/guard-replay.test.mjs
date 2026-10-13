@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'guard-replay.mjs');
 
-function checkout(staticBody, approving = 'true') {
+function checkout(staticBody, approving = 'true', extra = '') {
   const dir = mkdtempSync(join(tmpdir(), 'gr-co-'));
   mkdirSync(join(dir, 'hooks'));
   writeFileSync(
@@ -19,6 +19,7 @@ function checkout(staticBody, approving = 'true') {
 export const gatedVerbs = () => [];
 export const browserCommand = () => null;
 export const isApproving = () => ${approving};
+${extra}
 `,
   );
   writeFileSync(join(dir, 'hooks', '_hooklib.mjs'), 'export const isBrowserApproving = () => false;\n');
@@ -138,4 +139,51 @@ test('more secret shapes are redacted; ordinary names and flags are kept', () =>
   assert.match(out, /--with-token \*\*\*/);
   assert.match(out, /monkey=banana run/);
   assert.match(out, /--sort-key=name f/);
+});
+
+// --branch fixtures: for a for-loop, the new checkout keeps call #0, marks call #1
+// loop: true and adds call #2; it blocks a commit only where HEAD resolves, so only
+// the born repo flips.
+const call = (sub, loop) => `{ sub: '${sub}', args: [], repo: cwd + '/sub', viaOr: false, loop: ${loop} }`;
+const branchOld = `export const scrub = (c) => c;
+export const gitCalls = (c, cwd) => (c.includes('git') ? [${call('status', false)}, ${call('add', false)}] : []);
+export const branchRules = () => null;`;
+const branchNew = `import { spawnSync } from 'node:child_process';
+export const scrub = (c) => c;
+export const gitCalls = (c, cwd) => {
+  if (!c.includes('git')) return [];
+  const loop = c.startsWith('for');
+  return [${call('status', false)}, ${call('add', 'loop')}, ...(loop ? [${call('add', true)}] : [])];
+};
+export const branchRules = (c, cwd) =>
+  c.includes('commit') && spawnSync('git', ['-C', cwd, 'rev-parse', '--verify', '-q', 'HEAD']).status === 0 ? 'blocked' : null;`;
+
+test('--branch diffs gitCalls per call and branchRules verdicts on an unborn and a born repo', () => {
+  const cfg = config({ 's.jsonl': [bash('git commit -m x'), bash('for f in a; do git add f; done'), bash('ls')] });
+  const lines = run(cfg, checkout('return null;', 'true', branchOld), checkout('return null;', 'true', branchNew), '--branch')
+    .trim()
+    .split('\n');
+  assert.deepEqual(lines, [
+    'gitCalls#1: {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":false} -> {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":true} | for f in a; do git add f; done',
+    'gitCalls#2: none -> {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":true} | for f in a; do git add f; done',
+    'branchRules[born]: allow -> BLOCK | git commit -m x',
+    'summary: 3 changed; 3 commands, 0 answers from 1 files; --branch: 2 gitCalls, 1 branchRules over 6 probes (unborn + born)',
+  ]);
+});
+
+test('without --branch the stateful rules are not replayed', () => {
+  const cfg = config({ 's.jsonl': [bash('git commit -m x'), bash('for f in a; do git add f; done')] });
+  const out = run(cfg, checkout('return null;', 'true', branchOld), checkout('return null;', 'true', branchNew)).trim();
+  assert.equal(out, 'summary: 0 changed; 2 commands, 0 answers from 1 files');
+});
+
+test('--branch redacts secrets in the printed gitCalls args too', () => {
+  const argsCall = (loop) => `{ sub: 'remote', args: c.split(' ').slice(2), repo: cwd, viaOr: false, loop: ${loop} }`;
+  const co = (loop) => checkout('return null;', 'true', `export const scrub = (c) => c;
+export const gitCalls = (c, cwd) => [${argsCall(loop)}];
+export const branchRules = () => null;`);
+  const cfg = config({ 's.jsonl': [bash('git remote add o https://me:tok7@github.com/x GH_TOKEN=tok8')] });
+  const out = run(cfg, co(false), co(true), '--branch');
+  assert.doesNotMatch(out, /tok7|tok8/);
+  assert.match(out, /https:\/\/me:\*\*\*@github\.com\/x/);
 });

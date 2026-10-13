@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 // guard-replay.mjs — diff guard verdicts between two checkouts over real transcripts (#106).
-//   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--files N] [--days D] [--root <projects-dir>]
+//   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--files N] [--days D] [--root <projects-dir>]
 // Replays unique Bash/PowerShell commands through staticCheck, gatedVerbs and browserCommand,
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
-// Stateless rules only: a branchRules change also needs old-vs-new probes on an unborn and a born repo (#138).
+// --branch adds the stateful rules (#165): each command's gitCalls(scrub(c)) diffed structurally,
+// then branchRules allow/BLOCK verdicts with cwd = a temp unborn repo and a temp born repo.
+// branchRules runs read-only git (branch --show-current, rev-parse), so a command that cds into a
+// real repo reads that repo; no command is ever executed. It finds only shapes the corpus holds: in
+// #159 it reported 0 verdict changes while a false allow existed. It complements the fresh-context
+// reviewer and does not replace it.
 // Transcripts: <CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/*.jsonl and projects/*/<session>/subagents/*.jsonl, last --days (default 7) or newest --files.
-import { readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { walkTranscripts } from './audit-lib.mjs';
@@ -21,11 +27,12 @@ function num(v, o) {
 }
 
 function parseArgs(argv) {
-  const o = { files: null, days: null, root: null, paths: [] };
+  const o = { files: null, days: null, root: null, branch: false, paths: [] };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--files') o.files = num(argv[++i], o);
     else if (argv[i] === '--days') o.days = num(argv[++i], o);
     else if (argv[i] === '--root') o.root = argv[++i];
+    else if (argv[i] === '--branch') o.branch = true;
     else o.paths.push(argv[i]);
   }
   // Default: the last 7 days, main + subagent transcripts. A newest-N count skews
@@ -61,13 +68,15 @@ async function transcripts(root, { files, days }) {
 /** Order-independent identity for an answers object. */
 const answerKey = (a) => JSON.stringify(Object.entries(a).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
 
-/** Shown commands never carry secrets: NAME=value, $env:NAME = value, Bearer tokens and --with-token values print as ***. */
+/** Shown commands and verdicts never carry secrets: NAME=value, $env:NAME = value, Bearer tokens,
+ *  --with-token values and URL passwords print as ***. */
 const SECRET_ASSIGN = /(?<![-\w])((?:\$env:)?(?:[A-Z0-9]+_)*(?:TOKEN|KEY|SECRET|PASSWORD|PASS|PAT)\s*=\s*)("[^"]*"|'[^']*'|\S+)/g;
 const redact = (s) =>
   s
     .replace(SECRET_ASSIGN, '$1***')
     .replace(/(Authorization:\s*Bearer\s+)[^\s"']+/gi, '$1***')
-    .replace(/(--with-token[\s=]+)[^\s"']+/g, '$1***');
+    .replace(/(--with-token[\s=]+)[^\s"']+/g, '$1***')
+    .replace(/(:\/\/[^\s/:@"']+:)[^\s/@"']+@/g, '$1***@');
 
 /** Unique shell commands and unique AskUserQuestion answer objects across the files. */
 function collect(paths) {
@@ -113,6 +122,28 @@ const verdict = (fn, ...args) => {
   }
 };
 
+/** A temp repo on main: unborn, or born with one empty commit. The caller removes it. */
+function tempRepo(born) {
+  const dir = mkdtempSync(join(tmpdir(), born ? 'gr-born-' : 'gr-unborn-'));
+  const git = (...a) => spawnSync('git', ['-C', dir, ...a], { timeout: 10000 });
+  git('init', '-q', '-b', 'main');
+  if (born) git('-c', 'user.name=guard-replay', '-c', 'user.email=guard-replay@localhost', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'init');
+  return dir;
+}
+
+/** The gitCalls fields branchRules reads, with the temp repo's path shown as <repo>. */
+const callShape = (calls, repo) =>
+  calls.map(({ sub, args, repo: r, viaOr, loop }) => ({
+    sub,
+    args,
+    repo: typeof r === 'string' && r.startsWith(repo) ? `<repo>${r.slice(repo.length)}` : r,
+    viaOr,
+    loop,
+  }));
+
+/** A branchRules verdict as allow/BLOCK; missing and throws stay as they are. */
+const allowBlock = (v) => (v === 'null' ? 'allow' : v.startsWith('"') ? 'BLOCK' : v);
+
 const oneLine = (s, n = MAX_SHOWN) => {
   const t = s.replace(/\s+/g, ' ').trim();
   return t.length > n ? `${t.slice(0, n)}...` : t;
@@ -121,7 +152,7 @@ const oneLine = (s, n = MAX_SHOWN) => {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.paths.length !== 2 || args.bad) {
-    console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--files N] [--days D] [--root <projects-dir>]');
+    console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--files N] [--days D] [--root <projects-dir>]');
     return;
   }
   const [a, b] = await Promise.all(args.paths.map(load));
@@ -132,7 +163,7 @@ async function main() {
   const report = (name, o, n, text) => {
     if (o === n) return;
     changed++;
-    console.log(`${name}: ${o} -> ${n} | ${oneLine(redact(text))}`);
+    console.log(`${name}: ${redact(o)} -> ${redact(n)} | ${oneLine(redact(text))}`);
   };
 
   const cmdFns = [
@@ -148,7 +179,32 @@ async function main() {
   ];
   for (const x of answers) for (const [name, f] of ansFns) report(name, f(a, x), f(b, x), Object.values(x).join(' / '));
 
-  console.log(`summary: ${changed} changed; ${commands.length} commands, ${answers.length} answers from ${files.length} files`);
+  let branch = '';
+  if (args.branch) {
+    const repos = { unborn: tempRepo(false), born: tempRepo(true) };
+    try {
+      const before = changed;
+      // One JSON string per call, or the lone missing/throws verdict.
+      const shapes = (m, c) => {
+        const v = verdict((x) => callShape(m.gitCalls(m.scrub(x), repos.unborn), repos.unborn).map((g) => JSON.stringify(g)), c);
+        return v.startsWith('[') ? JSON.parse(v) : [v];
+      };
+      for (const c of commands) {
+        const [o, n] = [shapes(a, c), shapes(b, c)];
+        for (let i = 0; i < Math.max(o.length, n.length); i++) report(`gitCalls#${i}`, o[i] ?? 'none', n[i] ?? 'none', c);
+      }
+      const calls = changed - before;
+      for (const [label, dir] of Object.entries(repos)) {
+        const rule = (m, c) => allowBlock(verdict(m.branchRules, c, dir));
+        for (const c of commands) report(`branchRules[${label}]`, rule(a, c), rule(b, c), c);
+      }
+      branch = `; --branch: ${calls} gitCalls, ${changed - before - calls} branchRules over ${commands.length * 2} probes (unborn + born)`;
+    } finally {
+      for (const dir of Object.values(repos)) rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  console.log(`summary: ${changed} changed; ${commands.length} commands, ${answers.length} answers from ${files.length} files${branch}`);
 }
 
 main().catch((e) => console.log(`guard-replay failed: ${e?.message}`));
