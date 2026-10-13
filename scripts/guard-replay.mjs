@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // guard-replay.mjs — diff guard verdicts between two checkouts over real transcripts (#106).
-//   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--files N] [--days D] [--root <projects-dir>]
+//   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]
 // Replays unique Bash/PowerShell commands through staticCheck, gatedVerbs and browserCommand,
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
 // --branch adds the stateful rules (#165): each command's gitCalls(scrub(c)) diffed structurally,
 // then branchRules allow/BLOCK verdicts with cwd = a temp unborn repo and a temp born repo.
+// --full (#168) follows each changed line with the whole command, redacted and indented, and,
+// where the line collapsed the new verdict (branchRules' BLOCK), its reason.
 // branchRules runs read-only git (branch --show-current, rev-parse), so a command that cds into a
 // real repo reads that repo; no command is ever executed. It finds only shapes the corpus holds: in
 // #159 it reported 0 verdict changes while a false allow existed. It complements the fresh-context
@@ -27,12 +29,13 @@ function num(v, o) {
 }
 
 function parseArgs(argv) {
-  const o = { files: null, days: null, root: null, branch: false, paths: [] };
+  const o = { files: null, days: null, root: null, branch: false, full: false, paths: [] };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--files') o.files = num(argv[++i], o);
     else if (argv[i] === '--days') o.days = num(argv[++i], o);
     else if (argv[i] === '--root') o.root = argv[++i];
     else if (argv[i] === '--branch') o.branch = true;
+    else if (argv[i] === '--full') o.full = true;
     else o.paths.push(argv[i]);
   }
   // Default: the last 7 days, main + subagent transcripts. A newest-N count skews
@@ -152,7 +155,7 @@ const oneLine = (s, n = MAX_SHOWN) => {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.paths.length !== 2 || args.bad) {
-    console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--files N] [--days D] [--root <projects-dir>]');
+    console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]');
     return;
   }
   const [a, b] = await Promise.all(args.paths.map(load));
@@ -160,10 +163,14 @@ async function main() {
   const { commands, answers } = collect(files);
   let changed = 0;
   const cwd = process.cwd();
-  const report = (name, o, n, text) => {
+  // raw: the new verdict before n collapsed it; --full prints it when it says more.
+  const report = (name, o, n, text, raw = n) => {
     if (o === n) return;
     changed++;
     console.log(`${name}: ${redact(o)} -> ${redact(n)} | ${oneLine(redact(text))}`);
+    if (!args.full) return;
+    console.log(`  command:\n${redact(text).replace(/\r\n?/g, '\n').trimEnd().replace(/^/gm, '    ')}`);
+    if (raw !== n) console.log(`  reason: ${redact(raw)}`);
   };
 
   const cmdFns = [
@@ -195,8 +202,10 @@ async function main() {
       }
       const calls = changed - before;
       for (const [label, dir] of Object.entries(repos)) {
-        const rule = (m, c) => allowBlock(verdict(m.branchRules, c, dir));
-        for (const c of commands) report(`branchRules[${label}]`, rule(a, c), rule(b, c), c);
+        for (const c of commands) {
+          const [o, n] = [verdict(a.branchRules, c, dir), verdict(b.branchRules, c, dir)];
+          report(`branchRules[${label}]`, allowBlock(o), allowBlock(n), c, n);
+        }
       }
       branch = `; --branch: ${calls} gitCalls, ${changed - before - calls} branchRules over ${commands.length * 2} probes (unborn + born)`;
     } finally {

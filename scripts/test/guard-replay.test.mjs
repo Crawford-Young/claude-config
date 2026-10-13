@@ -177,6 +177,37 @@ test('without --branch the stateful rules are not replayed', () => {
   assert.equal(out, 'summary: 0 changed; 2 commands, 0 answers from 1 files');
 });
 
+test('--full prints each changed command whole, redacted, with the new branchRules block reason', () => {
+  // #168: a flip whose command ran past 120 chars could not be explained from the report.
+  const long = `S=/scratch; cd $S/pr && GH_TOKEN=tok9 ${'x'.repeat(130)}\n  git commit -m tail-marker`;
+  const why = `export const scrub = (c) => c;
+export const gitCalls = () => [];`;
+  const cfg = config({ 's.jsonl': [bash(long)] });
+  const oldCo = checkout('return null;', 'true', `${why}\nexport const branchRules = () => null;`);
+  const newCo = checkout('return null;', 'true', `${why}\nexport const branchRules = (c) => (c.includes('tail-marker') ? 'commit blocked: on main' : null);`);
+
+  const short = run(cfg, oldCo, newCo, '--branch');
+  assert.doesNotMatch(short, /tail-marker/, 'the default line still truncates');
+
+  const lines = run(cfg, oldCo, newCo, '--branch', '--full').trim().split('\n');
+  assert.deepEqual(lines.slice(1, 5), [
+    '  command:',
+    `    S=/scratch; cd $S/pr && GH_TOKEN=*** ${'x'.repeat(130)}`,
+    '      git commit -m tail-marker',
+    '  reason: "commit blocked: on main"',
+  ]);
+  assert.match(lines[0], /^branchRules\[unborn\]: allow -> BLOCK \| /);
+  assert.equal(lines.filter((l) => l === '  command:').length, 2, 'unborn and born each get the block');
+  assert.doesNotMatch(lines.join('\n'), /tok9/);
+});
+
+test('--full adds no reason line where the verdict is already printed whole', () => {
+  const cfg = config({ 's.jsonl': [bash('git add -A')] });
+  const out = run(cfg, checkout("return 'blocked';"), checkout('return null;'), '--full').trim().split('\n');
+  assert.deepEqual(out.slice(0, 3), ['staticCheck: "blocked" -> null | git add -A', '  command:', '    git add -A']);
+  assert.match(out[3], /^summary:/);
+});
+
 test('--branch redacts secrets in the printed gitCalls args too', () => {
   const argsCall = (loop) => `{ sub: 'remote', args: c.split(' ').slice(2), repo: cwd, viaOr: false, loop: ${loop} }`;
   const co = (loop) => checkout('return null;', 'true', `export const scrub = (c) => c;
