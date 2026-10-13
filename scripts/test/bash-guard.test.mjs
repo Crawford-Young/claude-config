@@ -743,8 +743,10 @@ test('#163 review: many assignments next to many git calls, substitutions or blo
   const vars = Array.from({ length: 2000 }, (_, i) => `W${i}=/x`).join('; ');
   const psVars = Array.from({ length: 2000 }, (_, i) => `$W${i} = 'x'`).join('; ');
   for (const c of [`${vars}; ${'git status; '.repeat(2000)}`, `${vars}; ${'echo $(true); '.repeat(2000)}`, `${psVars}; ${'if ($x) { true }; '.repeat(2000)}`]) {
+    // 600 ms, not #163's 200: these are 8-12k-char texts, and CI ran 229 ms where
+    // a local run takes ~76. The quadratic vars copy took ~1 s locally.
     const ms = hookPathMs(c);
-    assert.ok(ms < 200, `${Math.round(ms)} ms: ${c.slice(-30)}`);
+    assert.ok(ms < 600, `${Math.round(ms)} ms: ${c.slice(-30)}`);
   }
 });
 
