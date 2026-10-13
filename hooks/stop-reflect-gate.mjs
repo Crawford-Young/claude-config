@@ -21,8 +21,9 @@
 // real next wave. The cost is one extra reminder on reflect's own landing PR,
 // which the reminder text lets the model dismiss in a line.
 //
-// Second gate (issue #122): once reflect has run for the merge (read after it,
-// or the merge is reflect's own landing PR), the turn may not end until an
+// Second gate (issue #122): once reflect has run for the merge (its read came
+// after the merge, or after the previous merge: then this merge is reflect's own
+// landing PR), the turn may not end until an
 // AskUserQuestion offering fresh-session-or-continue (an option labelled fresh session,
 // or clear in the older wording, plus one labelled continue: the labels skills/continuation/SKILL.md
 // names, #178) was asked after that read and the merge. The tool call is
@@ -30,6 +31,9 @@
 // block per merge, tracked under `cont` in the same state file. It waits for a
 // genuine human reply after the reflect read (humanRepliedAfter): before that,
 // reflect is paused on its dialogue and the single block would be spent there (#140).
+// A reply is a typed message or an AskUserQuestion answer. Later pauses (a second
+// pause for commit approval, say) are not detected: the block can still be spent
+// there. Out of scope for #140.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -46,7 +50,8 @@ export function isMerge(command) {
   return clauses(scrub(command || '')).some((c) => gatedVerbs(c, null).includes('gh pr merge') && !/(?:^|\s)--auto(?:[\s=]|$)/.test(c));
 }
 
-/** {id, at} of the newest `gh pr merge` call whose result is not an error, else null; `at` is epoch ms or null. */
+/** {id, at, prevAt} of the newest `gh pr merge` call whose result is not an error, else null; `at` is epoch ms or null,
+ *  `prevAt` the same for the merge before it (null when there is none). */
 export function newestMerge(text) {
   const merges = new Map();
   const times = new Map();
@@ -67,8 +72,9 @@ export function newestMerge(text) {
       if (c.type === 'tool_result' && merges.has(c.tool_use_id)) merges.set(c.tool_use_id, !c.is_error);
     }
   }
-  const id = [...merges].filter(([, ok]) => ok).pop()?.[0];
-  return id ? { id, at: times.get(id) } : null;
+  const ok = [...merges].filter(([, good]) => good).map(([id]) => id);
+  const id = ok.pop();
+  return id ? { id, at: times.get(id), prevAt: times.get(ok.pop()) ?? null } : null;
 }
 
 /** tool_use id of the newest successful `gh pr merge` call, else null. */
@@ -85,9 +91,14 @@ function humanText(o) {
   return Array.isArray(c) ? c.filter((x) => x?.type === 'text' && typeof x.text === 'string').map((x) => x.text).join('\n') : null;
 }
 
-const TYPED_REFLECT = /^\s*(?:\/reflect\b|<command-name>\s*\/?reflect\s*<\/command-name>)/;
+// A typed skill command is `<command-message>reflect</command-message>\n<command-name>/reflect</command-name>`
+// (optionally followed by <command-args>); (?![\w-]) keeps /reflect-gather out.
+const TYPED_REFLECT = /^\s*\/reflect(?![\w-])|<command-name>\/reflect<\/command-name>/;
 
-/** Is there a genuine human reply (see humanText) timestamped after `after` (epoch ms)? */
+/** An AskUserQuestion answer: a tool_result user record carrying toolUseResult.answers (no origin). */
+const isAnswer = (o) => o?.type === 'user' && !o.isMeta && Boolean(o.toolUseResult?.answers);
+
+/** Is there a genuine human reply (a typed message, see humanText, or an AskUserQuestion answer) timestamped after `after` (epoch ms)? */
 export function humanRepliedAfter(text, after) {
   for (const l of text.split('\n')) {
     if (!l.includes('"user"')) continue;
@@ -98,7 +109,7 @@ export function humanRepliedAfter(text, after) {
       continue;
     }
     const t = Date.parse(o?.timestamp);
-    if (!Number.isNaN(t) && t > after && humanText(o) !== null) return true;
+    if (!Number.isNaN(t) && t > after && (humanText(o) !== null || isAnswer(o))) return true;
   }
   return false;
 }
@@ -178,11 +189,13 @@ function main() {
     const reflectAt = lastReflectAt(text);
     const mergeAt = merge.at ?? Date.now();
     const reflectedAfterMerge = reflectAt !== null && reflectAt > mergeAt;
+    // Reflect's own landing PR merges after a read that followed the previous merge.
+    const reflectRan = reflectedAfterMerge || (reflectAt !== null && merge.prevAt !== null && reflectAt > merge.prevAt);
     if (!handled.includes(id)) {
       writeState(stateFile, { ...state, ids: [...handled, id].slice(-200) });
       if (!reflectedAfterMerge) {
         block(
-          `A PR merged this session. Before ending: prompt the user to run reflect now — Read ~/code/claude-config/skills/reflect/SKILL.md — or to explicitly skip it. This fires once per merge. If the user has already declined, say that and end the turn; do not run reflect on a wave this session did not execute.`,
+          `A PR merged this session. Before ending: prompt the user to run reflect now — Read ~/code/claude-config/skills/reflect/SKILL.md — or to explicitly skip it. This fires once per merge. If the user has already declined, say that and end the turn; do not run reflect on a wave this session did not execute. If this merge is reflect's own landing PR, say so and end the turn.`,
         );
         return;
       }
@@ -190,7 +203,7 @@ function main() {
 
     // Second gate: reflect ran for this merge, but no fresh-session-or-continue ask followed it.
     // No human reply since the read means reflect is paused on its dialogue: pass without spending the block.
-    if (!reflectedAfterMerge || !humanRepliedAfter(text, reflectAt)) return;
+    if (!reflectRan || !humanRepliedAfter(text, reflectAt)) return;
     const cur = readState(stateFile);
     const asked = Array.isArray(cur.cont) ? cur.cont : [];
     if (asked.includes(id) || continuationAsked(text, Math.max(reflectAt, mergeAt))) return;

@@ -100,11 +100,15 @@ const human = (min, content = 'ok') => ({ type: 'user', origin: { kind: 'human' 
 
 test('lastReflectAt: a user-typed /reflect counts; meta records and other text do not', () => {
   const tx = (r) => JSON.stringify(r);
-  assert.ok(lastReflectAt(tx(human(4, '/reflect'))), 'plain slash command');
-  assert.ok(lastReflectAt(tx(human(4, '<command-name>/reflect</command-name>\n<command-args></command-args>'))), 'command-name wrapper');
-  assert.ok(lastReflectAt(tx(human(4, [{ type: 'text', text: '/reflect' }]))), 'text-block content');
-  assert.equal(lastReflectAt(tx({ ...human(4, '/reflect'), isMeta: true })), null, 'a meta record is not the user typing');
-  assert.equal(lastReflectAt(tx({ ...human(4, '/reflect'), origin: { kind: 'peer' } })), null, 'a peer message is not the user typing');
+  const typed = '<command-message>reflect</command-message>\n<command-name>/reflect</command-name>';
+  assert.ok(lastReflectAt(tx(human(4, typed))), 'the real message-first record');
+  assert.ok(lastReflectAt(tx(human(4, `${typed}\n<command-args>claude-config-140</command-args>`))), 'with args');
+  assert.ok(lastReflectAt(tx(human(4, '/reflect'))), 'a bare leading /reflect');
+  assert.ok(lastReflectAt(tx(human(4, [{ type: 'text', text: typed }]))), 'text-block content');
+  assert.equal(lastReflectAt(tx(human(4, '<command-message>reflect-gather</command-message>\n<command-name>/reflect-gather</command-name>'))), null, 'a longer command name');
+  assert.equal(lastReflectAt(tx(human(4, '/reflect-gather'))), null, 'a bare longer command name');
+  assert.equal(lastReflectAt(tx({ ...human(4, typed), isMeta: true })), null, 'a meta record is not the user typing');
+  assert.equal(lastReflectAt(tx({ ...human(4, typed), origin: { kind: 'peer' } })), null, 'a peer message is not the user typing');
   assert.equal(lastReflectAt(tx(human(4, 'please /reflect later'))), null, 'a mention mid-sentence');
   assert.equal(lastReflectAt(tx(human(4, '/reflection'))), null, 'another command');
 });
@@ -117,12 +121,9 @@ test('humanRepliedAfter: only a genuine human user record after the cutoff', () 
   assert.equal(h({ ...human(5), isMeta: true }), false, 'hook feedback or reminder');
   assert.equal(h({ ...human(5), origin: { kind: 'peer' } }), false, 'peer message');
   assert.equal(h(at(5, result('t'))), false, 'a tool result is not a reply');
-});
-
-test('a reflect read older than 60 min does not cover a later merge', () => {
-  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(reflectRead('r', 120), call('m2', 'gh pr merge 95 --rebase'), result('m2'));
-  assert.equal(runHook({ transcript_path }, home).code, 2, "a later wave's merge still prompts");
+  assert.equal(h({ ...at(5, result('q')), toolUseResult: { answers: { 'apply edit?': 'Yes' } } }), true, 'an AskUserQuestion answer is');
+  assert.equal(h({ ...at(5, result('q')), toolUseResult: { stdout: 'x' } }), false, 'other tool results with a toolUseResult are not');
+  assert.equal(h({ ...at(15, result('q')), toolUseResult: { answers: { a: 'b' } } }), false, 'an answer before the cutoff');
 });
 
 test('quiet with no merge, a failed merge, or no transcript', () => {
@@ -222,9 +223,31 @@ test('mid-reflect dialogue pause (no human reply since the read): passes without
   assert.equal(runHook({ transcript_path: replied }, home).code, 2, 'the user replied: the block is still available');
 });
 
+const answerRes = (min, id) => ({ ...at(min, result(id)), toolUseResult: { answers: { 'Apply?': 'Yes' } } });
+
+test('reflect landing PR: after merge, read and a human reply, the next merge gets the reminder, then the continuation gate', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(...mergeAt('l1', 90), reflectRead('r', 80), human(70), ...mergeAt('l2', 20));
+  const first = runHook({ transcript_path }, home);
+  assert.equal(first.code, 2);
+  assert.match(first.stderr, /If this merge is reflect's own landing PR, say so and end the turn/);
+  const second = runHook({ transcript_path }, home);
+  assert.equal(second.code, 2, 'the continuation ask is still enforced for the landing merge');
+  assert.match(second.stderr, /continuation\/SKILL\.md/);
+  assert.equal(runHook({ transcript_path }, home).code, 0, 'one block per merge');
+});
+
+test('an AskUserQuestion answer is the human reply that opens the continuation gate', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(...mergeAt('a1', 30), reflectRead('r', 20), ask(15, unrelated), answerRes(14, 'q15'));
+  const r = runHook({ transcript_path }, home);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /continuation\/SKILL\.md/);
+});
+
 test('a user-typed /reflect after the merge opens the continuation gate once the user replies', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(...mergeAt('c2b', 30), human(10, '/reflect'), human(6, 'looks good'));
+  const transcript_path = transcript(...mergeAt('c2b', 30), human(10, '<command-message>reflect</command-message>\n<command-name>/reflect</command-name>'), human(6, 'looks good'));
   const r = runHook({ transcript_path }, home);
   assert.equal(r.code, 2);
   assert.match(r.stderr, /continuation/);
