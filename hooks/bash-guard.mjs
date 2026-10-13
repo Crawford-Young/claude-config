@@ -49,7 +49,8 @@
 // shell (`bash -c`, `pwsh -Command`, `eval`) is parsed as the command it is,
 // and so is every command substitution the shell would run — `…`, $(…), <(…),
 // bare or inside double quotes or an unquoted-delimiter heredoc (#92);
-// single-quoted text stays literal.
+// single-quoted text stays literal. A `{ … }` block body (PowerShell
+// if/foreach/ForEach-Object, a bash group) is parsed in place too (#159).
 
 // Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
 // errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
@@ -87,9 +88,12 @@ function closeTick(s, i) {
   return -1;
 }
 
-/** Index of the `)` closing a $(…)/<(…)/>(…) body that starts at i, or -1.
- *  Quoted text and nested backticks inside the body can't close it. */
-function closeParen(s, i) {
+/** Index of the `)` closing a $(…)/<(…)/>(…) body that starts at i (or the
+ *  `}` closing a block body, with `open`/`close`), or -1. Quoted text and
+ *  nested backticks inside the body can't close it. `rest[k]`, when given,
+ *  counts the closers at k or later: a depth past it can never close, so the
+ *  scan stops there instead of running on to the end for every opener. */
+function closeGroup(s, i, open = '(', close = ')', rest = null) {
   let depth = 1;
   let quote = null;
   for (; i < s.length; i++) {
@@ -102,10 +106,43 @@ function closeParen(s, i) {
     else if (ch === '`') {
       i = closeTick(s, i + 1);
       if (i === -1) return -1;
-    } else if (ch === '(') depth++;
-    else if (ch === ')' && --depth === 0) return i;
+    } else if (ch === open) {
+      if (++depth > (rest ? rest[i] : Infinity)) return -1;
+    } else if (ch === close && --depth === 0) return i;
   }
   return -1;
+}
+
+// A block's `{` stands where a command or keyword can end (`if ($x) {`,
+// `} else{`, `| % {`), never inside a word (`@{u}`, `${x}`, `HEAD@{1}`); its `}`
+// ends a word too. A spaceless body with a comma or `..` is a bash brace
+// expansion (`{a,b}`, `{1..3}`), not a block. Both read a few characters, not
+// the whole line, so a long command stays linear.
+const BLOCK_BEFORE = /(?:^|[\s(){};|&%]|(?:^|[^\w-])(?:else|try|finally|do))$/i;
+const BLOCK_AFTER = /^(?:$|[\s;|&)}<>]|(?:else|elseif|catch|finally|while|until)\b)/i;
+let lastText = null;
+let closers = null; // closers[k]: the `}`s in lastText at k or later
+
+function bracesFrom(s) {
+  if (s === lastText) return closers;
+  closers = new Int32Array(s.length + 1);
+  for (let k = s.length - 1; k >= 0; k--) closers[k] = closers[k + 1] + (s[k] === '}');
+  lastText = s;
+  return closers;
+}
+
+/** The block opening at i — a PowerShell script block (`if (…) { … }`,
+ *  `ForEach-Object { … }`) or a bash brace group (`{ a; b; }`) — as { body,
+ *  end }, or null. One that never closes is no block: the clause reads on. */
+function blockAt(s, i) {
+  if (s[i] !== '{' || !BLOCK_BEFORE.test(s.slice(Math.max(0, i - 8), i))) return null;
+  const rest = bracesFrom(s);
+  if (!rest[i]) return null;
+  const close = closeGroup(s, i + 1, '{', '}', rest);
+  if (close === -1) return null;
+  const body = s.slice(i + 1, close);
+  if (/^\S*(?:,|\.\.)\S*$/.test(body) || !BLOCK_AFTER.test(s.slice(close + 1, close + 10))) return null;
+  return { body, end: close + 1 };
 }
 
 /** The substitution opening at i — `…`, $(…), and outside double quotes
@@ -117,7 +154,7 @@ function substitutionAt(s, i, inDouble) {
   let close = -1;
   if (s[i] === '`') [open, close] = [1, closeTick(s, i + 1)];
   else if (s[i + 1] === '(' && (s[i] === '$' || (!inDouble && (s[i] === '<' || s[i] === '>')))) {
-    [open, close] = [2, closeParen(s, i + 2)];
+    [open, close] = [2, closeGroup(s, i + 2)];
   } else return null;
   return close === -1 ? { body: s.slice(i + open), end: s.length } : { body: s.slice(i + open, close), end: close + 1 };
 }
@@ -157,13 +194,21 @@ export function substitutions(s, quotesLiteral = false) {
  *  — `pipelines()`. Unbalanced quotes fall back to the plain split — never
  *  swallow the rest of the line. When `seps` is an array it is filled, parallel to
  *  the result, with the separator before each clause ('' for the first); the
- *  unbalanced-quote fallback leaves it empty. */
-export function clauses(cmd, pipes = false, seps = null) {
+ *  unbalanced-quote fallback leaves it empty. A block body (`{ … }`, see
+ *  blockAt) stays whole too; when `blocks` is an array, each block in a clause
+ *  is cut out to a `{}` placeholder and the array is filled, parallel to the
+ *  result, with that clause's blocks as { head, body } (`head` is the clause
+ *  text since the previous block: `if ($x) `, ` else `). */
+export function clauses(cmd, pipes = false, seps = null, blocks = null) {
   const out = [];
   const before = [];
+  const found = [];
+  let own = [];
   let sep = '';
   let cur = '';
+  let mark = 0; // where cur's text since its last block starts
   let quote = null;
+  let block;
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i];
     const sub = quote === "'" ? null : substitutionAt(cmd, i, quote === '"');
@@ -176,6 +221,13 @@ export function clauses(cmd, pipes = false, seps = null) {
       cur += ch;
       if (ch === '\\' && quote === '"' && i + 1 < cmd.length) cur += cmd[++i];
       else if (ch === quote) quote = null;
+    } else if (ch === '{' && (block = blockAt(cmd, i))) {
+      if (blocks) {
+        own.push({ head: cur.slice(mark), body: block.body });
+        cur += '{}';
+        mark = cur.length;
+      } else cur += cmd.slice(i, block.end);
+      i = block.end - 1;
     } else if (ch === '"' || ch === "'") {
       quote = ch;
       cur += ch;
@@ -189,15 +241,20 @@ export function clauses(cmd, pipes = false, seps = null) {
       if ((ch === '&' || ch === '|') && cmd[i + 1] === ch) kind = ch + cmd[i++ + 1];
       out.push(cur);
       before.push(sep);
+      found.push(own);
       sep = kind;
       cur = '';
+      mark = 0;
+      own = [];
     } else cur += ch;
   }
   if (quote) return cmd.split(pipes ? /\|\||&&|(?<![<>|])&(?!>)|[;\n]/ : /\|\||&&|(?<![<>])&(?!>)|[;|\n]/).map((c) => c.trim()).filter(Boolean);
   out.push(cur);
   before.push(sep);
+  found.push(own);
   const keep = out.map((c) => c.trim());
   if (seps) keep.forEach((c, k) => c && seps.push(before[k]));
+  if (blocks) keep.forEach((c, k) => c && blocks.push(found[k]));
   return keep.filter(Boolean);
 }
 
@@ -362,6 +419,7 @@ export function billedLaunch(raw) {
  *  assignments, shell keywords). */
 const WRAPPER = /^(?:[({!]+|\w+=.*|\$env:\w+=.*|sudo|command|builtin|time|exec|nohup|then|do|else|elif|if|while|until)$/i;
 const CD = /^(?:cd|chdir|pushd|set-location|push-location|sl)$/i;
+const POPD = /^(?:popd|pop-location)$/i;
 const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval)(?:\.exe)?$/i;
 const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
 
@@ -379,11 +437,18 @@ const toDir = (dir, p) => {
  *  `loop` one inside a for/while/until loop (it may run several times). cd
  *  clauses are consumed; a quoted command handed to a shell is expanded in
  *  place, and so is every substitution body (`…`, $(…), <(…)), which runs
- *  before the clause holding it. Other quoted text is an argument, never a
- *  command. `orFirst`/`inLoop` carry the enclosing clause's state into a body. */
-function commands(raw, cwd, orFirst = false, inLoop = false) {
+ *  before the clause holding it. A block body (`{ … }`) is walked after its
+ *  clause's own substitutions. One that runs in place (a group, a branch, a
+ *  foreach/while/do/ForEach-Object body) shares the cwd walk, so a cd inside it
+ *  moves the commands after it; one that runs elsewhere or later (a function,
+ *  a job, a -Parallel or stored block) reads the cwd but can't move it. A body
+ *  is a `loop` unless it runs once — a bare group, an if/elseif/else/try/catch/
+ *  finally branch — since a PowerShell loop has no `done` to count. Other
+ *  quoted text is an argument, never a command. `orFirst`/`inLoop` carry the
+ *  enclosing clause's state into a body; `scope` is the cwd and pushd stack a
+ *  block shares with its clause. */
+function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd || null, stack: [] }) {
   const out = [];
-  let dir = cwd || null;
   let loops = 0; // loops opened in this text and not yet closed by `done`
   const pipeSeps = [];
   for (const [pi, p] of pipelines(raw, pipeSeps).entries()) {
@@ -396,7 +461,8 @@ function commands(raw, cwd, orFirst = false, inLoop = false) {
       if (cs.some((e) => /^git(?:\.exe)?$/i.test(e.cmd) && e.words.includes('commit'))) viaOr = false;
     };
     const pipe = {};
-    for (const [seg, c] of clauses(p).entries()) {
+    const blocks = [];
+    for (const [seg, c] of clauses(p, false, null, blocks).entries()) {
       const w = words(c);
       // A bash loop keyword; a PowerShell for (…)/while (…) block has no `done`
       // to close it. A lone `(` after the keyword is PowerShell when a `{` body
@@ -405,9 +471,17 @@ function commands(raw, cwd, orFirst = false, inLoop = false) {
       const psBlock = () => /^\((?!\()/.test(w[0] ?? '') && (/\)\s*\{/.test(c) || !c.includes(')'));
       const opensLoop = (kw) => /^(?:for|while|until)$/i.test(kw) && !psBlock();
       for (;;) {
-        if (w.length && /^[({]+./.test(w[0])) w[0] = w[0].replace(/^[({]+/, '');
+        if (w.length && /^[({!]+./.test(w[0])) w[0] = w[0].replace(/^[({!]+/, '');
         if (!w.length || !WRAPPER.test(w[0])) break;
         if (opensLoop(w.shift())) loops++; // a while/until condition repeats too
+      }
+      // A group's closing `)` sticks to its last word (`(git push)`), unless the
+      // word opens a `(` of its own for it to close.
+      if (w.length) {
+        const last = w[w.length - 1];
+        const extra = (last.match(/\)/g) || []).length - (last.match(/\(/g) || []).length;
+        if (extra > 0) w[w.length - 1] = last.replace(/\)+$/, (m) => m.slice(extra));
+        if (!w[w.length - 1]) w.pop();
       }
       const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
       const loop = inLoop || loops > 0;
@@ -415,7 +489,13 @@ function commands(raw, cwd, orFirst = false, inLoop = false) {
       const shellCmd = shellAt !== -1 && w[shellAt + 1] !== undefined ? w.slice(shellAt + 1).join(' ') : null;
       // A shell's own command string is parsed whole below; reading its
       // substitutions here too would count each gated verb twice.
-      if (shellCmd === null) for (const body of substitutions(c)) emit(...commands(body, dir, viaOr, loop));
+      if (shellCmd === null) for (const body of substitutions(c)) emit(...commands(body, scope.dir, viaOr, loop));
+      for (const { head, body } of blocks[seg] || []) {
+        const h = head.trim();
+        const once = /^(?:[&.]\s*)?$|^(?:if|elseif|else|try|catch|finally|then)\b/i.test(h);
+        const inPlace = once || /^(?:foreach|for|while|do|until|switch)(?![\w-])|^(?:ForEach-Object|%|foreach|Where-Object|\?)$/i.test(h);
+        emit(...commands(body, null, viaOr, loop || !once, inPlace ? scope : { dir: scope.dir, stack: [...scope.stack] }));
+      }
       if (!w.length) continue;
       if (/^for$/i.test(cmd)) {
         w.shift();
@@ -426,17 +506,24 @@ function commands(raw, cwd, orFirst = false, inLoop = false) {
         loops = Math.max(0, loops - 1);
         continue;
       }
+      if (POPD.test(cmd)) {
+        // `popd -n`/`+N` and `-StackName` leave the cwd: only a bare pop moves it.
+        const bare = w.slice(1).every((a) => /^-PassThru$/i.test(a));
+        if (bare && scope.stack.length) scope.dir = scope.stack.pop();
+        continue;
+      }
       if (CD.test(cmd)) {
+        if (/^(?:pushd|push-location)$/i.test(cmd)) scope.stack.push(scope.dir);
         const arg = w.slice(1).find((a) => !/^-/.test(a) || a === '-');
-        if (arg === undefined) dir = /^cd$/i.test(cmd) ? homedir() : dir;
-        else if (arg !== '-') dir = toDir(dir, arg.replace(/\)+$/, ''));
+        if (arg === undefined) scope.dir = /^cd$/i.test(cmd) ? homedir() : scope.dir;
+        else if (arg !== '-') scope.dir = toDir(scope.dir, arg.replace(/\)+$/, ''));
         continue;
       }
       if (SHELL_C.test(cmd)) {
-        if (shellCmd !== null) emit(...commands(shellCmd, dir, viaOr, loop));
+        if (shellCmd !== null) emit(...commands(shellCmd, scope.dir, viaOr, loop));
         continue;
       }
-      emit({ cmd, words: w, dir, pipe, seg, viaOr, loop });
+      emit({ cmd, words: w, dir: scope.dir, pipe, seg, viaOr, loop });
     }
   }
   return out;

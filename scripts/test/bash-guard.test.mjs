@@ -418,6 +418,112 @@ test('a commit in a loop body may run several times, so it gets no unborn exempt
   assert.equal(guardRun(`cd ${app} && (sudo git commit -m a && git commit -m b)`, h), 2);
 });
 
+test('#159: a git call inside a PowerShell { } block body is a git call', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  bornRepo(app);
+  for (const cmd of [
+    `cd ${app}; if ($true) { git commit -m x }`,
+    `cd ${app}; foreach ($m in 'a') { git commit -m $m }`,
+    `cd ${app}; 'a','b' | ForEach-Object { git commit -m $_ }`,
+    `cd ${app}; git status; if (-not $?) { git commit -m b }`,
+    `cd ${app}; while ($x) { git commit -m a }`,
+    `cd ${app}; if($a){echo hi}else{git commit -m b}`,
+    `cd ${app}; 'a' | % {git commit -m $_}`,
+    `cd ${app}; foreach ($m in $list) {\n  git add $m\n  git commit -m $m\n}`,
+    `cd ${app}; if ($x) { if ($y) { git commit -m a } }`,
+    `if ($x) { cd ${app} }; git commit -m x`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  // The static rules read block bodies too, without counting a body twice.
+  assert.ok(staticCheck("foreach ($f in 'a') { git add -A }"));
+  assert.ok(staticCheck('if ($x) { pnpm test | tail -5 }'));
+  assert.deepEqual(gatedVerbs('if ($x) { git push }', null), ['git push']);
+  assert.deepEqual(gatedVerbs('if ($x) { echo $(git push) }', null), ['git push']);
+});
+
+test('#159: a commit in a PowerShell loop body gets no unborn exemption; a run-once block keeps it', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  for (const cmd of [
+    `cd ${app}; foreach ($m in 'a','b') { git commit -m $m }`,
+    `cd ${app}; 'a','b' | ForEach-Object { git commit -m $_ }`,
+    `cd ${app}; while ($x) { git commit -m a }`,
+    `cd ${app}; do { git commit -m a } while ($x)`,
+    `cd ${app}; for ($i=0; $i -lt 2; $i++) { git commit -m $i }`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  for (const cmd of [
+    `cd ${app}; if ($true) { git commit -m root }`,
+    `cd ${app}; if ($x) { echo a } else { git commit -m root }`,
+    `cd ${app}; try { git commit -m root } catch { echo no }`,
+    `cd ${app} && { git commit -m root; }`,
+    `cd ${app} && git commit -m a || { git commit -m b; }`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 0, cmd);
+  }
+  // A run-once block still spends the chain's one exemption.
+  assert.equal(guardRun(`cd ${app}; if ($true) { git commit -m a; git commit -m b }`, h), 2);
+  assert.equal(guardRun(`cd ${app}; git commit -m a; if (-not $?) { git commit -m b }`, h), 2);
+});
+
+test('#159: a block shares the cwd of the clauses around it; brace text that is no block stays an argument', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  const docs = join(h, 'docs');
+  for (const r of [app, docs]) bornRepo(r);
+  assert.equal(guardRun(`cd ${app}; { cd ${docs}; }; git commit -m x`, h), 0);
+  assert.equal(guardRun(`cd ${app}; if ($x) { cd ${docs} }; git commit -m x`, h), 0);
+  // A block that runs elsewhere or later — a function, a job, a parallel or stored
+  // block — reads the outer cwd but can't move it; Pop-Location/popd undo a push.
+  for (const cmd of [
+    `cd ${app}; Get-ChildItem -Directory | ForEach-Object { Push-Location $_; git status; Pop-Location }; git commit -m x`,
+    `cd ${app}; pushd ${docs}; popd; git commit -m x`,
+    // popd -n and another stack's pop leave the cwd where it is.
+    `cd ${docs}; pushd ${app}; popd -n; git commit -m x`,
+    `cd ${docs}; Push-Location ${app}; Pop-Location -StackName s; git commit -m x`,
+    `cd ${app}; function f { Set-Location ${docs} }; git commit -m x`,
+    `cd ${app}; f() { cd ${docs}; }; git commit -m x`,
+    `cd ${app}; Start-Job { Set-Location ${docs} }; git commit -m x`,
+    `cd ${app}; $sb = { cd ${docs} }; git commit -m x`,
+    `cd ${app}; 1..3 | ForEach-Object -Parallel { cd ${docs} }; git commit -m x`,
+    `cd ${app}; if ($x) { git commit -m x }>$null`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  assert.equal(guardRun(`cd ${app}; 'a' | ForEach-Object { cd ${docs} }; git commit -m x`, h), 0);
+  const args = (c) => gitCalls(c, null).map((g) => g.args);
+  assert.deepEqual(args('git log HEAD@{1} -- {a,b}.ts'), [['HEAD@{1}', '--', '{a,b}.ts']]);
+  assert.deepEqual(args('git rev-parse @{u} ${REF} {1..3}'), [['@{u}', '${REF}', '{1..3}']]);
+  assert.deepEqual(args("git log --format='{ %h }'"), [['--format={ %h }']]);
+  assert.deepEqual(args('find . -exec git add {} \\;'), []);
+  assert.deepEqual(clauses("if ($x) { git add a; git commit -m b }; echo c"), ['if ($x) { git add a; git commit -m b }', 'echo c']);
+});
+
+test('#159: unclosed braces cost one scan, not one per brace', () => {
+  const t = performance.now();
+  for (const c of ['a { '.repeat(20000) + '}', 'bash <<EOF\n' + 'if [ -n "$x" ]; then echo { ; fi\n'.repeat(5000) + 'EOF']) {
+    staticCheck(c);
+    gatedVerbs(c, null);
+  }
+  assert.ok(performance.now() - t < 2000, `${Math.round(performance.now() - t)} ms`);
+});
+
+test('#160: !(git …) resolves the git call', () => {
+  assert.deepEqual(gitCalls('!(git commit -m a)', null).map((g) => g.sub), ['commit']);
+  assert.deepEqual(gitCalls('! (git commit -m a)', null).map((g) => g.sub), ['commit']);
+  // A group's closing `)` is not part of its last word.
+  assert.deepEqual(gatedVerbs('(git push)', null), ['git push']);
+  assert.deepEqual(gatedVerbs('!(git push)', null), ['git push']);
+  assert.deepEqual(gatedVerbs('(cd x && git push))', null), ['git push']);
+  assert.ok(staticCheck('(git add -A)'));
+  assert.deepEqual(gitCalls('git log --format=%h(x)', null)[0].args, ['--format=%h(x)']);
+});
+
 test('|| carries into $(...) and bash -c bodies, for the first commit of the alternative only', () => {
   const h = tmpHome();
   const app = join(h, 'app');
