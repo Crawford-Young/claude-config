@@ -22,8 +22,8 @@
 // which the reminder text lets the model dismiss in a line.
 //
 // Second gate (issue #122): once reflect has run for the merge (its read came
-// after the merge, or after the previous merge: then this merge is reflect's own
-// landing PR), the turn may not end until an
+// after the merge, or after the previous merge with no continuation ask in
+// between: then this merge is reflect's own landing PR), the turn may not end until an
 // AskUserQuestion offering fresh-session-or-continue (an option labelled fresh session,
 // or clear in the older wording, plus one labelled continue: the labels skills/continuation/SKILL.md
 // names, #178) was asked after that read and the merge. The tool call is
@@ -173,8 +173,8 @@ export function isContinuationQuestion(q) {
   return labels.some((f, i) => FRESH_OPTION.test(f) && labels.some((c, j) => j !== i && CONTINUE_OPTION.test(c)));
 }
 
-/** Was the continuation ask (isContinuationQuestion) asked after `after` (epoch ms)? */
-export function continuationAsked(text, after) {
+/** Was the continuation ask (isContinuationQuestion) asked after `after` and before `before` (epoch ms)? */
+export function continuationAsked(text, after, before = Infinity) {
   for (const l of text.split('\n')) {
     if (!l.includes('AskUserQuestion')) continue;
     let o;
@@ -184,7 +184,7 @@ export function continuationAsked(text, after) {
       continue;
     }
     const t = Date.parse(o?.timestamp);
-    if (Number.isNaN(t) || t <= after) continue;
+    if (Number.isNaN(t) || t <= after || t >= before) continue;
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
       if (c.type !== 'tool_use' || c.name !== 'AskUserQuestion') continue;
       if ((Array.isArray(c.input?.questions) ? c.input.questions : []).some(isContinuationQuestion)) return true;
@@ -212,8 +212,10 @@ function main() {
     const reflectAt = lastReflectAt(text);
     const mergeAt = merge.at ?? Date.now();
     const reflectedAfterMerge = reflectAt !== null && reflectAt > mergeAt;
-    // Reflect's own landing PR merges after a read that followed the previous merge.
-    const reflectRan = reflectedAfterMerge || (reflectAt !== null && merge.prevAt !== null && reflectAt > merge.prevAt);
+    // Reflect's own landing PR merges after a read that followed the previous merge, with no continuation ask
+    // between them: an ask there closed that reflect, so this merge is a later, unreflected wave (#199).
+    const landingPR = reflectAt !== null && merge.prevAt !== null && reflectAt > merge.prevAt && !continuationAsked(text, reflectAt, mergeAt);
+    const reflectRan = reflectedAfterMerge || landingPR;
     if (!handled.includes(id)) {
       writeState(stateFile, { ...state, ids: [...handled, id].slice(-200) });
       if (!reflectedAfterMerge) {

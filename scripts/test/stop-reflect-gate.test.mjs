@@ -362,6 +362,44 @@ test('a reflect that finished with no question still gets the continuation block
   assert.match(r.stderr, /continuation\/SKILL\.md/);
 });
 
+test('scenario 6: an unreflected wave B after a reflect that finished with the continuation ask gets no continuation block (#199)', () => {
+  // The #140 review's scenario 6: wave A merges, reflect runs, the continuation ask is answered Continue, then wave B
+  // merges and the user skips reflect. The read came after A's merge (prevAt), but the answered ask closed that reflect,
+  // so B is not its landing PR. #140 gave [2,2,0]; old main gave [2,0,0].
+  // Ask and answer mirror ~/.claude/projects/C--Users-young-code/4e1e54dd-c768-4d79-963d-aaec663a9c28.jsonl:350-351.
+  const nextQ = {
+    question: 'Reflect on #175 is done. What next: a fresh session (/exit, run the launch line, paste) or continue here?',
+    header: 'Next',
+    multiSelect: false,
+    options: [
+      { label: 'Fresh session (Recommended)', description: 'I print the launch line and a continuation prompt for the next unit.' },
+      { label: 'Continue', description: 'Stay in this window.' },
+    ],
+  };
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const records = [
+    ...mergeAt('a1', 300),
+    human(295, 'yes'),
+    reflectRead('r', 294),
+    say(293, pauseCall),
+    human(290, 'land 1 and 3'),
+    ask(285, { questions: [nextQ] }),
+    { ...at(284, result('q285')), toolUseResult: { questions: [nextQ], answers: { [nextQ.question]: 'Continue' }, annotations: {} } },
+    human(200, 'start wave B'),
+    ...mergeAt('b1', 60),
+    say(59, 'Merged PR #12 for wave B.'),
+    human(50, 'skip reflect'),
+    say(49, 'Skipping reflect for wave B.'),
+  ];
+  const p = join(mkdtempSync(join(tmpdir(), 'gate-tx-')), 't.jsonl');
+  const stopAt = (n) => {
+    writeFileSync(p, `${records.slice(0, n).map((r) => JSON.stringify(r)).join('\n')}\n`);
+    return runHook({ transcript_path: p }, home).code;
+  };
+  // Stops: S1 wave B merged, S2 after the user skips reflect, S3 a later turn end.
+  assert.deepEqual([12, 14, 14].map(stopAt), [2, 0, 0]);
+});
+
 test('a previous wave clear-or-continue ask does not satisfy the next wave merge', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
   const transcript_path = transcript(...mergeAt('w1', 70), reflectRead('r', 50), ask(45, clearQ), ...mergeAt('w2', 20));
