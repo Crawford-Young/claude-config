@@ -743,8 +743,8 @@ test('#163 review: many assignments next to many git calls, substitutions or blo
   const vars = Array.from({ length: 2000 }, (_, i) => `W${i}=/x`).join('; ');
   const psVars = Array.from({ length: 2000 }, (_, i) => `$W${i} = 'x'`).join('; ');
   for (const c of [`${vars}; ${'git status; '.repeat(2000)}`, `${vars}; ${'echo $(true); '.repeat(2000)}`, `${psVars}; ${'if ($x) { true }; '.repeat(2000)}`]) {
-    // 600 ms, not #163's 200: these are 8-12k-char texts, and CI ran 229 ms where
-    // a local run takes ~76. The quadratic vars copy took ~1 s locally.
+    // 600 ms: these are 8-12k-char texts, and CI ran 229 ms where a local run
+    // takes ~76 (94 cold). The quadratic vars copy took ~1 s locally.
     const ms = hookPathMs(c);
     assert.ok(ms < 600, `${Math.round(ms)} ms: ${c.slice(-30)}`);
   }
@@ -821,19 +821,24 @@ const hookPathMs = (c) => {
   return performance.now() - t;
 };
 
+// The three shapes below take 40-77 ms cold locally and ran 202-229 ms on CI
+// against a 200 ms bound (#181). With closeGroup's memo off (the quadratic
+// scan #163 fixed) they take 21 s, 10 s and 2.6 s, so 500 ms still catches it.
+const LINEAR_MS = 500;
+
 test('#163: a long line of unclosed { ${x} pairs scans in linear time', () => {
   const ms = hookPathMs('a { ${x} '.repeat(10000));
-  assert.ok(ms < 200, `${Math.round(ms)} ms`);
+  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
 });
 
 test('#163: deeply nested braces that close into words scan in linear time', () => {
   const ms = hookPathMs('{ '.repeat(10000) + '}x'.repeat(10000));
-  assert.ok(ms < 200, `${Math.round(ms)} ms`);
+  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
 });
 
 test('#163: a 5000-line bash heredoc of echo { "${HOME}" scans in linear time', () => {
   const ms = hookPathMs('bash <<EOF\n' + 'echo { "${HOME}"\n'.repeat(5000) + 'EOF');
-  assert.ok(ms < 200, `${Math.round(ms)} ms`);
+  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
 });
 
 test('|| carries into $(...) and bash -c bodies, for the first commit of the alternative only', () => {
