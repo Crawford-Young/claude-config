@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { continuationAsked, humanRepliedAfter, lastMerge, lastReflectAt } from '../../hooks/stop-reflect-gate.mjs';
+import { awaitingUser, continuationAsked, humanRepliedAfter, lastMerge, lastReflectAt } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
@@ -294,6 +294,72 @@ test('stop_hook_active passes even when the second-gate conditions are met', () 
   const transcript_path = transcript(...mergeAt('c1b', 30), reflectRead('r', 10), human(8));
   assert.equal(runHook({ transcript_path, stop_hook_active: true }, home).code, 0);
   assert.equal(runHook({ transcript_path }, home).code, 2, 'the passed retry recorded nothing');
+});
+
+// ---- later typed pauses partway through reflect (#199) ----
+// A turn-ending text record, the real shape (one content block per record, stop_reason end_turn):
+// ~/.claude/projects/C--Users-young-code/ab5c4ba3-489b-471e-9a3c-d2ba55d272d0.jsonl:247.
+const say = (min, text) => ({
+  type: 'assistant',
+  timestamp: ago(min),
+  message: { type: 'message', role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'end_turn' },
+});
+const thinking = (min) => ({ type: 'assistant', timestamp: ago(min), message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'x' }], stop_reason: 'tool_use' } });
+// Tails of real reflect pauses (ab5c4ba3:247, 945f43a3-03fc-4d62-b94d-f754f4a62c9d.jsonl:304) and a real finished reflect
+// (79e0cf9f-58cd-4c54-8e0a-1b17daefbd5d.jsonl:728), all in ~/.claude/projects/C--Users-young-code/.
+const pauseActions =
+  '- **Why it waits:** `land.mjs` is #183\'s file, so I\'d file an issue rather than change it.\n\nWhat did you see that I missed?\n\n## Your action items\n- Pick the fix for the `chore/` vs `fix/` mismatch, or drop it.\n- Add anything you noticed that this reflect missed.';
+const pauseCall = '## 3. What should become a rule?\n- **Python is absent.** Candidate memory.\n\nWhat did you see that I missed?\n\n## Your call\n- Which of the 3 candidates do I land? And is there anything to add?';
+const finished =
+  'New issues #110–#113 stay standalone, per your call. Reflect produced no new rule.\n\n### Your action items\n- Run `/clear` before the next wave.\n- Optional, not a doc change: update your local Godot install from 4.7.1 to 4.7.2.';
+
+test('awaitingUser: the last assistant turn ends in text holding a question', () => {
+  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+  assert.equal(awaitingUser(tx(say(5, pauseActions))), true, 'a question followed by an action-items list');
+  assert.equal(awaitingUser(tx(say(5, pauseCall))), true, 'a question as the last line');
+  assert.equal(awaitingUser(tx(say(5, 'Commit it on a chore branch? **'))), true, 'trailing markdown after the mark');
+  assert.equal(awaitingUser(tx(say(5, finished))), false, 'a finished reflect');
+  assert.equal(awaitingUser(tx(say(9, pauseCall), human(8), say(5, finished))), false, 'only the newest turn counts');
+  assert.equal(awaitingUser(tx(say(9, pauseCall), thinking(8), call('b', 'git status'))), false, 'the turn went on to a tool call');
+  assert.equal(awaitingUser(tx(say(9, pauseCall), thinking(8), { ...human(7), isMeta: true })), true, 'thinking and meta records after it do not count');
+  assert.equal(awaitingUser(tx(say(5, 'Is `a?b` a path; no.'))), false, 'a mid-line question mark');
+  assert.equal(awaitingUser(''), false, 'no assistant turn');
+});
+
+test('scenario 3: a later commit-approval pause does not spend the continuation block (#199)', () => {
+  // The #140 review's scenario 3 (merge, read, pause, reply, commit-approval pause, landing merge), with each stop's
+  // turn-ending text added. Old main gave [2,2,0,0,2,2] (block spent at the first pause), #140 gave [2,0,2,0,2,2]
+  // (spent at the approval pause). Expected: neither pause spends it; the landing merge gets its reminder, then the block.
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const records = [
+    ...mergeAt('s1', 90),
+    human(85, 'yes run reflect'),
+    reflectRead('r', 84),
+    say(83, pauseActions),
+    human(80, 'add rule X'),
+    say(78, 'Added the rule to `skills/reflect/SKILL.md`.\n\nCommit it as `docs(reflect): add rule X` on a chore branch?'),
+    human(70, 'approved'),
+    say(68, 'Committed as abc1234 on `chore/reflect-rule-x`.\n\nPush it and open the landing PR?'),
+    human(65, 'yes'),
+    ...mergeAt('s2', 60),
+    say(59, 'Landed as PR #201.'),
+    say(58, "This merge is reflect's own landing PR."),
+  ];
+  const p = join(mkdtempSync(join(tmpdir(), 'gate-tx-')), 't.jsonl');
+  const stopAt = (n) => {
+    writeFileSync(p, `${records.slice(0, n).map((r) => JSON.stringify(r)).join('\n')}\n`);
+    return runHook({ transcript_path: p }, home).code;
+  };
+  // Stops: S1 merge, S2 first pause, S3 commit-approval pause, S4 push-approval pause, S5 landing merge, S6 landing PR noted.
+  assert.deepEqual([2, 5, 7, 9, 13, 14].map(stopAt), [2, 0, 0, 0, 2, 2]);
+});
+
+test('a reflect that finished with no question still gets the continuation block', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(...mergeAt('f1', 30), reflectRead('r', 20), say(19, pauseCall), human(15, 'land 1 and 3'), say(10, finished));
+  const r = runHook({ transcript_path }, home);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /continuation\/SKILL\.md/);
 });
 
 test('a previous wave clear-or-continue ask does not satisfy the next wave merge', () => {

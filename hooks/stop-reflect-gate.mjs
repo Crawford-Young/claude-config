@@ -31,9 +31,9 @@
 // block per merge, tracked under `cont` in the same state file. It waits for a
 // genuine human reply after the reflect read (humanRepliedAfter): before that,
 // reflect is paused on its dialogue and the single block would be spent there (#140).
-// A reply is a typed message or an AskUserQuestion answer. Later pauses (a second
-// pause for commit approval, say) are not detected: the block can still be spent
-// there. Out of scope for #140.
+// A reply is a typed message or an AskUserQuestion answer. Later typed pauses (a
+// second pause for commit approval, say) are caught by awaitingUser: a turn whose
+// closing text holds a question is waiting on the user, not finished (#199).
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -110,6 +110,29 @@ export function humanRepliedAfter(text, after) {
     }
     const t = Date.parse(o?.timestamp);
     if (!Number.isNaN(t) && t > after && (humanText(o) !== null || isAnswer(o))) return true;
+  }
+  return false;
+}
+
+/** A line ending in a question mark, past any closing markdown or quotes. */
+const QUESTION_LINE = /\?[\s*_)`'"\]]*$/;
+
+/** Does the newest assistant turn end awaiting the user: its last non-thinking block is text holding a line
+ *  that ends in a question? Real reflect pauses end with an ask, often followed by an action-items list (#199). */
+export function awaitingUser(text) {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"assistant"')) continue;
+    let o;
+    try {
+      o = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (o?.type !== 'assistant') continue;
+    const last = (Array.isArray(o.message?.content) ? o.message.content : []).filter((c) => c?.type !== 'thinking').pop();
+    if (!last) continue;
+    return last.type === 'text' && typeof last.text === 'string' && last.text.split('\n').some((l) => QUESTION_LINE.test(l));
   }
   return false;
 }
@@ -202,8 +225,9 @@ function main() {
     }
 
     // Second gate: reflect ran for this merge, but no fresh-session-or-continue ask followed it.
-    // No human reply since the read means reflect is paused on its dialogue: pass without spending the block.
-    if (!reflectRan || !humanRepliedAfter(text, reflectAt)) return;
+    // No human reply since the read, or a turn ending in a question, means reflect is paused on the user:
+    // pass without spending the block.
+    if (!reflectRan || !humanRepliedAfter(text, reflectAt) || awaitingUser(text)) return;
     const cur = readState(stateFile);
     const asked = Array.isArray(cur.cont) ? cur.cont : [];
     if (asked.includes(id) || continuationAsked(text, Math.max(reflectAt, mergeAt))) return;
