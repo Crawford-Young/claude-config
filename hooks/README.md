@@ -56,9 +56,29 @@ fixed false verdict; change them only with a test:
 - The branch rules judge each **git call** — a clause whose command word is
   `git` (quoted text and `echo "git commit"` are not calls; `bash -c "…"` is
   parsed) — in the repo it runs in: the payload cwd walked through every
-  `cd`/`Set-Location`/`pushd` clause **before that call**, then `-C`. The
+  `cd`/`Set-Location`/`pushd`/`popd` clause **before that call**, then `-C`. The
   workspace root is not itself a repo, so `cd <repo> && git commit` is the shape
   they must see, and `cd a; git status; cd docs && git commit` commits in docs.
+  pushd stacks are modelled (`-n` pushes without moving; a bare `pushd` on a
+  non-empty stack makes the dir unknown, since bash swaps but PowerShell's
+  alias pushes and stays; `+N`/`-N` makes the dir unknown;
+  `Push-Location`/`Pop-Location -StackName s` use stack `s`). On Windows a Git
+  Bash `/c/…` target is read as `C:/…`. A target that still holds a variable
+  after `$HOME`/`${HOME}`/`$env:HOME`/`$env:USERPROFILE`/`$PWD`/`~` expand
+  (`cd $d`, `Set-Location $_.FullName`, `cd "$(…)"`), `cd -`, a pop with no
+  known dir, or a relative `-C` from an unknown dir makes the repo unknown until
+  a `cd` to an absolute, `~`/`$HOME` or bare (home) target, a popd back to a
+  known dir, or an absolute `git -C`. A commit there is blocked, so commit with
+  a literal path or `git -C <literal path>` (#163). A bare literal assignment
+  earlier in the command resolves its name (`W=…; cd "$W"`, `export`/`declare`/
+  `local`/`readonly W=…`, `$W = '…'`; bash names case-sensitive, PowerShell's
+  not; an `&&` chain keeps it; a bare `export W`/`readonly W`/`declare -x W`
+  keeps its value). A prefix one (`W=x git -C $W …`) doesn't, and these leave
+  the name unknown: a substitution or unresolved value, `+=`, a flag beside a
+  `W=` (`declare -r W=…`), a bare `local W`, `unset`/`read`/`mapfile`, a
+  `for` loop var, `$W.Member`/`$W[0]`, and an
+  assignment in a loop, subshell, pipeline, background job, if/case, block
+  body or after `||`. A switch or restore in an unknown dir is not judged.
 - **Push/PR approval (rule 8)** — `git push` (`-C` composes the same as the
   branch rules; `--dry-run` and remote branch deletes are exempt), `gh pr create` and `gh pr merge` are
   parsed by command word, same as `git`. Approval comes from the transcript:

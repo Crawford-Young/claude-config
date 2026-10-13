@@ -20,6 +20,8 @@ import {
   pushGateReason,
   browserCommand,
   substitutions,
+  branchRules,
+  UNKNOWN_DIR,
 } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
@@ -522,6 +524,314 @@ test('#160: !(git …) resolves the git call', () => {
   assert.deepEqual(gatedVerbs('(cd x && git push))', null), ['git push']);
   assert.ok(staticCheck('(git add -A)'));
   assert.deepEqual(gitCalls('git log --format=%h(x)', null)[0].args, ['--format=%h(x)']);
+});
+
+// A repo on a feature branch with one commit: commit-on-main never blocks it.
+function branchRepo(dir) {
+  bornRepo(dir);
+  execFileSync('git', ['-C', dir, 'switch', '-q', '-c', 'feat']);
+}
+
+test('#163: a cd target holding a variable makes the dir unknown, and a commit there is blocked', () => {
+  const h = tmpHome();
+  for (const cmd of [
+    'for d in a b; do cd $d; done; git commit -m x',
+    'foreach ($d in $dirs) { cd $d }; git commit -m x',
+    'Get-ChildItem | % { Set-Location $_.FullName }; git commit -m x',
+    'cd "$(git rev-parse --show-toplevel)" && git commit -m x',
+    'cd `pwd` && git commit -m x',
+    'cd $d && cd sub && git commit -m x',
+    'cd $d && git -C sub commit -m x',
+    'cd $d && git commit -m a || git commit -m b',
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  assert.match(branchRules('cd $d; git commit -m x', h) || '', /git -C <literal path>/);
+  // An absolute cd or an absolute -C resolves it again.
+  const feat = join(h, 'feat');
+  branchRepo(feat);
+  assert.equal(guardRun(`cd $d; cd ${feat}; git commit -m x`, h), 0);
+  assert.equal(guardRun(`cd $d; git -C ${feat} commit -m x`, h), 0);
+  // switch/restore in an unknown dir keep the fail-open, and unknown never reaches git.
+  for (const cmd of ['cd $d; git switch main', 'cd $d; git checkout -- a.mjs', 'cd $d; git restore a.mjs', 'cd $d; git status']) {
+    assert.equal(branchRules(cmd, h), null, cmd);
+  }
+});
+
+test('#163: gitCalls marks a variable cd target unknown and expands HOME/PWD/~ first', () => {
+  assert.equal(repoOf('cd $d && git commit -m x', '/cwd'), UNKNOWN_DIR);
+  assert.equal(repoOf('Set-Location $_.FullName; git commit -m x', '/cwd'), UNKNOWN_DIR);
+  assert.equal(repoOf('cd $d; cd /abs; git commit -m x', '/cwd'), '/abs');
+  assert.equal(repoOf('cd $d; git -C /abs commit -m x', '/cwd'), '/abs');
+  // From no cwd at all, a variable target is still unknown (not "no info").
+  assert.equal(repoOf('cd $d && git commit -m x', null), UNKNOWN_DIR);
+  const site = join(homedir(), 'code/web/site');
+  for (const home of ['$HOME', '${HOME}', '$env:HOME', '$env:USERPROFILE', '$env:userprofile', '~']) {
+    assert.equal(repoOf(`cd ${home}/code/web/site && git commit -m x`, '/cwd'), site, home);
+  }
+  assert.equal(repoOf('cd $HOMEDIR/x && git commit -m x', '/cwd'), UNKNOWN_DIR);
+  for (const pwd of ['$PWD', '${PWD}', '$pwd']) {
+    assert.equal(repoOf(`cd /code; cd ${pwd}/web && git commit -m x`, '/cwd'), resolve('/code/web'), pwd);
+  }
+  assert.equal(repoOf('cd $d; cd $PWD/web && git commit -m x', '/cwd'), UNKNOWN_DIR);
+  assert.equal(repoOf('cd $PWD/web && git commit -m x', null), null);
+  // `cd -` goes to the previous dir, which the guard doesn't track.
+  assert.equal(repoOf('cd /pa; cd /pb; cd -; git commit -m x', '/cwd'), UNKNOWN_DIR);
+});
+
+test('#163: a literal assignment earlier in the command resolves a later $NAME target', () => {
+  const h = tmpHome();
+  const feat = join(h, 'feat');
+  const main = join(h, 'main');
+  branchRepo(feat);
+  bornRepo(main);
+  for (const cmd of [
+    `WT=${feat}; cd "$WT" && git commit -m x`,
+    `cd ${h} && W=feat && git -C $W commit -m x`,
+    `export W=${feat}; cd \${W}; git commit -m x`,
+    `B=${h}; W="$B/feat"; cd $W && git commit -m x`,
+    `$W = '${feat}'; Set-Location $W; git commit -m x`,
+    `$W='${feat}'; Set-Location $w; git commit -m x`,
+    `$W = "${feat}"; git -C $W commit -m x`,
+    // A function body reads the caller's vars but can't set them for it.
+    `$W = '${feat}'; function f { $W = '${main}' }; Set-Location $W; git commit -m x`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 0, cmd);
+  }
+  // A resolved main repo is judged by the main rule, not the unknown one.
+  assert.match(branchRules(`WT=${main}; cd "$WT" && git commit -m x`, h) || '', /never commit to the default branch/);
+  assert.match(branchRules(`$W='${main}'; function f { Set-Location $W; git commit -m x }`, h) || '', /never commit to the default branch/);
+  for (const cmd of [
+    // A prefix assignment sets no shell var: $W expands before it applies.
+    `W=${feat} git -C $W commit -m x`,
+    `for i in 1; do W=${feat}; done; cd $W; git commit -m x`,
+    `foreach ($i in 1) { $W = '${feat}' }; Set-Location $W; git commit -m x`,
+    `W=$(echo ${feat}); cd $W; git commit -m x`,
+    `(W=${feat}); cd $W; git commit -m x`,
+    `W=${feat}; W=$(pwd); cd $W; git commit -m x`,
+    `$W = '${feat}'; $W = Get-Location; Set-Location $W; git commit -m x`,
+    `false || W=${feat}; cd $W; git commit -m x`,
+    `if true; then W=${feat}; fi; cd $W; git commit -m x`,
+    `if ($x) { $W = '${feat}' }; Set-Location $W; git commit -m x`,
+    `W=$UNSET/x; cd $W; git commit -m x`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  // Bash names are case-sensitive; $HOME-built values expand.
+  assert.equal(repoOf('W=/a; cd $w; git commit -m x', '/cwd'), UNKNOWN_DIR);
+  assert.equal(resolve(repoOf('W=$HOME/code; cd $W/site && git commit -m x', '/cwd')), join(homedir(), 'code', 'site'));
+});
+
+test('#163 review: an assignment that may not set the shell var leaves it unknown', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+  for (const cmd of [
+    'W=/feat | true; cd "$W"',
+    'W=/feat & cd "$W"',
+    'W=/feat &\ncd "$W"',
+    'true | (W=/feat ); cd "$W"',
+    'case a in a) true;; esac; (true; W=/feat); cd "$W"',
+    'W=/pre; time (W=/feat); cd "$W"',
+    'W=/feat; unset W; cd "$W"',
+    'W=/feat; read W; cd "$W"',
+    'W=/feat; mapfile W; cd "$W"',
+    'W=/feat; for W in /x; do :; done; cd "$W"',
+    'W=/feat; W+=/sub; cd "$W"',
+    'W=/feat; declare -r W=/main; cd "$W"',
+    // A bare `local W` empties it.
+    'W=/feat; local W; cd "$W"',
+    "$W = '/feat'; $W += '/sub'; Set-Location $W",
+    "$W = '/feat' | Out-Null; Set-Location $W",
+    "$W = '/feat'; Set-Location $W.FullName",
+    "$W = '/feat'; Set-Location $W[0]",
+    "$W = '/feat'; foreach ($W in $list) { }; Set-Location $W",
+  ]) {
+    assert.equal(at(cmd), UNKNOWN_DIR, cmd);
+  }
+  for (const kw of ['declare', 'typeset', 'local', 'readonly', 'export']) {
+    assert.equal(at(`W=/feat; ${kw} W=/main; cd "$W"`), '/main', kw);
+  }
+  // A bare export/readonly/declare -x only marks the var: its value stays.
+  for (const mark of ['export W', 'readonly W', 'declare -x W', 'export -n W']) {
+    assert.equal(at(`W=/feat; ${mark}; cd "$W"`), '/feat', mark);
+  }
+  // An && chain keeps the assignment, as it keeps an && cd.
+  assert.equal(at('true && W=/feat && cd "$W"'), '/feat');
+  // A prefix += is still a prefix: the git call after it is found.
+  assert.deepEqual(gitCalls('W+=x git push', null).map((g) => g.sub), ['push']);
+});
+
+test('#163 review: combined cd switches take no value', () => {
+  for (const sw of ['-PL', '-LP', '-Pe', '-e@']) {
+    assert.equal(repoOf(`cd ${sw} /repo; git commit -m x`, '/cwd'), '/repo', sw);
+  }
+});
+
+test('#163 review: a Git Bash /c/… path is the Windows drive path', { skip: process.platform !== 'win32' }, () => {
+  const h = tmpHome();
+  const main = join(h, 'main');
+  bornRepo(main);
+  const msys = (p) => `/${p[0].toLowerCase()}${p.slice(2).split(String.fromCharCode(92)).join('/')}`;
+  for (const cmd of [`cd ${msys(main)} && git commit -m x`, `git -C ${msys(main)} commit -m x`, `S=${msys(h)}; cd $S/main && git commit -m x`]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  assert.equal(repoOf('cd /c && git commit -m x', '/cwd'), 'C:/');
+});
+
+test('#163 review: a viaOr commit on an unborn repo spends the root exemption', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || (cd . && git commit -m b)`, h), 0);
+  for (const cmd of [
+    `cd ${app}; false || (cd . && git commit -m b); git commit -m c`,
+    `cd ${app}; false || (cd . && git commit -m b) && git commit -m c`,
+    `false || (cd ${app} && git commit -m b && git commit -m c)`,
+    `cd ${app}; false || git commit -m b; git commit -m c`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+});
+
+test('#163 review: viaOr comes only from an || right after a pipeline holding a commit', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  for (const cmd of [`cd ${app} && git commit -m a || (cd . && git commit -m b)`, `cd ${app} && git commit -m a || git commit --no-verify -m a`]) {
+    assert.equal(guardRun(cmd, h), 0, cmd);
+  }
+  assert.equal(guardRun(`cd ${app} && (git commit -m a) || (cd . && git commit -m b)`, h), 0);
+  // A { … } body after || carries viaOr across its && pipelines, like a ( … ) group.
+  assert.equal(guardRun(`cd ${app} && git commit -m a || { git add f && git commit -m b; }`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || { git add f && git commit -m b && git commit -m c; }`, h), 2);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || { git add f; git commit -m b; }`, h), 2);
+  for (const cmd of [
+    `cd ${app} && git commit -m a; false || (cd . && git commit -m b)`,
+    `cd ${app} && git commit -m a && false || (cd . && git commit -m b)`,
+    `cd ${app} && git commit -m a; false || git commit -m b`,
+    // Only the commit that decides the pipeline's exit status makes the || a fallback.
+    `cd ${app} && { git commit -m a; false; } || (cd . && git commit -m b)`,
+    `cd ${app} && false $(git commit -m a) || (cd . && git commit -m b)`,
+    `cd ${app} && echo "$(git commit -m a)" | grep -q zzz || (cd . && git commit -m b)`,
+    `cd ${app} && git commit -m a | grep -q zzz || (cd . && git commit -m b)`,
+    `cd ${app} && ! git commit -m a || (cd . && git commit -m b)`,
+    `cd ${app} && { git commit -m a; false; } || git commit -m b`,
+    `cd ${app} && git commit -m a | false || git commit -m b`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+});
+
+test('#163 review: the claude-config main checkout is matched case-insensitively on Windows', { skip: process.platform !== 'win32' }, () => {
+  const h = tmpHome();
+  const cfg = join(h, 'cfg');
+  mkdirSync(cfg);
+  execFileSync('git', ['init', '-q', '-b', 'main', cfg]);
+  const env = { CLAUDE_CONFIG_REPO: cfg };
+  const variant = cfg.replace(/Users/i, (m) => (m === 'Users' ? 'users' : 'USERS')).toUpperCase();
+  assert.equal(guardRun(`cd ${variant} && git switch x`, h, env), 2);
+  assert.equal(guardRun(`cd ${variant} && git restore a.mjs`, h, env), 2);
+  // A worktree under it is still not the main checkout.
+  const wt = join(cfg, '.worktrees', 'w');
+  mkdirSync(wt, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main', wt]);
+  assert.equal(guardRun(`cd ${wt.toUpperCase()} && git switch x`, h, env), 0);
+});
+
+test('#163 review: many assignments next to many git calls, substitutions or blocks stay linear', () => {
+  const vars = Array.from({ length: 2000 }, (_, i) => `W${i}=/x`).join('; ');
+  const psVars = Array.from({ length: 2000 }, (_, i) => `$W${i} = 'x'`).join('; ');
+  for (const c of [`${vars}; ${'git status; '.repeat(2000)}`, `${vars}; ${'echo $(true); '.repeat(2000)}`, `${psVars}; ${'if ($x) { true }; '.repeat(2000)}`]) {
+    const ms = hookPathMs(c);
+    assert.ok(ms < 200, `${Math.round(ms)} ms: ${c.slice(-30)}`);
+  }
+});
+
+test('#163: pushd/popd and Push-Location/Pop-Location stacks are modelled', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+  // A bare pushd swaps in bash but pushes and stays in PowerShell (its alias for
+  // Push-Location): on a non-empty stack the dir and the stack top are unknown.
+  // On an empty one nothing moves (bash errors, PowerShell stays).
+  assert.equal(at('cd /pa; pushd /pb; pushd'), UNKNOWN_DIR);
+  assert.equal(at('cd /pa; pushd /pb; pushd; popd'), UNKNOWN_DIR);
+  assert.equal(at('cd /pa; pushd /pb; pushd /pc; pushd; popd; popd'), '/pa');
+  assert.equal(at('cd /pa; pushd'), '/pa');
+  // A bare Push-Location pushes and stays.
+  assert.equal(at('cd /pa; Push-Location /pb; Push-Location'), '/pb');
+  assert.equal(at('cd /pa; Push-Location /pb; Push-Location; Pop-Location'), '/pb');
+  // pushd +N/-N rotates: the dir and every stack entry become unknown.
+  assert.equal(at('cd /pa; pushd /pb; pushd +1'), UNKNOWN_DIR);
+  assert.equal(at('cd /pa; pushd /pb; pushd -0'), UNKNOWN_DIR);
+  assert.equal(at('cd /pa; pushd /pb; pushd +1; cd /pc; popd'), UNKNOWN_DIR);
+  // pushd -n pushes without moving; popd -n drops the top without moving.
+  assert.equal(at('cd /pa; pushd -n /pb'), '/pa');
+  assert.equal(at('cd /pa; pushd -n /pb; popd'), '/pb');
+  assert.equal(at('cd /pa; pushd /pb; pushd /pc; popd -n; popd'), '/pa');
+  // -StackName names a stack: its value is not the dir, nor are other value flags'.
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -StackName s -Path /pb'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -StackName:s -LiteralPath /pb'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -Path /pb -StackName s'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -ErrorAction Stop /pb'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; Pop-Location'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; Pop-Location -StackName s'), '/pa');
+  assert.equal(at('cd /pa; Push-Location -StackName S /pb; Pop-Location -StackName s'), '/pa');
+  assert.equal(at('cd /pa; Push-Location /pb; Pop-Location -StackName s'), '/pb');
+  assert.equal(at('cd /pa; Set-Location -Path /pb'), '/pb');
+  // Set-Location -StackName swaps the default stack for one the guard doesn't track:
+  // the dir stays, and every later pop lands somewhere unknown.
+  assert.equal(at('cd /pa; pushd /pb; Set-Location -StackName s'), '/pb');
+  assert.equal(at('cd /pa; pushd /pb; Set-Location -StackName s; Pop-Location'), UNKNOWN_DIR);
+  assert.equal(at('cd /pa; Set-Location -StackName s; Push-Location /pb; Pop-Location -StackName s'), UNKNOWN_DIR);
+  // A function body gets a copy of the named stacks too; an in-place body shares them.
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s }'), '/pb');
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s }; Pop-Location -StackName s'), '/pa');
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; if ($x) { Pop-Location -StackName s }'), '/pa');
+  assert.equal(repoOf('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s; git commit -m x }', '/cwd'), '/pa');
+});
+
+test('#160: || ( … ) carries viaOr to the first commit inside the group', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || (cd . && git commit -m b)`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || (cd . && git add x && git commit -m b)`, h), 0);
+  for (const cmd of [
+    // bash reads this as (a || cd .) && git commit: the commit runs after a succeeded.
+    `cd ${app} && git commit -m a || cd . && git commit -m b`,
+    `cd ${app} && git commit -m a || (cd .) && git commit -m b`,
+    `cd ${app} && git commit -m a || (cd . && git commit -m b && git commit -m c)`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+});
+
+// The hook's whole per-command path, with no cwd so no git process runs.
+const hookPathMs = (c) => {
+  const t = performance.now();
+  staticCheck(c);
+  branchRules(c, null);
+  browserCommand(c, null);
+  gatedVerbs(c, null);
+  billedLaunch(c);
+  return performance.now() - t;
+};
+
+test('#163: a long line of unclosed { ${x} pairs scans in linear time', () => {
+  const ms = hookPathMs('a { ${x} '.repeat(10000));
+  assert.ok(ms < 200, `${Math.round(ms)} ms`);
+});
+
+test('#163: deeply nested braces that close into words scan in linear time', () => {
+  const ms = hookPathMs('{ '.repeat(10000) + '}x'.repeat(10000));
+  assert.ok(ms < 200, `${Math.round(ms)} ms`);
+});
+
+test('#163: a 5000-line bash heredoc of echo { "${HOME}" scans in linear time', () => {
+  const ms = hookPathMs('bash <<EOF\n' + 'echo { "${HOME}"\n'.repeat(5000) + 'EOF');
+  assert.ok(ms < 200, `${Math.round(ms)} ms`);
 });
 
 test('|| carries into $(...) and bash -c bodies, for the first commit of the alternative only', () => {
