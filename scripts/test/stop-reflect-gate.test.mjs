@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { continuationAsked, lastMerge, lastReflectAt } from '../../hooks/stop-reflect-gate.mjs';
+import { continuationAsked, humanRepliedAfter, lastMerge, lastReflectAt } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
@@ -87,11 +87,36 @@ test('lastReflectAt: a Bash cat or PowerShell Get-Content of reflect SKILL.md co
   assert.equal(lastReflectAt(tx(use('Write', { file_path: 'skills/reflect/SKILL.md', content: 'x' }))), null, 'Write is not a read');
 });
 
-test('a merge within 60 min of a reflect read is the reflect landing itself: quiet, and stays quiet', () => {
+test('a wave merged within 60 min of a reflect read still gets its own reminder (no time heuristic)', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(reflectRead('r', 10), ...mergeAt('m94', 5), ask(2, clearQ));
-  assert.equal(runHook({ transcript_path }, home).code, 0, 'the reflect-landing merge does not re-prompt reflect (clear-or-continue already asked)');
-  assert.equal(runHook({ transcript_path }, home).code, 0);
+  const transcript_path = transcript(reflectRead('r', 10), ...mergeAt('m94', 5));
+  const first = runHook({ transcript_path }, home);
+  assert.equal(first.code, 2, "a merge shortly after a reflect is not assumed to be reflect's landing PR");
+  assert.match(first.stderr, /prompt the user to run reflect/i);
+  assert.equal(runHook({ transcript_path }, home).code, 0, 'once per merge');
+});
+
+const human = (min, content = 'ok') => ({ type: 'user', origin: { kind: 'human' }, timestamp: ago(min), message: { content } });
+
+test('lastReflectAt: a user-typed /reflect counts; meta records and other text do not', () => {
+  const tx = (r) => JSON.stringify(r);
+  assert.ok(lastReflectAt(tx(human(4, '/reflect'))), 'plain slash command');
+  assert.ok(lastReflectAt(tx(human(4, '<command-name>/reflect</command-name>\n<command-args></command-args>'))), 'command-name wrapper');
+  assert.ok(lastReflectAt(tx(human(4, [{ type: 'text', text: '/reflect' }]))), 'text-block content');
+  assert.equal(lastReflectAt(tx({ ...human(4, '/reflect'), isMeta: true })), null, 'a meta record is not the user typing');
+  assert.equal(lastReflectAt(tx({ ...human(4, '/reflect'), origin: { kind: 'peer' } })), null, 'a peer message is not the user typing');
+  assert.equal(lastReflectAt(tx(human(4, 'please /reflect later'))), null, 'a mention mid-sentence');
+  assert.equal(lastReflectAt(tx(human(4, '/reflection'))), null, 'another command');
+});
+
+test('humanRepliedAfter: only a genuine human user record after the cutoff', () => {
+  const cut = Date.now() - 10 * 60_000;
+  const h = (r) => humanRepliedAfter(JSON.stringify(r), cut);
+  assert.equal(h(human(5)), true);
+  assert.equal(h(human(15)), false, 'before the cutoff');
+  assert.equal(h({ ...human(5), isMeta: true }), false, 'hook feedback or reminder');
+  assert.equal(h({ ...human(5), origin: { kind: 'peer' } }), false, 'peer message');
+  assert.equal(h(at(5, result('t'))), false, 'a tool result is not a reply');
 });
 
 test('a reflect read older than 60 min does not cover a later merge', () => {
@@ -176,7 +201,7 @@ test('continuationAsked accepts the option labels skills/continuation/SKILL.md n
 
 test('after reflect read post-merge: blocks once for the continuation ask, then stays quiet', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(...mergeAt('c1', 30), reflectRead('r', 10));
+  const transcript_path = transcript(...mergeAt('c1', 30), reflectRead('r', 10), human(8));
   const first = runHook({ transcript_path }, home);
   assert.equal(first.code, 2);
   assert.match(first.stderr, /continuation\/SKILL\.md/);
@@ -185,9 +210,21 @@ test('after reflect read post-merge: blocks once for the continuation ask, then 
   assert.equal(runHook({ transcript_path }, home).code, 0, 'one block per merge');
 });
 
-test('reflect landing PR (merge within 60 min after the read) also needs the continuation ask', () => {
+test('mid-reflect dialogue pause (no human reply since the read): passes without spending the one block', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(reflectRead('r', 10), ...mergeAt('c2', 5));
+  const paused = transcript(...mergeAt('c2', 30), reflectRead('r', 10));
+  assert.equal(runHook({ transcript_path: paused }, home).code, 0, 'reflect is waiting on the user');
+  const state = () => JSON.parse(readFileSync(join(home, '.claude', 'stop-reflect-gate.json'), 'utf8'));
+  assert.equal(state().cont, undefined, 'nothing recorded');
+  const meta = transcript(...mergeAt('c2', 30), reflectRead('r', 10), { ...human(8), isMeta: true });
+  assert.equal(runHook({ transcript_path: meta }, home).code, 0, 'hook feedback is not a reply');
+  const replied = transcript(...mergeAt('c2', 30), reflectRead('r', 10), human(8));
+  assert.equal(runHook({ transcript_path: replied }, home).code, 2, 'the user replied: the block is still available');
+});
+
+test('a user-typed /reflect after the merge opens the continuation gate once the user replies', () => {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const transcript_path = transcript(...mergeAt('c2b', 30), human(10, '/reflect'), human(6, 'looks good'));
   const r = runHook({ transcript_path }, home);
   assert.equal(r.code, 2);
   assert.match(r.stderr, /continuation/);
@@ -196,18 +233,18 @@ test('reflect landing PR (merge within 60 min after the read) also needs the con
 test('a fresh-session-or-continue ask after reflect satisfies the gate (old clear wording too)', () => {
   for (const input of [freshQ, clearQ, optionsOnly]) {
     const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-    const transcript_path = transcript(...mergeAt('c3', 30), reflectRead('r', 10), ask(2, input));
+    const transcript_path = transcript(...mergeAt('c3', 30), reflectRead('r', 10), human(8), ask(2, input));
     assert.equal(runHook({ transcript_path }, home).code, 0);
   }
 });
 
 test('an unrelated ask, a reflect debt ask, or a clear-or-continue ask before the reflect read, still blocks', () => {
   const h1 = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c4', 30), reflectRead('r', 10), ask(2, unrelated)) }, h1).code, 2);
+  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c4', 30), reflectRead('r', 10), human(8), ask(2, unrelated)) }, h1).code, 2);
   const h3 = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c4b', 30), reflectRead('r', 10), ask(2, debtQ)) }, h3).code, 2, 'the #178 debt ask');
+  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c4b', 30), reflectRead('r', 10), human(8), ask(2, debtQ)) }, h3).code, 2, 'the #178 debt ask');
   const h2 = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c5', 30), ask(20, clearQ), reflectRead('r', 10)) }, h2).code, 2);
+  assert.equal(runHook({ transcript_path: transcript(...mergeAt('c5', 30), ask(20, clearQ), reflectRead('r', 10), human(8)) }, h2).code, 2);
 });
 
 test('no reflect read: only the reflect reminder applies, and the continuation gate stays quiet after it', () => {
@@ -221,7 +258,7 @@ test('no reflect read: only the reflect reminder applies, and the continuation g
 
 test('old state files without cont still work, and cont keeps the reminder ids', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(...mergeAt('c7', 30), reflectRead('r', 10));
+  const transcript_path = transcript(...mergeAt('c7', 30), reflectRead('r', 10), human(8));
   mkdirSync(join(home, '.claude'), { recursive: true });
   writeFileSync(join(home, '.claude', 'stop-reflect-gate.json'), JSON.stringify({ ids: ['c7'] }));
   assert.equal(runHook({ transcript_path }, home).code, 2, 'reminder already handled, continuation gate fires');
@@ -231,7 +268,7 @@ test('old state files without cont still work, and cont keeps the reminder ids',
 
 test('stop_hook_active passes even when the second-gate conditions are met', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
-  const transcript_path = transcript(...mergeAt('c1b', 30), reflectRead('r', 10));
+  const transcript_path = transcript(...mergeAt('c1b', 30), reflectRead('r', 10), human(8));
   assert.equal(runHook({ transcript_path, stop_hook_active: true }, home).code, 0);
   assert.equal(runHook({ transcript_path }, home).code, 2, 'the passed retry recorded nothing');
 });

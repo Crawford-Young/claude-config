@@ -14,10 +14,12 @@
 // reflect skill's other trigger; no mechanical signal marks it, so it stays
 // prose. Every failure path (no transcript, unreadable state) passes.
 //
-// A merge within REFLECT_COVERS_MS of a reflect SKILL.md read (or reflect
-// Skill call) is marked handled without blocking. That merge is the reflect's
-// own landing PR. It fired falsely on PR #94 (2026-10-08, #76): 1 of the
-// gate's 4 blocks on disk.
+// A merge that precedes a reflect SKILL.md read (or reflect Skill call, or a
+// user-typed /reflect) is marked handled without blocking: reflect already ran
+// for it. A merge AFTER a reflect always gets its reminder, even within the hour
+// (#140): the old 60-min "that is reflect's own landing PR" heuristic also hid a
+// real next wave. The cost is one extra reminder on reflect's own landing PR,
+// which the reminder text lets the model dismiss in a line.
 //
 // Second gate (issue #122): once reflect has run for the merge (read after it,
 // or the merge is reflect's own landing PR), the turn may not end until an
@@ -25,7 +27,9 @@
 // or clear in the older wording, plus one labelled continue: the labels skills/continuation/SKILL.md
 // names, #178) was asked after that read and the merge. The tool call is
 // matched, not a marker word: the continuation skill mandates the call. One
-// block per merge, tracked under `cont` in the same state file.
+// block per merge, tracked under `cont` in the same state file. It waits for a
+// genuine human reply after the reflect read (humanRepliedAfter): before that,
+// reflect is paused on its dialogue and the single block would be spent there (#140).
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,7 +39,6 @@ import { clauses, gatedVerbs, scrub } from './bash-guard.mjs';
 
 const stateFile = join(claudeDir, 'stop-reflect-gate.json');
 const MERGE_TOOLS = new Set(['Bash', 'PowerShell']);
-const REFLECT_COVERS_MS = 60 * 60_000;
 const REFLECT_SKILL = /skills[\\/]reflect[\\/]SKILL\.md$/i;
 
 /** Does this command run a real (not `--auto`-queued) `gh pr merge`? */
@@ -73,7 +76,34 @@ export function lastMerge(text) {
   return newestMerge(text)?.id ?? null;
 }
 
-/** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), or reflect Skill call, else null. */
+/** Text of a genuine human-typed user record (origin.kind "human", not isMeta), else null.
+ *  Stop-hook feedback, peer messages and reminders are isMeta or carry another origin. */
+function humanText(o) {
+  if (o?.type !== 'user' || o.isMeta || o.origin?.kind !== 'human') return null;
+  const c = o.message?.content;
+  if (typeof c === 'string') return c;
+  return Array.isArray(c) ? c.filter((x) => x?.type === 'text' && typeof x.text === 'string').map((x) => x.text).join('\n') : null;
+}
+
+const TYPED_REFLECT = /^\s*(?:\/reflect\b|<command-name>\s*\/?reflect\s*<\/command-name>)/;
+
+/** Is there a genuine human reply (see humanText) timestamped after `after` (epoch ms)? */
+export function humanRepliedAfter(text, after) {
+  for (const l of text.split('\n')) {
+    if (!l.includes('"user"')) continue;
+    let o;
+    try {
+      o = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    const t = Date.parse(o?.timestamp);
+    if (!Number.isNaN(t) && t > after && humanText(o) !== null) return true;
+  }
+  return false;
+}
+
+/** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), reflect Skill call, or user-typed /reflect, else null. */
 export function lastReflectAt(text) {
   let at = null;
   for (const l of text.split('\n')) {
@@ -84,7 +114,8 @@ export function lastReflectAt(text) {
     } catch {
       continue;
     }
-    const hit = (Array.isArray(o?.message?.content) ? o.message.content : []).some(
+    const typed = TYPED_REFLECT.test(humanText(o) ?? '');
+    const hit = typed || (Array.isArray(o?.message?.content) ? o.message.content : []).some(
       (c) =>
         c.type === 'tool_use' &&
         ((c.name === 'Read' && REFLECT_SKILL.test(c.input?.file_path || '')) ||
@@ -145,9 +176,11 @@ function main() {
     const state = readState(stateFile);
     const handled = Array.isArray(state.ids) ? state.ids : [];
     const reflectAt = lastReflectAt(text);
+    const mergeAt = merge.at ?? Date.now();
+    const reflectedAfterMerge = reflectAt !== null && reflectAt > mergeAt;
     if (!handled.includes(id)) {
       writeState(stateFile, { ...state, ids: [...handled, id].slice(-200) });
-      if (Date.now() - (reflectAt ?? 0) >= REFLECT_COVERS_MS) {
+      if (!reflectedAfterMerge) {
         block(
           `A PR merged this session. Before ending: prompt the user to run reflect now — Read ~/code/claude-config/skills/reflect/SKILL.md — or to explicitly skip it. This fires once per merge. If the user has already declined, say that and end the turn; do not run reflect on a wave this session did not execute.`,
         );
@@ -156,8 +189,8 @@ function main() {
     }
 
     // Second gate: reflect ran for this merge, but no fresh-session-or-continue ask followed it.
-    const mergeAt = merge.at ?? Date.now();
-    if (reflectAt === null || !(reflectAt > mergeAt || mergeAt - reflectAt < REFLECT_COVERS_MS)) return;
+    // No human reply since the read means reflect is paused on its dialogue: pass without spending the block.
+    if (!reflectedAfterMerge || !humanRepliedAfter(text, reflectAt)) return;
     const cur = readState(stateFile);
     const asked = Array.isArray(cur.cont) ? cur.cont : [];
     if (asked.includes(id) || continuationAsked(text, Math.max(reflectAt, mergeAt))) return;
