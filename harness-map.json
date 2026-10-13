@@ -675,7 +675,7 @@
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-name rows keyed by lib's sessionKey, timestamp timelines for the time dimension."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-name rows keyed by lib's sessionKey, timestamp timelines for the time dimension; agentMix per type × model × effort; checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
   },
   {
    "id": "store:push-gate-approvals",

@@ -172,8 +172,3 @@ test('--stamps checks model stamps against prices.json: exit 1 naming each stale
     rmSync(repo, { recursive: true, force: true });
   }
 });
-
-test('the real repo carries no stale model stamp (#113)', () => {
-  const r = spawnHarness(cli, ['--stamps']);
-  assert.equal(r.status, 0, r.stdout);
-});

@@ -793,11 +793,12 @@ function stampScope(rest) {
 
 /** Model mentions in `verified: YYYY-MM …` stamps that name an older version than the
  *  current generation of their line. A model of a line prices.json doesn't know, or a
- *  newer one, is not stale. -> [{ line (1-based), model, modelLine, current }] */
+ *  newer one, is not stale. A dated snapshot (claude-opus-5-20260101) reads as its base
+ *  version; a model ending a sentence ("Opus 4.7.") is still read. -> [{ line (1-based), model, modelLine, current }] */
 export function staleStamps(text, gens) {
   const lineNames = Object.keys(gens);
   if (!lineNames.length) return [];
-  const mention = new RegExp(String.raw`\b(?:claude-)?(${lineNames.join('|')})[\s-]+(\d+(?:[.-]\d+)?)(?![\d.])`, 'gi');
+  const mention = new RegExp(String.raw`\b(?:claude-)?(${lineNames.join('|')})[\s-]+(\d{1,2}(?:[.-]\d{1,2})?)(?:-\d{8})?(?!\d|\.\d)`, 'gi');
   const out = [];
   String(text).split(/\r?\n/).forEach((row, i) => {
     for (const stamp of row.matchAll(/verified:\s*\d{4}-\d{2}(?:-\d{2})?/g)) {
@@ -828,11 +829,11 @@ function markdownUnder(root, dir, only) {
   return out;
 }
 
-/** Stale model stamps in the CLAUDE.md chain (workspace/), agents/ and skills/ of the
+/** Stale model stamps in the CLAUDE.md chain (workspace/), workspace/docs/, agents/ and skills/ of the
  *  claude-config checkout at root. -> [{ file, line, model, modelLine, current }] */
 export function checkStamps(root, prices) {
   const gens = currentGenerations(prices);
-  const files = [...markdownUnder(root, 'workspace', 'CLAUDE.md'), ...markdownUnder(root, 'agents'), ...markdownUnder(root, 'skills')];
+  const files = [...markdownUnder(root, 'workspace', 'CLAUDE.md'), ...markdownUnder(root, 'workspace/docs'), ...markdownUnder(root, 'agents'), ...markdownUnder(root, 'skills')];
   return files.flatMap((file) => staleStamps(readFileSync(join(root, file), 'utf8'), gens).map((s) => ({ file, ...s })));
 }
 

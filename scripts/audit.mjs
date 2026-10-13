@@ -8,8 +8,8 @@
 // subagents follow the window they ran in.
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
 // Agent spend is also split per type × model × effort (#113). --stamps reads no
-// transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, agents/
-// and skills/ of --repo (default this checkout) that names a model older than its
+// transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, workspace/docs/,
+// agents/ and skills/ of --repo (default this checkout) that names a model older than its
 // line's newest in prices.json, and exits 1 if there is one (a normal run warns too).
 // Accounting: audit-lib.mjs.
 //

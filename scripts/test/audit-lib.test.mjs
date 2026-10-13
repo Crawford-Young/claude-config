@@ -925,6 +925,14 @@ test('agentMix: the rows of a type add up to its per-type runs and $', () => {
   assert.equal(rev.reduce((a, m) => a + m.usd, 0), r.agents.reviewer.usd);
 });
 
+test('agentMix: a run split evenly between two settings is filed under the costlier one', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(reqAt('t1', 'claude-haiku-4-5', 'high'), sub('t'));
+  c.add(reqAt('t2', 'claude-opus-5', 'medium'), sub('t'));
+  const rows = c.report().agentMix.map(({ model, effort, runs, mixedRuns, usd }) => [model, effort, runs, mixedRuns, usd]);
+  assert.deepEqual(rows, [['claude-opus-5', 'medium', 1, 1, 6]]);
+});
+
 test('agentMix renders one row per setting with $/run; a missing effort reads "not recorded"', () => {
   const md = renderMarkdown(mixFixture());
   assert.match(md, /## Per agent type × model × effort/);
@@ -951,6 +959,17 @@ test('staleStamps: a stamp naming an older model of its line is stale; the curre
   assert.deepEqual(staleOf('(verified: 2026-08, Opus 4.7)'), [[1, 'Opus 4.7', '5.5']]);
 });
 
+test('staleStamps: a model that ends a sentence is still read', () => {
+  assert.deepEqual(staleOf('verified: 2026-10, Opus 4.7.'), [[1, 'Opus 4.7', '5.5']]);
+  assert.deepEqual(staleOf('verified: 2026-10, Opus 5.'), [[1, 'Opus 5', '5.5']]);
+  assert.deepEqual(staleOf('verified: 2026-10, Opus 5.5.'), []);
+});
+
+test('staleStamps: a dated snapshot is read as its base version, not its date', () => {
+  assert.deepEqual(staleOf('(verified: 2026-10, claude-opus-5-20260101)'), [[1, 'claude-opus-5-20260101', '5.5']]);
+  assert.deepEqual(staleOf('(verified: 2026-10, claude-opus-5-5-20260101)'), []);
+});
+
 test('staleStamps: every model a stamp names is checked, and only inside the stamp', () => {
   assert.deepEqual(staleOf('(verified: 2026-10, Opus 5.5 + Sonnet 5 defaults)'), [[1, 'Sonnet 5', '5.5']]);
   assert.deepEqual(staleOf('Opus 4 used to fail here (verified: 2026-10, Opus 5.5) and Sonnet 4 too'), []);
@@ -963,7 +982,7 @@ test('staleStamps: issue-only stamps, unknown lines and models newer than prices
   assert.deepEqual(staleOf('Opus 4 with no stamp at all'), []);
 });
 
-test('checkStamps scans the CLAUDE.md chain, agents/ and skills/, nothing else', () => {
+test('checkStamps scans the CLAUDE.md chain, workspace/docs/, agents/ and skills/, nothing else', () => {
   const root = mkdtempSync(join(tmpdir(), 'stamps-'));
   try {
     const put = (rel, text) => {
@@ -978,8 +997,10 @@ test('checkStamps scans the CLAUDE.md chain, agents/ and skills/, nothing else',
     put('skills/x/references/more.md', old);
     put('docs/notes.md', old);
     put('workspace/docs/api.md', old);
+    put('workspace/docs/deep/more.md', old);
+    put('workspace/notes.md', old);
     const found = checkStamps(root, GEN_PRICES).map(({ file, line }) => `${file}:${line}`);
-    assert.deepEqual(found.sort(), ['agents/ROUTING.md:1', 'skills/x/SKILL.md:1', 'skills/x/references/more.md:1', 'workspace/CLAUDE.md:2', 'workspace/web/CLAUDE.md:1']);
+    assert.deepEqual(found.sort(), ['agents/ROUTING.md:1', 'skills/x/SKILL.md:1', 'skills/x/references/more.md:1', 'workspace/CLAUDE.md:2', 'workspace/docs/api.md:1', 'workspace/docs/deep/more.md:1', 'workspace/web/CLAUDE.md:1']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
