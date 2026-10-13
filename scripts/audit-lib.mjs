@@ -17,6 +17,9 @@
 //   the rule is strate's store/group.rs, settled on real data). Rows group per unit
 //   on lib's sessionKey, so a legacy and a typed name of one unit join (#175).
 //   ai-title and agent-name records carry auto names, not unit names (#73).
+// - An assistant record carries the request's effort as a top-level `effort` field
+//   (#113; on every subagent record of CC 2.1.26x-2.1.296 on disk 2026-10-13, except
+//   Haiku 4.5, whose records have none: its effort is unknown, not a default).
 //
 // cost-state facts (#116, measured 2026-10-12 on 29 sessions, CC 2.1.263-2.1.295):
 // - A {type:'cost-state'} record is Claude Code's running total for the session,
@@ -45,7 +48,7 @@
 //   and gaps thin out sharply past 10 min (p90 human think time 10.8 min), and
 //   Bash's 10-min timeout caps any foreground tool run, so no tool is cut as idle.
 
-import { createReadStream, readFileSync } from 'node:fs';
+import { createReadStream, readdirSync, readFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -407,7 +410,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       const key = rec.requestId || rec.message?.id || rec.uuid;
       const prev = requests.get(key);
       if (!prev || (u.output_tokens || 0) > (prev.u.output_tokens || 0)) {
-        requests.set(key, { u, model, day: (rec.timestamp || '').slice(0, 10), ctx });
+        requests.set(key, { u, model, effort: rec.effort ?? prev?.effort ?? null, day: (rec.timestamp || '').slice(0, 10), ctx });
       }
       return;
     }
@@ -446,7 +449,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     const writeTiers = new Map(); // file + model -> cache-write tokens its transcript records, by tier
     const totals = { requests: 0, usd: 0, tokens: zero() };
     const days = new Map(), sessions = new Map(), agents = {}, agentRuns = {}, unpriced = {}, runUsd = new Map();
-    for (const { u, model, day, ctx } of requests.values()) {
+    const runSettings = new Map(); // agent id -> { type, settings: model\neffort -> { model, effort, requests, usd } }
+    for (const { u, model, effort, day, ctx } of requests.values()) {
       const { usd } = priceUsage(u, model, prices);
       const tk = tokensOf(u);
       if (usd === null) {
@@ -481,6 +485,11 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         bump(a.models, model);
         (agentRuns[ctx.agent.type] ||= new Set()).add(ctx.agent.id);
         runUsd.set(ctx.agent.id, (runUsd.get(ctx.agent.id) || 0) + cost);
+        const run = runSettings.get(ctx.agent.id) || runSettings.set(ctx.agent.id, { type: ctx.agent.type, settings: new Map() }).get(ctx.agent.id);
+        const sk = `${model}\n${effort}`;
+        const st = run.settings.get(sk) || run.settings.set(sk, { model, effort, requests: 0, usd: 0 }).get(sk);
+        st.requests++;
+        st.usd += cost;
       } else {
         const depth = depthOf(u);
         s.peakDepth = Math.max(s.peakDepth, depth);
@@ -490,6 +499,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       sessions.set(win, s);
     }
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
+    const agentMix = agentMixOf(runSettings);
 
     // cost-state is per transcript file: Claude Code's total beside the sum of the file's
     // windows. It counts more than the transcripts hold (see the header), so it is shown
@@ -553,6 +563,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         .sort((a, b) => b.usd - a.usd),
       names: [...names.values()].sort((a, b) => b.usd - a.usd),
       agents,
+      agentMix,
       skills,
       skillReads,
       slash,
@@ -728,6 +739,105 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
   return { add, report };
 }
+
+/** Per agent type × model × effort (#113): runs, requests and $. A run is filed whole
+ *  under the setting most of its requests used (ties: the costlier), so a type's rows add
+ *  up to its per-type runs and $; mixedRuns counts the runs that also used another
+ *  setting. effort is null where the records carry none. Sorted by type, then $. */
+function agentMixOf(runSettings) {
+  const rows = new Map();
+  for (const { type, settings } of runSettings.values()) {
+    const all = [...settings.values()];
+    const main = all.reduce((a, b) => (b.requests > a.requests || (b.requests === a.requests && b.usd > a.usd) ? b : a));
+    const key = `${type}\n${main.model}\n${main.effort}`;
+    const row = rows.get(key) || rows.set(key, { type, model: main.model, effort: main.effort, runs: 0, mixedRuns: 0, requests: 0, usd: 0 }).get(key);
+    row.runs++;
+    if (all.length > 1) row.mixedRuns++;
+    for (const s of all) {
+      row.requests += s.requests;
+      row.usd += s.usd;
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.type.localeCompare(b.type) || b.usd - a.usd);
+}
+
+// ---- model stamps (#113) -----------------------------------------------------
+
+/** "claude-opus-5-5" -> ['opus', '5.5']; a dated snapshot's date is no version part. */
+const MODEL_ID = /^claude-([a-z]+)-(\d+(?:-\d+)*?)(?:-\d{8})?$/;
+const versionParts = (v) => v.split('.').map(Number);
+function compareVersions(a, b) {
+  const [x, y] = [versionParts(a), versionParts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+  return 0;
+}
+
+/** The current generation of each model line: the newest version prices.json prices. */
+export function currentGenerations(prices) {
+  const gens = {};
+  for (const id of Object.keys(prices.models || {})) {
+    const m = MODEL_ID.exec(id);
+    if (!m) continue;
+    const v = m[2].replace(/-/g, '.');
+    if (!gens[m[1]] || compareVersions(v, gens[m[1]]) > 0) gens[m[1]] = v;
+  }
+  return gens;
+}
+
+/** The text a stamp covers: "(verified: 2026-10, Opus 5.5)" -> ", Opus 5.5"; a stamp
+ *  whose models sit in their own parentheses, "verified: 2026-10 (Opus 5.5)", -> "Opus 5.5". */
+function stampScope(rest) {
+  const own = /^\s*\(([^)]*)\)/.exec(rest);
+  return own ? own[1] : rest.split(')')[0];
+}
+
+/** Model mentions in `verified: YYYY-MM …` stamps that name an older version than the
+ *  current generation of their line. A model of a line prices.json doesn't know, or a
+ *  newer one, is not stale. -> [{ line (1-based), model, modelLine, current }] */
+export function staleStamps(text, gens) {
+  const lineNames = Object.keys(gens);
+  if (!lineNames.length) return [];
+  const mention = new RegExp(String.raw`\b(?:claude-)?(${lineNames.join('|')})[\s-]+(\d+(?:[.-]\d+)?)(?![\d.])`, 'gi');
+  const out = [];
+  String(text).split(/\r?\n/).forEach((row, i) => {
+    for (const stamp of row.matchAll(/verified:\s*\d{4}-\d{2}(?:-\d{2})?/g)) {
+      const scope = stampScope(row.slice(stamp.index + stamp[0].length));
+      for (const m of scope.matchAll(mention)) {
+        const modelLine = m[1].toLowerCase();
+        const current = gens[modelLine];
+        if (compareVersions(m[2].replace(/-/g, '.'), current) < 0) out.push({ line: i + 1, model: m[0], modelLine, current });
+      }
+    }
+  });
+  return out;
+}
+
+/** Repo-relative .md files under dir (recursive); `only` keeps one file name. */
+function markdownUnder(root, dir, only) {
+  const out = [];
+  const walk = (rel) => {
+    let entries;
+    try { entries = readdirSync(join(root, rel), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const path = `${rel}/${e.name}`;
+      if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) walk(path);
+      else if (e.isFile() && (only ? e.name === only : e.name.endsWith('.md'))) out.push(path);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+/** Stale model stamps in the CLAUDE.md chain (workspace/), agents/ and skills/ of the
+ *  claude-config checkout at root. -> [{ file, line, model, modelLine, current }] */
+export function checkStamps(root, prices) {
+  const gens = currentGenerations(prices);
+  const files = [...markdownUnder(root, 'workspace', 'CLAUDE.md'), ...markdownUnder(root, 'agents'), ...markdownUnder(root, 'skills')];
+  return files.flatMap((file) => staleStamps(readFileSync(join(root, file), 'utf8'), gens).map((s) => ({ file, ...s })));
+}
+
+/** One stale stamp as a report line. */
+export const stampLine = (s) => `${s.file}:${s.line} names ${s.model}, older than the current ${s.modelLine} ${s.current} in prices.json`;
 
 /** readdir that treats an unreadable or vanished directory as empty. */
 const safeReaddir = async (dir) => {
@@ -933,6 +1043,7 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   }
   out.push(...priceCheckLines(r.priceCheck));
   for (const [m, x] of Object.entries(r.unpriced)) out.push(`⚠ unpriced model ${m}: ${x.requests} requests, ${kt(x.tokens)} tokens — add it to prices.json`);
+  for (const s of r.staleStamps || []) out.push(`⚠ stale model stamp ${stampLine(s)} — re-verify the claim on the current model`);
   out.push('', '## Per day (UTC)');
   out.push(table(['day', 'sessions', 'requests', '$', 'peak depth'], r.days.map((d) => [d.day, d.sessions, d.requests, usd(d.usd), kt(d.peakDepth)])));
   out.push('', `## Sessions (top ${top} by $)`);
@@ -947,6 +1058,9 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   out.push(table(['type', 'runs', 'requests', '$', '$/run', 'models'],
     Object.entries(r.agents).sort((a, b) => b[1].usd - a[1].usd)
       .map(([k, a]) => [k, a.runs, a.requests, usd(a.usd), usd(a.usd / a.runs), byCount(a.models).map(([m, c]) => `${m}×${c}`).join(', ')])));
+  out.push('', '## Per agent type × model × effort', '(a run is filed whole under the setting most of its requests used; mixed: runs that also used another)');
+  out.push(table(['type', 'model', 'effort', 'runs', 'mixed', 'requests', '$', '$/run'],
+    (r.agentMix || []).map((m) => [m.type, m.model, m.effort ?? 'not recorded', m.runs, m.mixedRuns, m.requests, usd(m.usd), usd(m.usd / m.runs)])));
   out.push('', '## Invocations');
   out.push('**Skill tool calls**', table(['skill', 'calls'], byCount(r.skills)));
   out.push('', '**SKILL.md reads**', table(['skill', 'reads'], byCount(r.skillReads)));

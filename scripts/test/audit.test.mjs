@@ -140,3 +140,40 @@ test('--session with no matching window exits 1 and says so', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('--json carries agentMix: a subagent run under its model and the effort its records carry (#113)', () => {
+  const root = fixture();
+  try {
+    const proj = join(root, 'C--proj');
+    const [rec] = req('x2', 'a');
+    writeFileSync(join(proj, 'a', 'subagents', 'agent-x.jsonl'), lines({ ...rec, effort: 'low' }));
+    writeFileSync(join(proj, 'a', 'subagents', 'agent-x.meta.json'), JSON.stringify({ agentType: 'recon' }));
+    const r = spawnHarness(cli, ['--root', root, '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout).agentMix.map(({ type, model, effort, runs }) => [type, model, effort, runs]), [['recon', 'claude-opus-5', 'low', 1]]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--stamps checks model stamps against prices.json: exit 1 naming each stale one, 0 when clean (#113)', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'audit-stamps-'));
+  try {
+    mkdirSync(join(repo, 'agents'), { recursive: true });
+    writeFileSync(join(repo, 'agents', 'ROUTING.md'), 'a\nrule (verified: 2026-08, Opus 4.7)\n');
+    const stale = spawnHarness(cli, ['--stamps', '--repo', repo]);
+    assert.equal(stale.status, 1, stale.stderr);
+    assert.match(stale.stdout, /agents\/ROUTING\.md:2 .*Opus 4\.7.*opus 5\.5/);
+    writeFileSync(join(repo, 'agents', 'ROUTING.md'), 'rule (verified: 2026-10, Opus 5.5)\n');
+    const clean = spawnHarness(cli, ['--stamps', '--repo', repo]);
+    assert.equal(clean.status, 0, clean.stderr);
+    assert.match(clean.stdout, /no stale model stamps/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('the real repo carries no stale model stamp (#113)', () => {
+  const r = spawnHarness(cli, ['--stamps']);
+  assert.equal(r.status, 0, r.stdout);
+});

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { commandHead, createCollector, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
+import { checkStamps, commandHead, createCollector, currentGenerations, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, staleStamps, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
 const PRICES = {
@@ -884,4 +884,103 @@ test('walkTranscripts follows a symlinked project directory', async (t) => {
   const found = [];
   for await (const f of walkTranscripts(root)) found.push(f.file);
   assert.deepEqual(found, [join(root, 'linked', 's.jsonl')]);
+});
+
+// ---- type × model × effort (#113) ----------------------------------------------
+
+const sub = (id, type = 'reviewer') => ({ sessionId: 's1', agent: { id, type } });
+const reqAt = (requestId, model, effort) => ({ ...asst(requestId, usage({ input_tokens: 1e6 }), { model }), ...(effort && { effort }) });
+
+function mixFixture() {
+  const c = createCollector({ prices: PRICES });
+  c.add(reqAt('a1-1', 'claude-opus-5', 'high'), sub('a1'));
+  c.add(reqAt('a1-2', 'claude-opus-5', 'high'), sub('a1'));
+  c.add(reqAt('a2-1', 'claude-opus-5', 'medium'), sub('a2'));
+  // Haiku 4.5 records carry no effort field: the setting is unknown, not a default
+  c.add(reqAt('a3-1', 'claude-haiku-4-5', undefined), sub('a3'));
+  // a run that changed effort mid-way is one run, filed under the setting most of its requests used
+  c.add(reqAt('a4-1', 'claude-opus-5', 'high'), sub('a4'));
+  c.add(reqAt('a4-2', 'claude-opus-5', 'high'), sub('a4'));
+  c.add(reqAt('a4-3', 'claude-opus-5', 'medium'), sub('a4'));
+  c.add(reqAt('i1-1', 'claude-opus-5', 'medium'), sub('i1', 'implementer'));
+  // the main thread is no agent type
+  c.add(reqAt('m1', 'claude-opus-5', 'high'), MAIN);
+  return c.report();
+}
+
+test('agentMix: $ and runs per agent type × model × effort, each run filed whole under its main setting', () => {
+  const rows = mixFixture().agentMix.map(({ type, model, effort, runs, mixedRuns, requests, usd }) => [type, model, effort, runs, mixedRuns, requests, usd]);
+  assert.deepEqual(rows, [
+    ['implementer', 'claude-opus-5', 'medium', 1, 0, 1, 5],
+    ['reviewer', 'claude-opus-5', 'high', 2, 1, 5, 25],
+    ['reviewer', 'claude-opus-5', 'medium', 1, 0, 1, 5],
+    ['reviewer', 'claude-haiku-4-5', null, 1, 0, 1, 1],
+  ]);
+});
+
+test('agentMix: the rows of a type add up to its per-type runs and $', () => {
+  const r = mixFixture();
+  const rev = r.agentMix.filter((m) => m.type === 'reviewer');
+  assert.equal(rev.reduce((a, m) => a + m.runs, 0), r.agents.reviewer.runs);
+  assert.equal(rev.reduce((a, m) => a + m.usd, 0), r.agents.reviewer.usd);
+});
+
+test('agentMix renders one row per setting with $/run; a missing effort reads "not recorded"', () => {
+  const md = renderMarkdown(mixFixture());
+  assert.match(md, /## Per agent type × model × effort/);
+  assert.match(md, /\| reviewer \| claude-opus-5 \| high \| 2 \| 1 \| 5 \| \$25\.00 \| \$12\.50 \|/);
+  assert.match(md, /\| reviewer \| claude-haiku-4-5 \| not recorded \| 1 \| 0 \| 1 \| \$1\.00 \| \$1\.00 \|/);
+});
+
+// ---- stale model stamps (#113) -------------------------------------------------
+
+const GEN_PRICES = { models: {
+  'claude-fable-5-1': {}, 'claude-opus-5-5': {}, 'claude-opus-5': {}, 'claude-sonnet-5-5': {}, 'claude-sonnet-5': {}, 'claude-haiku-4-5-20251001': {},
+} };
+
+test('currentGenerations: the newest version of each line in prices.json; a date suffix is no version', () => {
+  assert.deepEqual(currentGenerations(GEN_PRICES), { fable: '5.1', opus: '5.5', sonnet: '5.5', haiku: '4.5' });
+});
+
+const staleOf = (text) => staleStamps(text, currentGenerations(GEN_PRICES)).map(({ line, model, current }) => [line, model, current]);
+
+test('staleStamps: a stamp naming an older model of its line is stale; the current one is not', () => {
+  assert.deepEqual(staleOf('a rule (verified: 2026-10, Opus 5)'), [[1, 'Opus 5', '5.5']]);
+  assert.deepEqual(staleOf('a rule (verified: 2026-10, Opus 5.5)'), []);
+  assert.deepEqual(staleOf('x\n(verified: 2026-09 (claude-sonnet-5))'), [[2, 'claude-sonnet-5', '5.5']]);
+  assert.deepEqual(staleOf('(verified: 2026-08, Opus 4.7)'), [[1, 'Opus 4.7', '5.5']]);
+});
+
+test('staleStamps: every model a stamp names is checked, and only inside the stamp', () => {
+  assert.deepEqual(staleOf('(verified: 2026-10, Opus 5.5 + Sonnet 5 defaults)'), [[1, 'Sonnet 5', '5.5']]);
+  assert.deepEqual(staleOf('Opus 4 used to fail here (verified: 2026-10, Opus 5.5) and Sonnet 4 too'), []);
+});
+
+test('staleStamps: issue-only stamps, unknown lines and models newer than prices.json are not stale', () => {
+  assert.deepEqual(staleOf('(verified: 2026-10, #80, #89)'), []);
+  assert.deepEqual(staleOf('(verified: 2026-10, Mythos 1)'), []);
+  assert.deepEqual(staleOf('(verified: 2026-10, Haiku 5.5)'), []);
+  assert.deepEqual(staleOf('Opus 4 with no stamp at all'), []);
+});
+
+test('checkStamps scans the CLAUDE.md chain, agents/ and skills/, nothing else', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stamps-'));
+  try {
+    const put = (rel, text) => {
+      mkdirSync(join(root, rel, '..'), { recursive: true });
+      writeFileSync(join(root, rel), text);
+    };
+    const old = 'rule (verified: 2026-09, Opus 5)\n';
+    put('workspace/CLAUDE.md', 'ok (verified: 2026-10, Opus 5.5)\n' + old);
+    put('workspace/web/CLAUDE.md', old);
+    put('agents/ROUTING.md', old);
+    put('skills/x/SKILL.md', old);
+    put('skills/x/references/more.md', old);
+    put('docs/notes.md', old);
+    put('workspace/docs/api.md', old);
+    const found = checkStamps(root, GEN_PRICES).map(({ file, line }) => `${file}:${line}`);
+    assert.deepEqual(found.sort(), ['agents/ROUTING.md:1', 'skills/x/SKILL.md:1', 'skills/x/references/more.md:1', 'workspace/CLAUDE.md:2', 'workspace/web/CLAUDE.md:1']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

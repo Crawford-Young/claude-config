@@ -7,10 +7,15 @@
 // legacy and typed forms alike: a file splits at each custom title (#115), and its
 // subagents follow the window they ran in.
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
+// Agent spend is also split per type × model × effort (#113). --stamps reads no
+// transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, agents/
+// and skills/ of --repo (default this checkout) that names a model older than its
+// line's newest in prices.json, and exits 1 if there is one (a normal run warns too).
 // Accounting: audit-lib.mjs.
 //
 //   node scripts/audit.mjs [--session <name>] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--idle-gap <min>]
 //                          [--root <projects dir>] [--docs <prefix,…>] [--top N] [--json]
+//   node scripts/audit.mjs --stamps [--repo <claude-config dir>]
 //
 // Window: only what's on disk. Claude Code deletes transcripts older than
 // settings.json `cleanupPeriodDays` (default 30).
@@ -19,17 +24,17 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createCollector, renderMarkdown, transcriptWindows } from './audit-lib.mjs';
+import { checkStamps, createCollector, renderMarkdown, stampLine, transcriptWindows } from './audit-lib.mjs';
 import { sessionKey } from './lib.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 function args(argv) {
-  const o = { root: join(homedir(), '.claude', 'projects'), docs: 'code/docs/,claude-config/', top: 15 };
+  const o = { root: join(homedir(), '.claude', 'projects'), repo: join(here, '..'), docs: 'code/docs/,claude-config/', top: 15 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--json') o.json = true;
-    else if (['--session', '--since', '--until', '--root', '--docs', '--top', '--idle-gap'].includes(a)) o[a.slice(2)] = argv[++i];
+    if (a === '--json' || a === '--stamps') o[a.slice(2)] = true;
+    else if (['--session', '--since', '--until', '--root', '--docs', '--top', '--idle-gap', '--repo'].includes(a)) o[a.slice(2)] = argv[++i];
     else throw new Error(`unknown argument: ${a}`);
   }
   for (const k of ['since', 'until']) if (o[k] && !/^\d{4}-\d{2}-\d{2}$/.test(o[k])) throw new Error(`--${k} wants YYYY-MM-DD`);
@@ -38,10 +43,17 @@ function args(argv) {
 }
 
 const o = args(process.argv.slice(2));
+const prices = JSON.parse(readFileSync(join(here, 'prices.json'), 'utf8'));
+const staleStamps = checkStamps(o.repo, prices);
+if (o.stamps) {
+  for (const s of staleStamps) console.log(stampLine(s));
+  if (!staleStamps.length) console.log('no stale model stamps');
+  process.exit(staleStamps.length ? 1 : 0);
+}
 const wanted = o.session && sessionKey(o.session);
 const skillsDir = join(homedir(), '.claude', 'skills');
 const c = createCollector({
-  prices: JSON.parse(readFileSync(join(here, 'prices.json'), 'utf8')),
+  prices,
   since: o.since,
   until: o.until,
   docPrefixes: o.docs.split(',').filter(Boolean),
@@ -69,6 +81,6 @@ if (o.session && !files) {
   console.error(`no session named ${o.session} — a unit's windows get their name from its launch line: node ~/code/claude-config/scripts/session-name.mjs <type> <args>`);
   process.exit(1);
 }
-const report = c.report();
+const report = { ...c.report(), staleStamps };
 if (o.json) console.log(JSON.stringify({ files, ...report }, null, 2));
 else console.log(`# Transcript audit — ${files} transcripts${o.session ? ` named ${o.session}` : ''}${o.since ? ` from ${o.since}` : ''}${o.until ? ` to ${o.until}` : ''}\n\n${renderMarkdown(report, { top: +o.top })}`);
