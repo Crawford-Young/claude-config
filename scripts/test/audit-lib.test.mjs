@@ -1,7 +1,7 @@
 // scripts/test/audit-lib.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkStamps, commandHead, createCollector, currentGenerations, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, staleStamps, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
@@ -1004,4 +1004,16 @@ test('checkStamps scans the CLAUDE.md chain, workspace/docs/, agents/ and skills
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('the shipped prices.json prices a claude-haiku-5-5 record, dated ids included (#196)', () => {
+  const shipped = JSON.parse(readFileSync(new URL('../prices.json', import.meta.url), 'utf8'));
+  const m = shipped.models['claude-haiku-5-5'];
+  assert.ok(m, 'claude-haiku-5-5 is in prices.json');
+  const c = createCollector({ prices: shipped });
+  c.add(asst('rh', usage({ input_tokens: 1e6, output_tokens: 1e6 }), { model: 'claude-haiku-5-5' }), MAIN);
+  const r = c.report();
+  assert.notEqual(r.totals.usd, null);
+  assert.equal(r.totals.usd, m.input + m.output);
+  assert.equal(priceUsage(usage({ input_tokens: 1e6 }), 'claude-haiku-5-5-20261001', shipped).usd, m.input);
 });
