@@ -17,13 +17,26 @@
 //      --model=…, or a *MODEL env var set anywhere in the command) without a
 //      live FABLE OK marker — the same single-use clearance the Agent and
 //      /model gates spend (_hooklib.mjs), logged to the same dispatch log
-//   8. git push / gh pr create / gh pr merge without an approving answer in
+//   8. git push / gh pr create / gh pr merge without the user's approval in
 //      the transcript (CLAUDE.md: "No commit or push without explicit user
-//      approval"). `git push --dry-run` and a remote branch delete are exempt. Approval is read from the
-//      most recent user record carrying `toolUseResult.answers` — an
-//      AskUserQuestion answer the model cannot forge — and is single-use per
-//      verb, spent from a small state file keyed by that record's uuid, so
-//      one approving answer covers push → pr create → pr merge once each.
+//      approval"). `git push --dry-run` and a remote branch delete are exempt.
+//      Approval comes from the latest AskUserQuestion answer
+//      (`toolUseResult.answers`) and the latest prompt the user typed in an
+//      interactive session (#180: origin human, promptSource typed/queued/
+//      suggestion_accepted — never a tool result, peer or teammate message,
+//      task notification, hook or reminder injection, sidechain or claude -p
+//      prompt; pasted blocks and reminders inside it are cut). A --bg
+//      session's prompt or a process's first prompt, which a model can supply
+//      as a launch argument, never approves but still refuses.
+//      Newest first, the first that approves wins; an answer that doesn't
+//      approve blocks, and so does a typed prompt that refuses; a neutral
+//      typed prompt defers to the older. A typed approval is ship words only
+//      ("lgtm push and pr", "ok, merge it"), with no question mark.
+//      Residual: nothing stops a model appending a forged line to its own
+//      transcript file — true of the answer path since it was written.
+//      Approval is single-use per verb, spent from a small state file keyed
+//      by the approving record's uuid, so one approval covers push → pr
+//      create → pr merge once each.
 //      A command holding more than one gated verb is blocked outright (one
 //      gated verb per Bash call), so a compound never spends one approval twice.
 //      A remote branch delete (`push --delete`/`-d`, or every refspec `:branch`)
@@ -73,7 +86,6 @@ import {
   claudeDir,
   consumeClearance,
   denies,
-  latestAnswer,
   logBilled,
   readState,
   run,
@@ -927,6 +939,138 @@ export function isApproving(answers) {
   return Object.values(answers).some((v) => APPROVE_RE.test(v) && !denies(v, APPROVE_RE));
 }
 
+// Claude Code's own "user" prompt sources (its binary maps exactly these three
+// to "user"): typed at the prompt, queued while busy, or a suggestion the user
+// accepted. `sdk` (claude -p, Desktop), `system` (peer and teammate messages,
+// task notifications, scheduled wakeups) and no source at all (tool results,
+// hook feedback, reminders, command output, compact summaries) are not.
+const USER_PROMPT_SOURCES = new Set(['typed', 'queued', 'suggestion_accepted']);
+
+/** Is transcript record `o` a prompt entered at a session's prompt? */
+export function isUserPrompt(o) {
+  return (
+    o?.type === 'user' &&
+    !o.isMeta &&
+    !o.isSidechain &&
+    !o.isCompactSummary &&
+    o.toolUseResult === undefined &&
+    o.origin?.kind === 'human' &&
+    USER_PROMPT_SOURCES.has(o.promptSource)
+  );
+}
+
+/** Could user prompt `o` be a launch argument? A model can launch a session
+ *  itself, and its argument records as typed + human: `claude --bg` stamps
+ *  every record with `sessionKind`, and a positional prompt is its process's
+ *  first (`turnPosition.promptIndex` 1; latestApproval also checks for an
+ *  assistant turn before it, for records that predate turnPosition). Such a
+ *  prompt can't approve, but it still refuses or holds an older approval —
+ *  "stop" as the first prompt after --resume must count. */
+function launchShaped(o) {
+  return o.sessionKind !== undefined || o.turnPosition?.promptIndex === 1;
+}
+
+// Text inside a typed prompt that the user didn't write: pasted blocks and
+// appended reminders (an unclosed one runs to the end).
+const NOT_TYPED_RE = /<(pasted_content|system-reminder)\b[^>]*>[\s\S]*?(?:<\/\1>|$)/g;
+
+/** The text of user prompt record `o` with pasted blocks and reminders cut,
+ *  or null when its content is unreadable. */
+export function typedPromptText(o) {
+  const c = o?.message?.content;
+  const text =
+    typeof c === 'string'
+      ? c
+      : Array.isArray(c)
+        ? c.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n')
+        : null;
+  return text === null ? null : text.replace(NOT_TYPED_RE, ' ');
+}
+
+// A typed prompt is prose, not a picked option. Replaying real prompts, the
+// answer wording alone approved task briefs and asides ("its when the pr is
+// linked…", "keep commit."), and review probes got nouns, conditions and
+// retractions through ("PR #183 failed CI", "push it once I review", "Push —
+// actually no"). So a typed approval is ship words only, with a ship act.
+const SHIP_ACT_RE = /^(?:push|pr|merge|ship|land)$/i;
+const SHIP_WORDS = new Set(
+  'push pr merge ship land pull request commit open create raise rebase it them this that the a an all both branch changes again too also and then now please go ahead lgtm sgtm ok okay yes yep yeah sure great good looks fine perfect nice cool alright approved thanks ty'.split(' '),
+);
+// Typed words that take back an older approval (on top of the answer check's `denies`).
+const TYPED_REFUSE_RE = /\b(?:stop|cancel|abort|nope|nah|later|actually|hang on)\b/i;
+
+/** Does typed prompt text approve? Printable ASCII only (a word the check
+ *  can't read, "нет" or 🚫, or a full-width "？" must not slip past), every
+ *  word a ship word, at least one a ship act, and no question mark: "lgtm
+ *  push and pr", "ok, merge it", "land it". */
+export function isPromptApproving(text) {
+  const words = (text.match(/[\w'’]+/g) || []).map((w) => w.toLowerCase());
+  return (
+    /^[\t\n\r\x20-\x7e]*$/.test(text) &&
+    !text.includes('?') &&
+    words.length > 0 &&
+    words.every((w) => SHIP_WORDS.has(w)) &&
+    (words.some((w) => SHIP_ACT_RE.test(w)) || /\bpull request\b/i.test(text))
+  );
+}
+
+/** Does any line before index `end` hold an assistant record? */
+function assistantBefore(lines, end) {
+  for (let i = 0; i < end; i++) {
+    if (!lines[i].includes('"assistant"')) continue;
+    try {
+      if (JSON.parse(lines[i])?.type === 'assistant') return true;
+    } catch {
+      // torn line
+    }
+  }
+  return false;
+}
+
+/** The approving user record's `{ uuid }`, or null. Candidates are the latest
+ *  AskUserQuestion answer and the latest typed prompt, newest first: the first
+ *  that approves wins. An answer that doesn't approve blocks, as before #180; a
+ *  typed prompt that refuses or can't be read blocks; a neutral typed prompt
+ *  ("also fix the typo") defers to the older candidate. An approving record
+ *  without a uuid can't be spent, so it blocks. Throws on an unreadable file —
+ *  the caller fails closed. */
+export function latestApproval(transcriptPath) {
+  const lines = readFileSync(transcriptPath, 'utf8').split('\n');
+  const found = []; // newest first: { uuid, approves, blocks }
+  let answerSeen = false;
+  let promptSeen = false;
+  for (let i = lines.length - 1; i >= 0 && !(answerSeen && promptSeen); i--) {
+    const l = lines[i];
+    if (!l || l[0] !== '{') continue;
+    let o;
+    try {
+      o = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    const answers = o?.toolUseResult?.answers;
+    if (!answerSeen && o?.type === 'user' && answers && typeof answers === 'object' && !Array.isArray(answers)) {
+      answerSeen = true;
+      found.push({ uuid: o.uuid, approves: isApproving(answers), blocks: true });
+    } else if (!promptSeen && isUserPrompt(o)) {
+      promptSeen = true;
+      const text = typedPromptText(o);
+      if (text === null) found.push({ approves: false, blocks: true });
+      else
+        found.push({
+          uuid: o.uuid,
+          approves: !launchShaped(o) && isPromptApproving(text) && assistantBefore(lines, i),
+          blocks: denies(text, APPROVE_RE) || TYPED_REFUSE_RE.test(text),
+        });
+    }
+  }
+  for (const r of found) {
+    if (r.approves) return typeof r.uuid === 'string' ? { uuid: r.uuid } : null;
+    if (r.blocks) return null;
+  }
+  return null;
+}
+
 export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
 
 /** The state file's side table: `"<uuid>|<verb>"` -> the tool_use_id of the call
@@ -976,7 +1120,7 @@ function spend(uuid, verb, file, toolUseId, transcriptPath) {
 }
 
 const askRemedy = (verb) =>
-  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry. One answer approves each gated verb once, so ask once for the whole ship (push, PR, merge); a second push of the same verb needs its own answer.`;
+  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry. A prompt the user typed themselves approves the same way ("lgtm push and pr"); a message from an agent, another session, a hook or a tool never does. One approval covers each gated verb once, so get one for the whole ship (push, PR, merge); a second push of the same verb needs a new one.`;
 
 /** 8. git push / gh pr create / gh pr merge need an approving answer in the
  *  transcript, spent once per verb. `transcriptPath` is read lazily — a
@@ -995,17 +1139,13 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
 
   let record;
   try {
-    record = latestAnswer(transcriptPath);
+    record = latestApproval(transcriptPath);
   } catch {
     return `${verb} needs explicit user approval, but the transcript could not be read. ${askRemedy(verb)}`;
   }
 
   if (!record) {
-    return `${verb} needs explicit user approval and no AskUserQuestion answer was found in the transcript. ${askRemedy(verb)}`;
-  }
-
-  if (!isApproving(record.answers)) {
-    return `${verb} needs explicit user approval; the most recent AskUserQuestion answer does not approve it. ${askRemedy(verb)}`;
+    return `${verb} needs explicit user approval; neither the user's latest typed prompt nor their latest AskUserQuestion answer approves it (a newer reply that doesn't approve overrides an older one that did). ${askRemedy(verb)}`;
   }
 
   if (spend(record.uuid, verb, stateFile, toolUseId, transcriptPath)) {

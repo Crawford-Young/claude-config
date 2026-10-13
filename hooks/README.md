@@ -14,7 +14,7 @@ is loud, immediate, and recoverable — the Edit tool is not gated by
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). |
 | `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | A model-omitted dispatch on a frontmatter-less type gets `model: sonnet` via `updatedInput` (with `permissionDecision: allow`, which is the only documented pairing; ledger line `FILL`) when the session model is known and not billed. Otherwise it blocks (#74). Also blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `fable-clearance-grant.mjs` | UserPromptSubmit | `FABLE OK` in the user's own prompt writes the single-use 30-min marker the Agent guard consumes. Speed bump + audit trail, not a hard gate. |
@@ -82,22 +82,45 @@ fixed false verdict; change them only with a test:
 - **Push/PR approval (rule 8)** — `git push` (`-C` composes the same as the
   branch rules; `--dry-run` and remote branch deletes are exempt), `gh pr create` and `gh pr merge` are
   parsed by command word, same as `git`. Approval comes from the transcript:
-  the hook walks `transcript_path`'s JSONL backward for the most recent user
-  record carrying `toolUseResult.answers` (an AskUserQuestion answer — the
-  model cannot forge it). It approves when some answer value matches
+  the hook walks `transcript_path`'s JSONL backward for two candidates — the
+  latest record carrying `toolUseResult.answers` (an AskUserQuestion answer)
+  and the latest prompt the user typed in an interactive session (#180:
+  `origin.kind` human, `promptSource` typed/queued/suggestion_accepted, not
+  meta, sidechain or compact summary; pasted blocks and system reminders
+  inside it are cut). Peer and teammate messages, task notifications, tool
+  results, hook feedback, scheduled wakeups and `claude -p` prompts never
+  count. A prompt a model can supply as a launch argument — any record in a
+  `claude --bg` session (`sessionKind`), or a process's first prompt
+  (`turnPosition.promptIndex` 1, or no assistant turn before it) — never
+  approves, but it still refuses: "stop" as the first prompt after
+  `--resume` holds an older approval back. Newest first, the first that approves wins. An answer that doesn't
+  approve blocks, as before #180, and so does a typed prompt that refuses
+  (`denies()`, or stop/cancel/abort/nope/nah/later/actually). A neutral typed
+  prompt ("also fix the typo") defers to the older candidate. An answer
+  approves when some answer value matches
   `/\b(commit|push|pr|pull request|merge|ship|land)\b/i` and
   `denies()` in `_hooklib.mjs` doesn't refuse it: a hold word (hold, wait,
   not yet, review first) anywhere, an answer opening with "no", or a negator
   (no/not/never/don't) with an act word within the next four words. So
   "push and pr but dont know if…" approves and "don't push yet" refuses
-  (#96). The browser gate uses the same `denies()`. Only the latest
-  record counts. Each approval (keyed by its record `uuid`) is single-use per
+  (#96). The browser gate uses the same `denies()`. A typed prompt is prose,
+  so it approves only when every word is a ship word (`SHIP_WORDS`: acts,
+  lgtm/ok/yes-style filler, it/the/and…), one is an act (push, pr, pull
+  request, merge, ship, land), and there is no question mark: "lgtm push and
+  pr", "ok, merge it" and "land it" approve; "PR #183 failed CI", "push it
+  once I review", "Push — actually no" and task briefs don't. In a replay of
+  the real typed prompts on 2026-10-13, the answer wording alone would have
+  approved 11 briefs and asides, while this rule approved only the 2 real
+  approvals. Nothing stops a model appending a forged line to its own
+  transcript file; that has been true of the answer path since it was
+  written. Each approval (keyed by its record `uuid`; an approving record
+  without one blocks) is single-use per
   verb — spent from `~/.claude/push-gate-approvals.json`
   (`CLAUDE_PUSH_GATE_STATE` overrides) — so one approving answer covers
   `push` → `pr create` → `pr merge` once each, but a second push needs a
-  fresh answer. A missing/unreadable transcript or a non-approving/absent
-  answer blocks with a message telling the model to ask via AskUserQuestion
-  and retry. A non-gated command never reads the transcript.
+  fresh approval. A missing/unreadable transcript or no approving record
+  blocks with a message telling the model to ask via AskUserQuestion and
+  retry. A non-gated command never reads the transcript.
 
 ## settings.json wiring
 
