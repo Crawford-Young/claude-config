@@ -19,7 +19,7 @@ Plan mode is the default surface. This skill adds where the spec lives, what's v
    ## Out of scope
    - <explicitly excluded>
    ```
-   Oversize spec → sub-issue or linked in-repo doc, never a loose file. There is always an issue; user approves. When the shape is obvious, Goal and Done when can each collapse to one line. A scope trim that moves work to another issue re-scopes this issue's playtest/QA Done-when to the changes it still owns, because "no change requested" can't pass while the moved work is pending (dog-eat-dog#10).
+   Oversize spec → sub-issue or linked in-repo doc, never a loose file. There is always an issue; user approves. When the shape is obvious, Goal and Done when can each collapse to one line. A scope trim that moves work to another issue re-scopes this issue's playtest/QA Done-when to the changes it still owns, because "no change requested" can't pass while the moved work is pending (dog-eat-dog#10). An analytics or dashboard spec names the decisions the user will make from it before its metrics, and its mockup shows real-store numbers, because an approved synthetic mockup still shipped a view that measured spend, not performance (strate#27 → #51).
 2. **Plan in plan mode; execute the approved plan.** Execution start = grab: `node ~/code/claude-config/scripts/board.mjs start <repo>#N` (label + In Progress).
 3. **Every green step is its own commit**, body written so a cold session can resume from it alone:
    ```
