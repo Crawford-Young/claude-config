@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { awaitingUser, continuationAsked, humanRepliedAfter, lastMerge, lastReflectAt } from '../../hooks/stop-reflect-gate.mjs';
+import { asksUser, continuationAsked, humanRepliedAfter, lastAssistantText, lastMerge, lastReflectAt, newestMerge } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
@@ -297,6 +297,16 @@ test('stop_hook_active passes even when the second-gate conditions are met', () 
 });
 
 // ---- later typed pauses partway through reflect (#199) ----
+/** Exit codes of the Stops at each prefix length in `stops`, replaying `records` against one state dir. */
+function stopCodes(records, stops) {
+  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const p = join(mkdtempSync(join(tmpdir(), 'gate-tx-')), 't.jsonl');
+  return stops.map((n) => {
+    writeFileSync(p, `${records.slice(0, n).map((r) => JSON.stringify(r)).join('\n')}\n`);
+    return runHook({ transcript_path: p }, home).code;
+  });
+}
+
 // A turn-ending text record, the real shape (one content block per record, stop_reason end_turn):
 // ~/.claude/projects/C--Users-young-code/ab5c4ba3-489b-471e-9a3c-d2ba55d272d0.jsonl:247.
 const say = (min, text) => ({
@@ -313,45 +323,83 @@ const pauseCall = '## 3. What should become a rule?\n- **Python is absent.** Can
 const finished =
   'New issues #110–#113 stay standalone, per your call. Reflect produced no new rule.\n\n### Your action items\n- Run `/clear` before the next wave.\n- Optional, not a doc change: update your local Godot install from 4.7.1 to 4.7.2.';
 
-test('awaitingUser: the last assistant turn ends in text holding a question', () => {
+// Verbatim tails of real typed approval pauses, closing on an imperative action item with no question mark:
+// ced8aa71-bf39-4e5f-b566-a3f70c012442.jsonl:449 (reply "yes") and aab7de31-c77e-4fa5-bc9a-e7465784d07e.jsonl:284.
+const approveAction =
+  "**Follow-ups (not in this change):**\n- Both Claude Code bugs (the unwritten subagent output and the Sonnet 5.5 cache-read price) are drafted as feedback; you can review and send them with `/feedback`.\n- A per-model price check against `cost-state`'s own token counts would catch real price drift. It would need a Sonnet 5.5 exception until Claude Code fixes its price.\n\n## Your action\n- Approve the commit, push and PR for `fix/116-cost-state-scope` (Closes #116).";
+const approveBold =
+  "### Your action items\n- **Review:** look over the README and cards and tell me anything to change.\n- **Approve commit + push + PR:** after that I'll merge, run the update Action and watch it go green, then switch to `main` and run the Claude export once to confirm it pushes.\n- **Delete the old secret:** say yes and I'll remove the now-unused `STATS_TOKEN` secret after merge.";
+// A finished turn whose only question sits inside a fenced continuation prompt: 403dea44-fe62-4ff3-9875-cd13098ad02f.jsonl:666 (excerpt).
+const fencedQuestion =
+  "```\n===== CONTINUATION START =====\nUnresolved (ask with AskUserQuestion before code):\n- director scope values: repo name, `workspace`, `harness`?\n- whether the statusline shows the type\n===== CONTINUATION END =====\n```\n\n## Your action items\n- Type `/rename claude-config-175`, then `/clear`, then paste the block above.";
+
+test('asksUser: a question line outside code fences, or a closing imperative action item', () => {
+  assert.equal(asksUser(pauseActions), true, 'a question followed by an action-items list');
+  assert.equal(asksUser(pauseCall), true, 'a question as the last line');
+  assert.equal(asksUser('Commit it on a chore branch? **'), true, 'trailing markdown after the mark');
+  assert.equal(asksUser(finished), false, 'a finished reflect');
+  assert.equal(asksUser('Is `a?b` a path; no.'), false, 'a mid-line question mark');
+  assert.equal(asksUser(fencedQuestion), false, 'a question inside a ``` fence');
+  assert.equal(asksUser(approveAction), true, 'Approve under the final heading');
+  assert.equal(asksUser(approveBold), true, 'a bold **Approve …:** item');
+  for (const verb of ['Decide', 'Pick', 'Choose', 'Confirm', 'Tell me']) assert.equal(asksUser(`Done.\n\n## Your call\n- ${verb} which one lands.`), true, verb);
+  assert.equal(asksUser('Ready.\n\n- Approve the push.'), true, 'a trailing list with no heading');
+  assert.equal(asksUser('## Your action items\n- Approve the push.\n- None else right now.'), false, 'a None line means nothing is pending');
+  assert.equal(asksUser('## Your action items\n- Nothing right now. When CI is green, I\'ll ask you to approve the merge.'), false, 'Nothing');
+  assert.equal(asksUser('## Proposals\n- Decide on X.\n\n## Your action items\n- Run `/clear`.'), false, 'only the final section counts');
+  assert.equal(asksUser('## Your action items\n- Delete the remote branch `feat/x`.'), false, 'other imperatives are not asks');
+  assert.equal(asksUser(undefined), false, 'no text');
+});
+
+test('lastAssistantText: the newest assistant turn, if it ends in text', () => {
   const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
-  assert.equal(awaitingUser(tx(say(5, pauseActions))), true, 'a question followed by an action-items list');
-  assert.equal(awaitingUser(tx(say(5, pauseCall))), true, 'a question as the last line');
-  assert.equal(awaitingUser(tx(say(5, 'Commit it on a chore branch? **'))), true, 'trailing markdown after the mark');
-  assert.equal(awaitingUser(tx(say(5, finished))), false, 'a finished reflect');
-  assert.equal(awaitingUser(tx(say(9, pauseCall), human(8), say(5, finished))), false, 'only the newest turn counts');
-  assert.equal(awaitingUser(tx(say(9, pauseCall), thinking(8), call('b', 'git status'))), false, 'the turn went on to a tool call');
-  assert.equal(awaitingUser(tx(say(9, pauseCall), thinking(8), { ...human(7), isMeta: true })), true, 'thinking and meta records after it do not count');
-  assert.equal(awaitingUser(tx(say(5, 'Is `a?b` a path; no.'))), false, 'a mid-line question mark');
-  assert.equal(awaitingUser(''), false, 'no assistant turn');
+  assert.equal(lastAssistantText(tx(say(9, pauseCall), human(8), say(5, finished))), finished, 'only the newest turn counts');
+  assert.equal(lastAssistantText(tx(say(9, pauseCall), thinking(8), call('b', 'git status'))), null, 'the turn went on to a tool call');
+  assert.equal(lastAssistantText(tx(say(9, pauseCall), thinking(8), { ...human(7), isMeta: true })), pauseCall, 'thinking and meta records after it do not count');
+  assert.equal(lastAssistantText(''), null, 'no assistant turn');
+});
+
+test('the Stop payload last_assistant_message is preferred over the transcript scan', () => {
+  const tx = () => transcript(...mergeAt('p1', 30), reflectRead('r', 20), human(15, 'land it'), say(10, finished));
+  const h1 = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  assert.equal(runHook({ transcript_path: tx(), last_assistant_message: approveAction }, h1).code, 0, 'the payload asks: hold');
+  const h2 = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  const asking = transcript(...mergeAt('p2', 30), reflectRead('r', 20), human(15, 'land it'), say(10, pauseCall));
+  assert.equal(runHook({ transcript_path: asking, last_assistant_message: finished }, h2).code, 2, 'the payload is finished: block');
+  const h3 = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  assert.equal(runHook({ transcript_path: asking }, h3).code, 0, 'absent: the transcript scan decides');
+});
+
+test('records with a null content block are skipped, not thrown on', () => {
+  const nul = (rec) => ({ ...rec, message: { ...rec.message, content: [null, ...rec.message.content] } });
+  const merge = [nul(at(30, call('n1', 'gh pr merge 9 --rebase'))), nul(at(30, result('n1')))];
+  const text = [...merge, nul(reflectRead('r', 20)), nul(ask(10, freshQ))].map((r) => JSON.stringify(r)).join('\n');
+  assert.equal(newestMerge(text)?.id, 'n1');
+  assert.ok(lastReflectAt(text));
+  assert.equal(continuationAsked(text, Date.now() - 25 * 60_000), true);
 });
 
 test('scenario 3: a later commit-approval pause does not spend the continuation block (#199)', () => {
   // The #140 review's scenario 3 (merge, read, pause, reply, commit-approval pause, landing merge), with each stop's
-  // turn-ending text added. Old main gave [2,2,0,0,2,2] (block spent at the first pause), #140 gave [2,0,2,0,2,2]
-  // (spent at the approval pause). Expected: neither pause spends it; the landing merge gets its reminder, then the block.
-  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
+  // turn-ending text added: the approval pauses are the real approveAction and approveBold tails. Old main gave
+  // [2,2,0,0,2,2] (block spent at the first pause), #140 gave [2,0,2,0,2,2] (spent at the approval pause).
+  // Expected: no pause spends it; the landing merge gets its reminder, then the block.
   const records = [
     ...mergeAt('s1', 90),
     human(85, 'yes run reflect'),
     reflectRead('r', 84),
     say(83, pauseActions),
     human(80, 'add rule X'),
-    say(78, 'Added the rule to `skills/reflect/SKILL.md`.\n\nCommit it as `docs(reflect): add rule X` on a chore branch?'),
-    human(70, 'approved'),
-    say(68, 'Committed as abc1234 on `chore/reflect-rule-x`.\n\nPush it and open the landing PR?'),
+    say(78, approveAction),
+    human(70, 'yes'),
+    say(68, approveBold),
     human(65, 'yes'),
     ...mergeAt('s2', 60),
     say(59, 'Landed as PR #201.'),
     say(58, "This merge is reflect's own landing PR."),
   ];
-  const p = join(mkdtempSync(join(tmpdir(), 'gate-tx-')), 't.jsonl');
-  const stopAt = (n) => {
-    writeFileSync(p, `${records.slice(0, n).map((r) => JSON.stringify(r)).join('\n')}\n`);
-    return runHook({ transcript_path: p }, home).code;
-  };
   // Stops: S1 merge, S2 first pause, S3 commit-approval pause, S4 push-approval pause, S5 landing merge, S6 landing PR noted.
-  assert.deepEqual([2, 5, 7, 9, 13, 14].map(stopAt), [2, 0, 0, 0, 2, 2]);
+  assert.deepEqual(stopCodes(records, [2, 5, 7, 9, 13, 14]), [2, 0, 0, 0, 2, 2]);
 });
 
 test('a reflect that finished with no question still gets the continuation block', () => {
@@ -376,7 +424,6 @@ test('scenario 6: an unreflected wave B after a reflect that finished with the c
       { label: 'Continue', description: 'Stay in this window.' },
     ],
   };
-  const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
   const records = [
     ...mergeAt('a1', 300),
     human(295, 'yes'),
@@ -391,13 +438,29 @@ test('scenario 6: an unreflected wave B after a reflect that finished with the c
     human(50, 'skip reflect'),
     say(49, 'Skipping reflect for wave B.'),
   ];
-  const p = join(mkdtempSync(join(tmpdir(), 'gate-tx-')), 't.jsonl');
-  const stopAt = (n) => {
-    writeFileSync(p, `${records.slice(0, n).map((r) => JSON.stringify(r)).join('\n')}\n`);
-    return runHook({ transcript_path: p }, home).code;
-  };
   // Stops: S1 wave B merged, S2 after the user skips reflect, S3 a later turn end.
-  assert.deepEqual([12, 14, 14].map(stopAt), [2, 0, 0]);
+  assert.deepEqual(stopCodes(records, [12, 14, 14]), [2, 0, 0]);
+});
+
+test("reflect's landing PR merged after the continuation ask: the reminder fires, the continuation block stays quiet", () => {
+  // The real case scenario 6's tightening changes: ~/.claude/projects/C--Users-young-code/945f43a3-03fc-4d62-b94d-f754f4a62c9d.jsonl
+  // :283 reflect read, :308 reply, :390-391 one ask holding the landing approval and clear-or-continue (answered Clear),
+  // :429 landing merge, :472 the turn-ending text. 9bfff229-2313-48bf-a219-a26b37f8fcb6.jsonl:310-387 has the same shape.
+  // The continuation ask was already answered, so asking again is noise. #140 gave [2,2].
+  const landQ = { question: 'Land the reflect edits?', header: 'Land edits', multiSelect: false, options: [{ label: 'Commit, push, PR and merge both' }, { label: 'Hold' }] };
+  const nextQ = { question: 'After landing: clear or continue?', header: 'Next', multiSelect: false, options: [{ label: 'Clear', description: 'I emit a continuation prompt for the next unit.' }, { label: 'Continue', description: 'Keep working in this window.' }] };
+  const records = [
+    ...mergeAt('w1', 60),
+    reflectRead('r', 50),
+    say(49, pauseCall),
+    human(48, 'up to you'),
+    ask(47, { questions: [landQ, nextQ] }),
+    { ...at(46, result('q47')), toolUseResult: { questions: [landQ, nextQ], answers: { [landQ.question]: 'Commit, push, PR and merge both', [nextQ.question]: 'Clear' }, annotations: {} } },
+    ...mergeAt('l146', 44),
+    say(43, '## Your call\n- Type `/rename dog-eat-dog-11`, then `/clear` and paste the block.'),
+  ];
+  // Stops: S1 after the landing merge (reminder), S2 the next turn end.
+  assert.deepEqual(stopCodes(records, [10, 10]), [2, 0]);
 });
 
 test('a previous wave clear-or-continue ask does not satisfy the next wave merge', () => {

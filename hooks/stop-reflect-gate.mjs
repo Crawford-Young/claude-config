@@ -31,9 +31,13 @@
 // block per merge, tracked under `cont` in the same state file. It waits for a
 // genuine human reply after the reflect read (humanRepliedAfter): before that,
 // reflect is paused on its dialogue and the single block would be spent there (#140).
-// A reply is a typed message or an AskUserQuestion answer. Later typed pauses (a
-// second pause for commit approval, say) are caught by awaitingUser: a turn whose
-// closing text holds a question is waiting on the user, not finished (#199).
+// A reply is a typed message or an AskUserQuestion answer. A later typed pause (commit
+// approval, say) also passes when the turn's closing text (the Stop payload's
+// last_assistant_message, else the transcript's last assistant text) asks the user
+// (asksUser, #199): a line outside ``` fences ending in a question mark, or a closing
+// action item starting Approve / Decide / Pick / Choose / Confirm / Tell me, with no
+// None/Nothing item beside it. Anything else counts as finished, so a background wait
+// ("I'll pick up when the implementer reports") still spends the block.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -64,12 +68,12 @@ export function newestMerge(text) {
       continue;
     }
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
-      if (c.type === 'tool_use' && MERGE_TOOLS.has(c.name) && isMerge(c.input?.command)) {
+      if (c?.type === 'tool_use' && MERGE_TOOLS.has(c.name) && isMerge(c.input?.command)) {
         merges.set(c.id, false);
         const t = Date.parse(o?.timestamp);
         times.set(c.id, Number.isNaN(t) ? null : t);
       }
-      if (c.type === 'tool_result' && merges.has(c.tool_use_id)) merges.set(c.tool_use_id, !c.is_error);
+      if (c?.type === 'tool_result' && merges.has(c.tool_use_id)) merges.set(c.tool_use_id, !c.is_error);
     }
   }
   const ok = [...merges].filter(([, good]) => good).map(([id]) => id);
@@ -114,12 +118,8 @@ export function humanRepliedAfter(text, after) {
   return false;
 }
 
-/** A line ending in a question mark, past any closing markdown or quotes. */
-const QUESTION_LINE = /\?[\s*_)`'"\]]*$/;
-
-/** Does the newest assistant turn end awaiting the user: its last non-thinking block is text holding a line
- *  that ends in a question? Real reflect pauses end with an ask, often followed by an action-items list (#199). */
-export function awaitingUser(text) {
+/** Text of the newest assistant turn if its last non-thinking block is text, else null (it ended on a tool call). */
+export function lastAssistantText(text) {
   const lines = text.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lines[i].includes('"assistant"')) continue;
@@ -132,9 +132,36 @@ export function awaitingUser(text) {
     if (o?.type !== 'assistant') continue;
     const last = (Array.isArray(o.message?.content) ? o.message.content : []).filter((c) => c?.type !== 'thinking').pop();
     if (!last) continue;
-    return last.type === 'text' && typeof last.text === 'string' && last.text.split('\n').some((l) => QUESTION_LINE.test(l));
+    return last.type === 'text' && typeof last.text === 'string' ? last.text : null;
   }
-  return false;
+  return null;
+}
+
+/** A line ending in a question mark, past any closing markdown or quotes. */
+const QUESTION_LINE = /\?[\s*_)`'"\]]*$/;
+/** A markdown heading, or a line that is only bold text (`**Your action items**`). */
+const HEADING = /^\s{0,3}(?:#{1,6}\s|\*\*[^*]+\*\*:?\s*$)/;
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
+/** The house-style approval asks: `- Approve the commit, push and PR …`, `- **Approve commit + push + PR:** …`. */
+const ASK_ITEM = /^(?:approve|decide|pick|choose|confirm|tell me)\b/i;
+const NONE_ITEM = /^(?:none|nothing)\b/i;
+
+/** Does this turn-ending message wait on the user? True when a line outside ``` fences ends in a question mark,
+ *  or a list item in the closing section (after the last heading, else the last paragraph) starts with an ask verb
+ *  (Approve, Decide, Pick, Choose, Confirm, Tell me), unless an item there says None or Nothing (#199). */
+export function asksUser(message) {
+  if (typeof message !== 'string') return false;
+  let fenced = false;
+  const lines = message.split('\n').filter((l) => {
+    if (!/^\s*```/.test(l)) return !fenced;
+    fenced = !fenced;
+    return false;
+  });
+  if (lines.some((l) => QUESTION_LINE.test(l))) return true;
+  const heading = lines.findLastIndex((l) => HEADING.test(l));
+  const closing = heading >= 0 ? lines.slice(heading + 1) : lines.slice(lines.findLastIndex((l) => !l.trim()) + 1);
+  const items = closing.map((l) => LIST_ITEM.exec(l)?.[1].replace(/^[*_]+/, '')).filter((t) => t !== undefined);
+  return !items.some((t) => NONE_ITEM.test(t)) && items.some((t) => ASK_ITEM.test(t));
 }
 
 /** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), reflect Skill call, or user-typed /reflect, else null. */
@@ -151,7 +178,7 @@ export function lastReflectAt(text) {
     const typed = TYPED_REFLECT.test(humanText(o) ?? '');
     const hit = typed || (Array.isArray(o?.message?.content) ? o.message.content : []).some(
       (c) =>
-        c.type === 'tool_use' &&
+        c?.type === 'tool_use' &&
         ((c.name === 'Read' && REFLECT_SKILL.test(c.input?.file_path || '')) ||
           (c.name === 'Skill' && c.input?.skill === 'reflect') ||
           (MERGE_TOOLS.has(c.name) && shellSkillReads(scrub(c.input?.command)).some((n) => n.toLowerCase() === 'reflect'))),
@@ -186,7 +213,7 @@ export function continuationAsked(text, after, before = Infinity) {
     const t = Date.parse(o?.timestamp);
     if (Number.isNaN(t) || t <= after || t >= before) continue;
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
-      if (c.type !== 'tool_use' || c.name !== 'AskUserQuestion') continue;
+      if (c?.type !== 'tool_use' || c.name !== 'AskUserQuestion') continue;
       if ((Array.isArray(c.input?.questions) ? c.input.questions : []).some(isContinuationQuestion)) return true;
     }
   }
@@ -227,9 +254,10 @@ function main() {
     }
 
     // Second gate: reflect ran for this merge, but no fresh-session-or-continue ask followed it.
-    // No human reply since the read, or a turn ending in a question, means reflect is paused on the user:
-    // pass without spending the block.
-    if (!reflectRan || !humanRepliedAfter(text, reflectAt) || awaitingUser(text)) return;
+    // No human reply since the read, or a turn ending in an ask (asksUser), means reflect is paused on the user:
+    // pass without spending the block. The Stop payload carries the closing text; older payloads lack it.
+    const closingText = typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : lastAssistantText(text);
+    if (!reflectRan || !humanRepliedAfter(text, reflectAt) || asksUser(closingText)) return;
     const cur = readState(stateFile);
     const asked = Array.isArray(cur.cont) ? cur.cont : [];
     if (asked.includes(id) || continuationAsked(text, Math.max(reflectAt, mergeAt))) return;
