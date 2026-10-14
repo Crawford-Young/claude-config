@@ -2,7 +2,7 @@ Skills: Read the path; skills are not Skill-tool invocable. Paths are under ~/co
 - plan a feature/fix/refactor, issue spec, commit cadence → plan/SKILL.md
 - start branch work, worktree isolation → worktree/SKILL.md
 - multi-task plan, spawn, model choice → agent-factory/SKILL.md
-- direct parallel pasted sessions (batch) → agent-factory/directing-a-batch.md
+- direct a ticket batch (director) → agent-factory/directing-a-batch.md
 - gates, tests, lint, typecheck, verify → qa/SKILL.md
 - land claude-config, recovery, sweep → git-ops/SKILL.md
 - phase/wave end, review, harness updates → reflect/SKILL.md
