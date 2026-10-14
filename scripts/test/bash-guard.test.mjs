@@ -481,7 +481,9 @@ test('#159: a block shares the cwd of the clauses around it; brace text that is 
   const docs = join(h, 'docs');
   for (const r of [app, docs]) bornRepo(r);
   assert.equal(guardRun(`cd ${app}; { cd ${docs}; }; git commit -m x`, h), 0);
-  assert.equal(guardRun(`cd ${app}; if ($x) { cd ${docs} }; git commit -m x`, h), 0);
+  // A conditional body's cd may not run, so the dir after it is unknown (#171).
+  assert.equal(guardRun(`cd ${app}; if ($x) { cd ${docs}; git commit -m x }`, h), 0);
+  assert.equal(guardRun(`cd ${app}; if ($x) { cd ${docs} }; git commit -m x`, h), 2);
   // A block that runs elsewhere or later — a function, a job, a parallel or stored
   // block — reads the outer cwd but can't move it; Pop-Location/popd undo a push.
   for (const cmd of [
@@ -499,7 +501,9 @@ test('#159: a block shares the cwd of the clauses around it; brace text that is 
   ]) {
     assert.equal(guardRun(cmd, h), 2, cmd);
   }
-  assert.equal(guardRun(`cd ${app}; 'a' | ForEach-Object { cd ${docs} }; git commit -m x`, h), 0);
+  // A loop body may run zero or many times: the dir after its cd is unknown (#171).
+  assert.equal(guardRun(`cd ${app}; 'a' | ForEach-Object { cd ${docs}; git commit -m x }`, h), 0);
+  assert.equal(guardRun(`cd ${app}; 'a' | ForEach-Object { cd ${docs} }; git commit -m x`, h), 2);
   const args = (c) => gitCalls(c, null).map((g) => g.args);
   assert.deepEqual(args('git log HEAD@{1} -- {a,b}.ts'), [['HEAD@{1}', '--', '{a,b}.ts']]);
   assert.deepEqual(args('git rev-parse @{u} ${REF} {1..3}'), [['@{u}', '${REF}', '{1..3}']]);
@@ -791,8 +795,130 @@ test('#163: pushd/popd and Push-Location/Pop-Location stacks are modelled', () =
   // A function body gets a copy of the named stacks too; an in-place body shares them.
   assert.equal(at('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s }'), '/pb');
   assert.equal(at('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s }; Pop-Location -StackName s'), '/pa');
-  assert.equal(at('cd /pa; Push-Location -StackName s /pb; if ($x) { Pop-Location -StackName s }'), '/pa');
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; & { Pop-Location -StackName s }'), '/pa');
   assert.equal(repoOf('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s; git commit -m x }', '/cwd'), '/pa');
+});
+
+test('#171: a ( … ) subshell restores the dir its cd moved', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+  for (const cmd of ['(cd /pf)', '( cd /pf )', '(cd /pf && npm i)', '(cd /pf; (cd /pg); true)', '(pushd /pf)', '(cd /pf) | cat', 'if (cd /pf); then true; fi', 'true && (cd /pf)']) {
+    assert.equal(at(cmd), '/cwd', cmd);
+  }
+  assert.equal(at('cd /pa; pushd /pb; (popd); popd'), '/pa');
+  // Inside the group the cd holds.
+  assert.equal(repoOf('(cd /pf && git commit -m x)', '/cwd'), '/pf');
+  assert.equal(repoOf('(cd /pf; (cd /pg); git commit -m x)', '/cwd'), '/pf');
+  assert.equal(repoOf('(cd /pf; (cd /pg; git commit -m x))', '/cwd'), '/pg');
+});
+
+test('#171: a cd in a conditional body, a loop or a pipeline leaves the dir unknown after it', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+  for (const cmd of [
+    'if false; then cd /pf; fi',
+    'if true; then cd /pf; else cd /pg; fi',
+    'if cd /pf; then true; fi',
+    'if false; then { cd /pf; }; fi',
+    'if false; then f() { true; }; eval "cd /pf"; fi',
+    'while false; do cd /pf; done',
+    'for i in 1; do cd /pf; done',
+    'if ($false) { cd /pf }',
+    'if ($x) { } else { Set-Location /pf }',
+    'foreach ($i in 1) { Set-Location /pf }',
+    '1 | ForEach-Object { Set-Location /pf }',
+    'cd /pa; pushd /pf; if ($x) { popd }',
+    'cd /pa; if ($x) { pushd /pf }; popd',
+    // bash runs every stage of a pipeline in a subshell; PowerShell runs a cmdlet in place.
+    'cd /pf | cat',
+    'cat | cd /pf',
+    'pushd /pf | cat',
+  ]) {
+    assert.equal(at(cmd), UNKNOWN_DIR, cmd);
+  }
+  // Inside the body the cd holds; a bare group, try/finally and && run it for sure.
+  assert.equal(repoOf('if true; then cd /pf; git commit -m x; fi', '/cwd'), '/pf');
+  assert.equal(at('{ cd /pf; }'), '/pf');
+  assert.equal(at('& { Set-Location /pf }'), '/pf');
+  assert.equal(at('try { Set-Location /pf } finally { }'), '/pf');
+  assert.equal(at('if true; then true; fi; cd /pf'), '/pf');
+  assert.equal(at('if true; then (cd /pg); fi'), '/cwd');
+  // A body that puts the location back leaves it known.
+  assert.equal(at('cd /pa; 1 | ForEach-Object { Push-Location /pf; Pop-Location }'), '/pa');
+  assert.equal(at('cd /pa; for i in 1; do pushd /pf; popd; done'), '/pa');
+  assert.equal(at('cd /pf && npm i'), '/pf');
+  // Deliberate: the && success path stays certain (`cd X && npm i; git commit` is common).
+  assert.equal(at('false && cd /pf'), '/pf');
+});
+
+test('#171: eval and a function call run in the current shell', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+  assert.equal(at('eval "cd /pf"'), '/pf');
+  assert.equal(at("eval 'cd /pf'"), '/pf');
+  assert.equal(at('W=/pg; eval "W=/pf"; cd $W'), '/pf');
+  // An eval that may not run, or runs in a subshell, can't set the var for sure.
+  assert.equal(at('W=/pg; (eval "W=/pf"); cd $W'), UNKNOWN_DIR);
+  assert.equal(at('W=/pg; false || eval "W=/pf"; cd $W'), UNKNOWN_DIR);
+  // A called function's cd or assignment leaves the dir or the name unknown.
+  for (const cmd of [
+    'f() { cd /pf; }; f',
+    'function f { Set-Location /pf }; f',
+    'function f() { cd /pf; }; f arg',
+    'f() { cd /pf; }; g() { f; }; g',
+  ]) {
+    assert.equal(at(cmd), UNKNOWN_DIR, cmd);
+  }
+  assert.equal(at('f() { cd /pf; }'), '/cwd');
+  assert.equal(at('f() { true; }; f'), '/cwd');
+  const h = tmpHome();
+  const feat = join(h, 'feat');
+  const main = join(h, 'main');
+  branchRepo(feat);
+  bornRepo(main);
+  for (const cmd of [
+    `cd ${feat}; eval "cd ${main}"; git commit -m x`,
+    `cd ${feat}; f() { cd ${main}; }; f; git commit -m x`,
+    `cd ${main}; (cd ${feat}); git commit -m x`,
+    `cd ${main}; if false; then cd ${feat}; fi; git commit -m x`,
+    `cd ${main}; if ($false) { cd ${feat} }; git commit -m x`,
+    `cd ${main}; cd ${feat} | cat; git commit -m x`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  assert.equal(guardRun(`cd ${main}; (cd ${feat} && git commit -m x)`, h), 0);
+});
+
+test('#171: a var re-set the guard does not model leaves the name unknown', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+  for (const cmd of [
+    'W=/pg; printf -v W %s /pf; cd $W',
+    'W=/pg; printf -vW %s /pf; cd $W',
+    'W=/pg; let W=1; cd $W',
+    'W=/pg; let "W = 1"; cd $W',
+    'W=/pg; getopts ab W; cd $W',
+    'W=/pg; select W in a; do break; done; cd $W',
+    'W=/pg; f() { W=/pf; }; f; cd $W',
+    "$W = '/pg'; $global:W = '/pf'; Set-Location $W",
+    "$W = '/pg'; $script:W = '/pf'; Set-Location $W",
+    "$W = '/pg'; Set-Variable W '/pf'; Set-Location $W",
+    "$W = '/pg'; Set-Variable -Name W -Value '/pf'; Set-Location $W",
+    "$W = '/pg'; Set-Variable -Value '/pf' -Name:W; Set-Location $W",
+    "$W = '/pg'; Remove-Variable W; Set-Location $W",
+    "$W = '/pg'; Remove-Variable X,W; Set-Location $W",
+    "$W = '/pg'; function f { $global:W = '/pf' }; f; Set-Location $W",
+  ]) {
+    assert.equal(at(cmd), UNKNOWN_DIR, cmd);
+  }
+  // Another name keeps its value.
+  for (const cmd of [
+    'W=/pg; printf -v X %s /pf; cd $W',
+    'W=/pg; printf %s W; cd $W',
+    'W=/pg; let X=1; cd $W',
+    'W=/pg; getopts ab X; cd $W',
+    'W=/pg; f() { X=/pf; }; f; cd $W',
+    "$W = '/pg'; Set-Variable X '/pf'; Set-Location $W",
+    "$W = '/pg'; Get-Process | select Name; Set-Location $W",
+  ]) {
+    assert.equal(at(cmd), '/pg', cmd);
+  }
 });
 
 test('#160: || ( … ) carries viaOr to the first commit inside the group', () => {
