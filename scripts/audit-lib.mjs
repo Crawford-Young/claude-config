@@ -79,11 +79,16 @@ function tokensOf(u) {
 }
 
 /** Price one request's usage. usd is null when the model has no price — an
- *  unknown model is reported as unpriced, never folded in as $0. */
-export function priceUsage(u, model, prices) {
-  const p = priceFor(model, prices);
-  if (!p) return { usd: null };
+ *  unknown model is reported as unpriced, never folded in as $0. A model's
+ *  `longPrompt` tier replaces its rates for a request whose prompt (input + cache
+ *  write + cache read) is over `longPrompt.over` (#202). `aggregate` usage is many
+ *  requests summed (cost-state's modelUsage): no prompt length, so base rates. */
+export function priceUsage(u, model, prices, { aggregate = false } = {}) {
+  const base = priceFor(model, prices);
+  if (!base) return { usd: null };
   const tk = tokensOf(u);
+  const { over, ...longRates } = base.longPrompt || {};
+  const p = over !== undefined && !aggregate && tk.input + tk.cacheRead + tk.cacheWrite5m + tk.cacheWrite1h > over ? { ...base, ...longRates } : base;
   const web = u.server_tool_use?.web_search_requests || 0;
   const usd =
     (tk.input * p.input + tk.output * p.output + tk.cacheRead * p.cacheRead + tk.cacheWrite5m * p.cacheWrite5m + tk.cacheWrite1h * p.cacheWrite1h) / MTOK +
@@ -119,10 +124,10 @@ function usageOfModel(u, share1h) {
  *  or no $. */
 function priceMiss(u, model, prices, share1h) {
   if (!u.costUSD) return null;
-  const lo = priceUsage(usageOfModel(u, share1h ?? 0), model, prices).usd;
+  const lo = priceUsage(usageOfModel(u, share1h ?? 0), model, prices, { aggregate: true }).usd;
   if (lo === null) return null;
   if (share1h !== null) return u.costUSD / lo - 1;
-  const hi = priceUsage(usageOfModel(u, 1), model, prices).usd;
+  const hi = priceUsage(usageOfModel(u, 1), model, prices, { aggregate: true }).usd;
   return u.costUSD < lo ? u.costUSD / lo - 1 : u.costUSD > hi ? u.costUSD / hi - 1 : 0;
 }
 

@@ -1,6 +1,6 @@
 {
-  "$comment": "First-party API $/MTok for audit.mjs. Re-verify against the source when a model ships or audit.mjs warns of an unpriced model. The cost-state total runs ~10% under by scope (#116), so it is no price check; the per-model check on cost-state's own tokens is (#141). A model's \"exception\" is a price Claude Code charges that differs from the published one: dated, named for the fix it waits on, and reported as an exception, not drift.",
-  "verified": "2026-10-13",
+  "$comment": "First-party API $/MTok for audit.mjs. Re-verify against the source when a model ships or audit.mjs warns of an unpriced model. The cost-state total runs ~10% under by scope (#116), so it is no price check; the per-model check on cost-state's own tokens is (#141). A model's \"longPrompt\" is the tier whose prices replace the base ones for a request with more than \"over\" prompt tokens (input + cache write + cache read). A model's \"exception\" is a price Claude Code charges that differs from the published one: dated, named for the fix it waits on, and reported as an exception, not drift.",
+  "verified": "2026-10-14",
   "source": "https://platform.claude.com/docs/en/about-claude/pricing",
   "webSearchPer1k": 10,
   "models": {
@@ -16,7 +16,10 @@
       }
     },
     "claude-sonnet-5": { "input": 2, "output": 10, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.2 },
-    "claude-haiku-5-5": { "input": 0.1, "output": 0.5, "cacheWrite5m": 0.125, "cacheWrite1h": 0.2, "cacheRead": 0.01 },
+    "claude-haiku-5-5": {
+      "input": 0.1, "output": 0.5, "cacheWrite5m": 0.125, "cacheWrite1h": 0.2, "cacheRead": 0.01,
+      "longPrompt": { "over": 100000, "input": 0.5, "output": 2.5, "cacheWrite5m": 0.625, "cacheWrite1h": 1, "cacheRead": 0.05 }
+    },
     "claude-haiku-4-5": { "input": 1, "output": 5, "cacheWrite5m": 1.25, "cacheWrite1h": 2, "cacheRead": 0.1 }
   }
 }

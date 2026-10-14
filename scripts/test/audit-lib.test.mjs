@@ -1011,9 +1011,54 @@ test('the shipped prices.json prices a claude-haiku-5-5 record, dated ids includ
   const m = shipped.models['claude-haiku-5-5'];
   assert.ok(m, 'claude-haiku-5-5 is in prices.json');
   const c = createCollector({ prices: shipped });
-  c.add(asst('rh', usage({ input_tokens: 1e6, output_tokens: 1e6 }), { model: 'claude-haiku-5-5' }), MAIN);
+  c.add(asst('rh', usage({ input_tokens: 1e5, output_tokens: 1e5 }), { model: 'claude-haiku-5-5' }), MAIN);
   const r = c.report();
   assert.notEqual(r.totals.usd, null);
-  assert.equal(r.totals.usd, m.input + m.output);
-  assert.equal(priceUsage(usage({ input_tokens: 1e6 }), 'claude-haiku-5-5-20261001', shipped).usd, m.input);
+  assert.equal(r.totals.usd.toFixed(8), ((m.input + m.output) / 10).toFixed(8)); // 100k prompt: the base tier
+  assert.equal(priceUsage(usage({ input_tokens: 1e5 }), 'claude-haiku-5-5-20261001', shipped).usd.toFixed(8), (m.input / 10).toFixed(8));
+  // over 100k the published long-prompt rate applies: $0.50/MTok input
+  assert.equal(priceUsage(usage({ input_tokens: 100001 }), 'claude-haiku-5-5', shipped).usd.toFixed(8), ((100001 * 0.5) / 1e6).toFixed(8));
+});
+
+// $/MTok — a model with a prompt-length tier (#202)
+const TIERED = {
+  models: {
+    'claude-tiered': {
+      input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1,
+      longPrompt: { over: 100000, input: 5, output: 25, cacheWrite5m: 6.25, cacheWrite1h: 10, cacheRead: 0.5 },
+    },
+    'claude-flat': { input: 1, output: 5, cacheWrite5m: 1.25, cacheWrite1h: 2, cacheRead: 0.1 },
+  },
+};
+
+test('a prompt-length tier prices the whole request at the long rates only once the prompt is over the threshold (#202)', () => {
+  const at = (inp) => priceUsage(usage({ input_tokens: inp, output_tokens: 1e6 }), 'claude-tiered', TIERED).usd;
+  assert.equal(at(99999).toFixed(6), (99999 / 1e6 + 5).toFixed(6)); // below: base rates
+  assert.equal(at(100000).toFixed(6), (100000 / 1e6 + 5).toFixed(6)); // exactly at: "over 100,000" is not met
+  assert.equal(at(100001).toFixed(6), ((100001 * 5) / 1e6 + 25).toFixed(6)); // above: long rates for every kind
+});
+
+test('the tier threshold counts input + cache write + cache read, and prices each kind at its long rate (#202)', () => {
+  const u = usage({
+    input_tokens: 40000, cache_read_input_tokens: 40000,
+    cache_creation: { ephemeral_5m_input_tokens: 10000, ephemeral_1h_input_tokens: 10001 },
+  });
+  const expected = (40000 * 5 + 40000 * 0.5 + 10000 * 6.25 + 10001 * 10) / 1e6;
+  assert.equal(priceUsage(u, 'claude-tiered', TIERED).usd.toFixed(8), expected.toFixed(8));
+  const flat = priceUsage(u, 'claude-flat', TIERED).usd;
+  assert.equal(flat.toFixed(8), ((40000 * 1 + 40000 * 0.1 + 10000 * 1.25 + 10001 * 2) / 1e6).toFixed(8));
+});
+
+test('the shipped Haiku 5.5 carries the 100k tier from the pricing page (#202)', () => {
+  const shipped = JSON.parse(readFileSync(new URL('../prices.json', import.meta.url), 'utf8'));
+  assert.deepEqual(shipped.models['claude-haiku-5-5'].longPrompt, {
+    over: 100000, input: 0.5, output: 2.5, cacheWrite5m: 0.625, cacheWrite1h: 1, cacheRead: 0.05,
+  });
+  assert.equal(priceUsage(usage({ input_tokens: 1e6 }), 'claude-haiku-5-5', shipped).usd, 0.5);
+});
+
+test('priceCheck: summed tiered-model cost-state tokens price at base rates, not as one long request (#202)', () => {
+  // 1M input + 1M output across many short requests: $1 + $5 at the base rates
+  const pc = checkOf(TIERED, costStateOf({ 'claude-tiered': mu({ costUSD: 6 }) }));
+  assert.deepEqual(pc.models['claude-tiered'], { files: 1, excepted: 0, band: 1, drift: [] });
 });
