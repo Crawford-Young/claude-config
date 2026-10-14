@@ -265,7 +265,7 @@ test('withClaim excludes across real processes racing a crash-left claim (#139)'
   }); process.stdout.write(r ?? '.');`;
   // Start mid-epoch, so no lease rollover can make every child back off and leave nothing tested.
   const leadMs = 2000 + ((CLAIM_LEASE_MS * 1.5 - ((Date.now() + 2000) % CLAIM_LEASE_MS)) % CLAIM_LEASE_MS);
-  const outs = await raceHarness(12, join(hooksDir, '_hooklib.mjs'), `(async () => { ${body} })()`, { home: h, leadMs });
+  const outs = await raceHarness(8, join(hooksDir, '_hooklib.mjs'), `(async () => { ${body} })()`, { home: h, leadMs });
   assert.equal(outs.filter((o) => o === 'X').length, 0, `overlapping holders: ${outs.join('')}`);
   assert.ok(outs.includes('C'), `someone claimed: ${outs.join('')}`);
   assert.equal(withClaim(base, () => 'ran'), 'ran', 'free again after the race');

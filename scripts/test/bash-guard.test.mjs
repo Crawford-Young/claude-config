@@ -512,13 +512,23 @@ test('#159: a block shares the cwd of the clauses around it; brace text that is 
   assert.deepEqual(clauses("if ($x) { git add a; git commit -m b }; echo c"), ['if ($x) { git add a; git commit -m b }', 'echo c']);
 });
 
+/** CPU ms (user + system) this process spends in `fn`. The scan budgets below use it, not wall
+ *  time: parallel test files loading the runner starved wall-clock budgets on CI (#139). */
+const cpuMs = (fn) => {
+  const start = process.cpuUsage();
+  fn();
+  const { user, system } = process.cpuUsage(start);
+  return (user + system) / 1000;
+};
+
 test('#159: unclosed braces cost one scan, not one per brace', () => {
-  const t = performance.now();
-  for (const c of ['a { '.repeat(20000) + '}', 'bash <<EOF\n' + 'if [ -n "$x" ]; then echo { ; fi\n'.repeat(5000) + 'EOF']) {
-    staticCheck(c);
-    gatedVerbs(c, null);
-  }
-  assert.ok(performance.now() - t < 2000, `${Math.round(performance.now() - t)} ms`);
+  const ms = cpuMs(() => {
+    for (const c of ['a { '.repeat(20000) + '}', 'bash <<EOF\n' + 'if [ -n "$x" ]; then echo { ; fi\n'.repeat(5000) + 'EOF']) {
+      staticCheck(c);
+      gatedVerbs(c, null);
+    }
+  });
+  assert.ok(ms < 2000, `${Math.round(ms)} ms`);
 });
 
 test('#160: !(git …) resolves the git call', () => {
@@ -909,9 +919,9 @@ test('#171 review: a function call is judged by its body when called, not when d
 
 test('#171 review 2: function calls are memoized and budgeted, so call graphs stay fast', () => {
   const timed = (cmd) => {
-    const t = performance.now();
-    const repo = repoOf(cmd, '/cwd', 'Bash');
-    return { repo, ms: performance.now() - t };
+    let repo;
+    const ms = cpuMs(() => (repo = repoOf(cmd, '/cwd', 'Bash')));
+    return { repo, ms };
   };
   // Fan-out 2, depth 20: 2^20 call paths before the memo.
   const fan = Array.from({ length: 20 }, (_, i) => `f${i}() { f${i + 1}; f${i + 1}; cd /pf; }; `).join('') + 'f20() { true; }; f0; git commit -m x';
@@ -1080,19 +1090,19 @@ test('#160: || ( … ) carries viaOr to the first commit inside the group', () =
 });
 
 // The hook's whole per-command path, with no cwd so no git process runs.
-const hookPathMs = (c) => {
-  const t = performance.now();
-  staticCheck(c);
-  branchRules(c, null);
-  browserCommand(c, null);
-  gatedVerbs(c, null);
-  billedLaunch(c);
-  return performance.now() - t;
-};
+const hookPathMs = (c) =>
+  cpuMs(() => {
+    staticCheck(c);
+    branchRules(c, null);
+    browserCommand(c, null);
+    gatedVerbs(c, null);
+    billedLaunch(c);
+  });
 
 // The three shapes below take 40-77 ms cold locally and ran 202-229 ms on CI
 // against a 200 ms bound (#181). With closeGroup's memo off (the quadratic
-// scan #163 fixed) they take 21 s, 10 s and 2.6 s, so 500 ms still catches it.
+// scan #163 fixed) they take 21 s, 10 s and 2.6 s, so 500 ms still catches it. Since #139
+// the budget is CPU time (cpuMs): 79-219 ms locally, above wall because GC threads count.
 const LINEAR_MS = 500;
 
 test('#163: a long line of unclosed { ${x} pairs scans in linear time', () => {
@@ -2372,9 +2382,9 @@ test('#167: nesting past the depth the guard reads blocks with its own reason, i
     assert.deepEqual(gatedVerbs(shape(20), null), ['git push'], `${name} 20`);
     for (const n of [1500, 5000]) {
       const c = shape(n);
-      const t = performance.now();
-      for (const rule of [staticCheck, gatedVerbs, branchRules, forgeWrite]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${n} ${rule.name}`);
-      const ms = performance.now() - t;
+      const ms = cpuMs(() => {
+        for (const rule of [staticCheck, gatedVerbs, branchRules, forgeWrite]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${n} ${rule.name}`);
+      });
       assert.ok(ms < LINEAR_MS, `${name} ${n}: ${Math.round(ms)} ms`);
     }
   }

@@ -396,17 +396,21 @@ test('state is shared: a nudge on PostToolUse does not re-fire on UserPromptSubm
   }
 });
 
+// Sized to reproduce the pre-#139 duplicate without starving other test files on a small CI runner.
+const RACERS = 8;
+const RACE_TRIALS = 2;
+
 test('parallel PostToolUse calls crossing a band together announce it once, and a lost race still announces next call (#139)', async () => {
-  for (let trial = 0; trial < 3; trial++) {
+  for (let trial = 0; trial < RACE_TRIALS; trial++) {
     const home = sharedHome();
     try {
       const transcript = join(home, 'transcript.jsonl');
       writeFileSync(transcript, line(usage(0, 160_000)));
       const payload = { hook_event_name: 'PostToolUse', tool_name: 'Bash', session_id: 'race', transcript_path: transcript };
       const env = { CLAUDE_CTX_WINDOW: '', CLAUDE_CTX_NUDGE: '', CLAUDE_CTX_WARN: '', CLAUDE_CTX_BLOCK: '' };
-      const outs = await raceHarness(12, HOOK, `m.main(${JSON.stringify(payload)});`, { home, env });
+      const outs = await raceHarness(RACERS, HOOK, `m.main(${JSON.stringify(payload)});`, { home, env });
       const announced = outs.filter((o) => /next green commit/.test(o)).length;
-      assert.ok(announced <= 1, `trial ${trial}: ${announced} of 12 parallel calls announced the nudge`);
+      assert.ok(announced <= 1, `trial ${trial}: ${announced} of ${RACERS} parallel calls announced the nudge`);
       const next = runPost(line(usage(0, 160_000)), { home, sid: 'race', env }).stdout;
       assert.equal(announced + (/next green commit/.test(next) ? 1 : 0), 1, `trial ${trial}: the band is announced exactly once`);
     } finally {

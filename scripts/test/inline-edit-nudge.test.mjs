@@ -150,18 +150,22 @@ test('a claim held by a concurrent hook suppresses the second nudge; a crash-lef
   assert.equal(nudge(payload, state), null, 'run recorded');
 });
 
+// Sized to reproduce the pre-#139 duplicate without starving other test files on a small CI runner.
+const RACERS = 8;
+const RACE_TRIALS = 2;
+
 test('parallel hooks racing a crash-left <state>.lock nudge at most once, and a lost race still nudges next edit (#139)', async () => {
   const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
-  for (let trial = 0; trial < 3; trial++) {
+  for (let trial = 0; trial < RACE_TRIALS; trial++) {
     const ctx = setup(five);
     const state = join(ctx.h, 'state.json');
     const payload = { session_id: 's1', transcript_path: ctx.transcript, tool_input: { file_path: 'cur.ts' } };
     writeFileSync(`${state}.lock`, '');
     const old = new Date(Date.now() - 60_000);
     utimesSync(`${state}.lock`, old, old);
-    const outs = await raceHarness(12, hook, `process.stdout.write(m.nudge(${JSON.stringify(payload)}, ${JSON.stringify(state)}) ? 'F' : '.');`, { home: ctx.h });
+    const outs = await raceHarness(RACERS, hook, `process.stdout.write(m.nudge(${JSON.stringify(payload)}, ${JSON.stringify(state)}) ? 'F' : '.');`, { home: ctx.h });
     const fired = outs.filter((o) => o === 'F').length;
-    assert.ok(fired <= 1, `trial ${trial}: ${fired} of 12 parallel hooks nudged`);
+    assert.ok(fired <= 1, `trial ${trial}: ${fired} of ${RACERS} parallel hooks nudged`);
     assert.equal(fired + (nudge(payload, state) ? 1 : 0), 1, `trial ${trial}: the run nudges exactly once`);
   }
 });
