@@ -14,6 +14,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isChosenName, isMain } from '../scripts/lib.mjs';
+import { withClaim } from '../hooks/_hooklib.mjs';
 
 const ESC = '\x1b';
 const RST = `${ESC}[0m`;
@@ -197,15 +198,7 @@ export const localDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${p
 export const spendDir = (env = process.env) => env.CLAUDE_SPEND_DIR || join(homedir(), '.claude', 'spend');
 export const spendLock = (dir) => join(dir, 'refresh.lock');
 
-function kickRefresh(dir, env, now) {
-  const lock = spendLock(dir);
-  try {
-    if (now - statSync(lock).mtimeMs < LOCK_STALE_MS) return;
-  } catch {
-    /* no lock */
-  }
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(lock, String(now));
+function startWorker(dir, env) {
   const worker = fileURLToPath(new URL('./spend.mjs', import.meta.url));
   // cwd off the session's dir, so the worker never pins a worktree being removed
   const child = spawn(process.execPath, [worker], { detached: true, stdio: 'ignore', windowsHide: true, env, cwd: dir });
@@ -213,16 +206,47 @@ function kickRefresh(dir, env, now) {
   child.unref();
 }
 
+function readDayCache(dir, now) {
+  try {
+    return JSON.parse(readText(join(dir, `day-${localDay(new Date(now))}.json`)) || 'null');
+  } catch {
+    return null; // torn or corrupt: treated as stale, so the next refresh rewrites it
+  }
+}
+
+const cacheFresh = (cache, now) => now - (cache?.ts || 0) < SPEND_STALE_MS;
+
+const lockHeld = (lock, now) => {
+  try {
+    return now - statSync(lock).mtimeMs < LOCK_STALE_MS;
+  } catch {
+    return false; // no lock
+  }
+};
+
+/** Take refresh.lock and start the spend worker → true when this render started it.
+ *  The lock outlives the render (the worker drops it), so withClaim's short lease only
+ *  guards the check-then-write: parallel renders past a stale cache start one worker
+ *  (#216). A render that finds the claim held skips; a later render retries. The unclaimed
+ *  check first keeps renders cheap while a worker runs. `start` is a test seam. */
+export function kickRefresh(dir, env, now, start = startWorker) {
+  const lock = spendLock(dir);
+  if (lockHeld(lock, now)) return false;
+  const took = withClaim(lock, () => {
+    // a fast worker may have refreshed the cache and dropped the lock since the caller read it
+    if (lockHeld(lock, now) || cacheFresh(readDayCache(dir, now), now)) return false;
+    writeFileSync(lock, String(now));
+    start(dir, env);
+    return true;
+  });
+  return took === true;
+}
+
 /** `day $48` — today's spend across sessions; absent until the first refresh. */
 function dayPiece(env, now = Date.now()) {
   const dir = spendDir(env);
-  let cache = null;
-  try {
-    cache = JSON.parse(readText(join(dir, `day-${localDay(new Date(now))}.json`)) || 'null');
-  } catch {
-    /* torn or corrupt: treated as stale, so the next refresh rewrites it */
-  }
-  if (!env.CLAUDE_SPEND_NO_REFRESH && !(now - (cache?.ts || 0) < SPEND_STALE_MS)) kickRefresh(dir, env, now);
+  const cache = readDayCache(dir, now);
+  if (!env.CLAUDE_SPEND_NO_REFRESH && !cacheFresh(cache, now)) kickRefresh(dir, env, now);
   const usd = num(cache?.usd);
   if (usd === null) return null;
   return `day $${usd >= 10 ? usd.toFixed(0) : usd.toFixed(2)}`;

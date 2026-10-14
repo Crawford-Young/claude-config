@@ -1217,6 +1217,12 @@
    "label": "isMain, isChosenName"
   },
   {
+   "from": "script:statusline",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "withClaim around refresh.lock (#216)"
+  },
+  {
    "from": "store:settings-json",
    "to": "hook:notification-toast",
    "kind": "loads",

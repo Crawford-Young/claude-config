@@ -50,7 +50,7 @@ Each row shows label · model tier · effort · tokens · elapsed. Effort appear
 
 `spend.mjs` prices today's assistant records with `audit-lib.priceUsage`. For each requestId it keeps the max-output record, deduped across files so a resumed session's replay counts once.
 - Per-file byte offsets live in `~/.claude/spend/day-<date>.state.json`, so a refresh reads only appended bytes: cold 121 ms, warm 12 ms over 46 transcripts.
-- The render reads only `day-<date>.json`. When that file is over 60 s old, the render spawns the worker detached under `refresh.lock` (stale after 120 s), so a render never waits on it.
+- The render reads only `day-<date>.json`. When that file is over 60 s old, the render spawns the worker detached under `refresh.lock` (stale after 120 s), so a render never waits on it. Taking the lock runs under `_hooklib`'s `withClaim` lease, so parallel renders start one worker (#216).
 - Earlier days' files are deleted on refresh.
 - **Locking:** a failed refresh keeps the lock, so its 120 s staleness window acts as the retry backoff. A worker exits after 60 s, whatever it was doing.
 - **Credits:** no documented account-credits source exists. The documented `rate_limits.spend_limit` (Claude apps gateway only) renders as a third window, `spend ▰▰▱ 42% $630/$1500→Nov 1`, whenever it appears. The dollar figures show only when present. It has never appeared in this account's payloads.

@@ -2,13 +2,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { spawnHarness } from './_spawn.mjs';
+import { raceHarness, spawnHarness } from './_spawn.mjs';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fillBar, formatTokens, gitInfo, historySample, localDay, registryName, render, spendLock } from '../../statusline/statusline.mjs';
+import { fillBar, formatTokens, gitInfo, historySample, kickRefresh, localDay, registryName, render, spendLock } from '../../statusline/statusline.mjs';
 import { readFrom, refresh } from '../../statusline/spend.mjs';
 import { render as renderSubagents } from '../../statusline/subagent.mjs';
 import { priceUsage } from '../../scripts/audit-lib.mjs';
@@ -428,6 +428,43 @@ test('spend: a stale cache spawns the detached worker, which fills it and drops 
     assert.ok(Math.abs(JSON.parse(readFileSync(day, 'utf8')).usd - (cost(50) + cost(20, 'claude-sonnet-5-5'))) < 1e-9);
   } finally {
     await rmWorkerRoot(root);
+  }
+});
+
+test('spend: parallel renders past a stale cache start one worker per refresh window (#216)', async () => {
+  // Each racer counts its starts on stdout instead of spawning spend.mjs. Fresh dir, then a
+  // crash-left stale lock: both paths into the take must admit at most one racer.
+  for (const stale of [false, true]) {
+    const home = tmp();
+    const spend = join(home, 'spend');
+    try {
+      if (stale) {
+        mkdirSync(spend);
+        writeFileSync(spendLock(spend), '0');
+        utimesSync(spendLock(spend), new Date(0), new Date(0));
+      }
+      const body = `m.kickRefresh(${JSON.stringify(spend)}, {}, Date.now(), () => process.stdout.write('started'));`;
+      const outs = await raceHarness(8, SCRIPT, body, { home });
+      const started = outs.filter((o) => o === 'started').length;
+      assert.ok(started <= 1, `${stale ? 'stale lock' : 'no lock'}: ${started} of 8 parallel renders started a worker`);
+      // none started only when every racer backed off at a lease rollover; a later render retries
+      if (started) assert.ok(existsSync(spendLock(spend)), 'the lock is held for the worker');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test('spend: a render holding a stale cache read starts no worker once a fast worker refreshed it (#216)', () => {
+  const dir = tmp();
+  try {
+    const now = Date.now();
+    writeFileSync(join(dir, `day-${localDay(new Date(now))}.json`), JSON.stringify({ usd: 1, ts: now })); // lock already dropped
+    let started = 0;
+    assert.equal(kickRefresh(dir, {}, now, () => started++), false);
+    assert.equal(started, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
