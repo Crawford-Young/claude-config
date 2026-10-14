@@ -262,16 +262,18 @@ export function substitutions(s, quotesLiteral = false) {
  *  separators, so a flag in one clause can't be attributed to a command in
  *  another and quoted text stays with the command that owns it. A substitution
  *  body stays whole (`echo $(a; b)` is one clause), and so does a redirection
- *  (`2>&1`, `&>f`), and so does find's `-exec … \;`. With `pipes`, a pipeline
- *  (`a | b`, `a |& b`) is one piece — `pipelines()`. Unbalanced quotes fall back to the plain split — never
- *  swallow the rest of the line. When `seps` is an array it is filled, parallel to
- *  the result, with the separator before each clause ('' for the first); the
- *  unbalanced-quote fallback leaves it empty. A block body (`{ … }`, see
- *  blockAt) stays whole too; when `blocks` is an array, each block in a clause
- *  is cut out to a `{}` placeholder and the array is filled, parallel to the
- *  result, with that clause's blocks as { head, body } (`head` is the clause
- *  text since the previous block: `if ($x) `, ` else `). */
-export function clauses(cmd, pipes = false, seps = null, blocks = null) {
+ *  (`2>&1`, `&>f`), and so does find's `-exec … \;` unless `tool` is
+ *  PowerShell, where `\` is a word and the `;` still splits. With `pipes`, a
+ *  pipeline (`a | b`, `a |& b`) is one piece — `pipelines()`. Unbalanced
+ *  quotes fall back to the plain split — never swallow the rest of the line.
+ *  When `seps` is an array it is filled, parallel to the result, with the
+ *  separator before each clause ('' for the first); the unbalanced-quote
+ *  fallback leaves it empty. A block body (`{ … }`, see blockAt) stays whole
+ *  too; when `blocks` is an array, each block in a clause is cut out to a `{}`
+ *  placeholder and the array is filled, parallel to the result, with that
+ *  clause's blocks as { head, body } (`head` is the clause text since the
+ *  previous block: `if ($x) `, ` else `). */
+export function clauses(cmd, pipes = false, seps = null, blocks = null, tool = null) {
   const out = [];
   const before = [];
   const found = [];
@@ -305,7 +307,7 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
       cur += ch;
     } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
       cur += ch;
-    } else if (ch === '\\' && cmd[i + 1] === ';' && FIND_EXEC.test(cur)) {
+    } else if (ch === '\\' && cmd[i + 1] === ';' && tool !== 'PowerShell' && FIND_EXEC.test(cur)) {
       // find's escaped `\;` ends its -exec payload, not the clause. Anywhere
       // else it splits: PowerShell reads `\` as a plain character.
       cur += ch + cmd[++i];
@@ -356,7 +358,7 @@ export class NestingError extends Error {
 }
 
 /** The pipelines of a compound command: clauses that keep `|` inside. */
-const pipelines = (cmd, seps = null) => clauses(cmd, true, seps);
+const pipelines = (cmd, seps = null, tool = null) => clauses(cmd, true, seps, null, tool);
 
 /** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
  *  word. Unbalanced quotes: plain whitespace split. */
@@ -453,7 +455,7 @@ function expandHome(p) {
 /** The static rules (1-4, 10, 11) on one command. `tool` is the payload's
  *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
  *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
- *  reads them as aliases. */
+ *  reads them as aliases. It is also the shell the command is parsed in (newScope). */
 export function staticCheck(raw, cwd = null, tool = null) {
   if (!raw) return null;
   if (heredocHasDoubledBackslash(raw)) {
@@ -466,7 +468,7 @@ export function staticCheck(raw, cwd = null, tool = null) {
   //    tar -A) or inside quoted text is not a hit. The bare-`.` check wants
   //    `.` (or `./`) as a whole argument: `.env`, `.github/…` and `./src/x.ts`
   //    are specific paths, not the whole tree.
-  const calls = gitCalls(cmd, null);
+  const calls = gitCalls(cmd, null, tool);
   for (const { sub, args } of calls) {
     if (sub === 'add' && args.some((a) => a === '--all' || /^-[a-zA-Z]*A[a-zA-Z]*$/.test(a))) {
       return 'git add -A/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
@@ -487,7 +489,7 @@ export function staticCheck(raw, cwd = null, tool = null) {
 
   // 3. gate output piped onward — a gate command, by command word, with any
   //    command after it in the same pipeline (tail, head, grep, tee… all mask it)
-  const cmds = commands(cmd, null);
+  const cmds = commands(cmd, null, false, false, newScope(null, tool));
   if (cmds.some((g) => isGate(g) && cmds.some((t) => t.pipe === g.pipe && t.seg > g.seg))) {
     return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use `node $HOME/code/claude-config/scripts/qa.mjs` for compact output).';
   }
@@ -500,7 +502,7 @@ export function staticCheck(raw, cwd = null, tool = null) {
   }
 
   // 11. a write into a transcript or a gate state file (#190)
-  return forgeWrite(raw, cwd);
+  return forgeWrite(raw, cwd, tool);
 }
 
 /** 7. The billed model a shell-launched `claude` would run on, or null. `claude`
@@ -965,10 +967,10 @@ function callForges(call, ctx, fed = false) {
  *  [IO.File]) whose write call names one as a literal path, or writes a
  *  computed path while the command names one. Static, so best-effort: a
  *  script file is out of its sight, its path literal or built at runtime. */
-export function forgeWrite(raw, cwd = null) {
+export function forgeWrite(raw, cwd = null, tool = null) {
   const cmd = scrub(raw);
   const ctx = { cmd, raw, named: namesGateRecord(cmd), namedState: namesGateState(cmd) };
-  const calls = commands(cmd, cwd);
+  const calls = commands(cmd, cwd, false, false, newScope(cwd, tool));
   return calls.some((call) => callForges({ ...call, upstream: upstreamPaths(calls, call), spill: spilledTarget(calls, call) }, ctx)) ? FORGE_REASON : null;
 }
 
@@ -1003,7 +1005,12 @@ const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
 const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)(?:\.exe)?$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
-const PRINTS = /^(?:echo|printf|write|write-output|write-host)$/i;
+// An if/elseif condition that runs no command: a var, a literal, `-not` one, or
+// two compared (`if ($x -eq 'b')`).
+const TEST_OPERAND = String.raw`(?:\$[\w:]+|-?\d+|'[^']*'|"[^"$\x60]*")`;
+const PLAIN_TEST = new RegExp(String.raw`^(?:if|elseif)\s*\(\s*(?:(?:!|-not)\s*)?${TEST_OPERAND}(?:\s+-[a-z]+\s+${TEST_OPERAND})?\s*\)$`, 'i');
+// A block head that is a print command with plain args: the block is one more arg.
+const PRINTED = /^(?:echo|printf|write|write-output|write-host)(?:\s[^()$@;&|<>`]*)?$/i;
 // A case arm's pattern word: `a)`, `(a)`, `a|b)`, `*)`, never fi)/done)/esac).
 const CASE_PATTERN = /^\(?(?!(?:esac|fi|done)\)+$)[^()]+\)$/;
 const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
@@ -1364,17 +1371,20 @@ function parens(p) {
  *  state into a body; `scope` is the cwd, pushd stacks, vars and defined
  *  functions a block shares with its clause. Past MAX_NESTING it throws a
  *  NestingError, which the hook turns into a block. */
-function commands(...args) {
-  if (nesting >= MAX_NESTING) throw new NestingError();
+function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cwd)) {
+  // The top-level text is level 0: up to MAX_NESTING bodies below it are read.
+  // The count is back to 0 after every outermost call, thrown or not.
+  if (nesting > MAX_NESTING) throw new NestingError();
   nesting++;
   try {
-    return walkCommands(...args);
+    return walkCommands(raw, cwd, orFirst, inLoop, scope);
   } finally {
     nesting--;
   }
 }
 
-function walkCommands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cwd)) {
+/** One level of commands(): the walk itself. */
+function walkCommands(raw, cwd, orFirst, inLoop, scope) {
   const out = [];
   let loops = 0; // loops opened in this text and not yet closed by `done`
   let ifs = 0; // bash if/case blocks opened in this text and not yet closed by fi/esac
@@ -1418,7 +1428,7 @@ function walkCommands(raw, cwd, orFirst = false, inLoop = false, scope = newScop
   let orList = false; // an `||` since the last `;`/newline/`&`: what runs now may not
   const pipeSeps = [];
   let committed = false; // the pipeline before this one emitted a git commit
-  for (const [pi, p] of pipelines(raw, pipeSeps).entries()) {
+  for (const [pi, p] of pipelines(raw, pipeSeps, scope.tool).entries()) {
     // An `||` makes an alternative only to a commit that could have failed: the
     // pipeline right before it must hold one (`a; false || git commit` is no
     // fallback — its commit spends like any other).
@@ -1448,7 +1458,7 @@ function walkCommands(raw, cwd, orFirst = false, inLoop = false, scope = newScop
     };
     const pipe = {};
     const blocks = [];
-    const segs = clauses(p, false, null, blocks);
+    const segs = clauses(p, false, null, blocks, scope.tool);
     for (const [seg, c] of segs.entries()) {
       settle();
       closeSubshells();
@@ -1518,12 +1528,17 @@ function walkCommands(raw, cwd, orFirst = false, inLoop = false, scope = newScop
       let chain = null; // the PowerShell if/elseif/else chain this clause's blocks are arms of
       for (const { head, body } of blocks[seg] || []) {
         const h = head.trim();
-        // echo prints a `{ … }` (bash: words, PowerShell: a script block) unless
-        // bash would split it: a separator, redirect or substitution in it runs.
-        if (PRINTS.test(cmd) && !/[;&|\n<>$`()]/.test(body)) continue;
-        // Only one arm of a chain runs: each tags the calls in its body (see exclusive).
-        if (/^if\s*\(/i.test(h)) chain = { arms: 0 };
+        // echo prints a `{ … }` it owns (bash: words, PowerShell: a script block)
+        // unless bash would split it: a separator, redirect or substitution in it
+        // runs. One in a condition, a call or a method argument (`if (echo x) {`,
+        // `echo (icm {`, `.ForEach({`) is no echo arg.
+        if (PRINTED.test(h) && !/[;&|\n<>$`()]/.test(body)) continue;
+        // Only one arm of a chain runs: each tags the calls in its body (see
+        // exclusive). A condition the guard can't read (a command) may itself
+        // commit, so it voids the chain's exemption.
+        if (/^if\s*\(/i.test(h)) chain = { arms: 0, read: true };
         else if (!/^(?:elseif|else)\b/i.test(h)) chain = null;
+        if (chain && /^(?:if|elseif)\b/i.test(h) && !PLAIN_TEST.test(h)) chain.read = false;
         const arm = chain && { chain, n: chain.arms++ };
         const inArm = (cs) => {
           if (arm) for (const call of cs) (call.arms ??= []).push(arm);
@@ -1688,9 +1703,9 @@ export function gitCalls(raw, cwd, tool = null) {
 /** Every `gh` call's subcommand pair (`gh pr create` → sub 'pr', action
  *  'create') and its args, parsed by command word the same way as a git call
  *  — never by substring, so quoted text and commit messages never trigger it. */
-export function ghCalls(raw, cwd) {
+export function ghCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w } of commands(raw, cwd)) {
+  for (const { cmd, words: w } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
     if (!/^gh(?:\.exe)?$/i.test(cmd)) continue;
     // `-R x` / `--repo x` take a value, before the subcommand or after it.
     const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
@@ -1717,13 +1732,13 @@ function isBranchDelete(args) {
 /** 8. Every verb a command would spend a push/PR approval on, in order —
  *  empty when nothing here is gated. `git push --dry-run` and remote branch
  *  deletes are exempt. */
-export function gatedVerbs(raw, cwd) {
+export function gatedVerbs(raw, cwd, tool = null) {
   const cmd = scrub(raw);
   const out = [];
-  for (const { sub, args } of gitCalls(cmd, cwd)) {
+  for (const { sub, args } of gitCalls(cmd, cwd, tool)) {
     if (sub === 'push' && !args.includes('--dry-run') && !isBranchDelete(args)) out.push('git push');
   }
-  for (const { sub, action } of ghCalls(cmd, cwd)) {
+  for (const { sub, action } of ghCalls(cmd, cwd, tool)) {
     if (sub === 'pr' && (action === 'create' || action === 'merge')) out.push(`gh pr ${action}`);
   }
   return out;
@@ -1731,8 +1746,8 @@ export function gatedVerbs(raw, cwd) {
 
 /** The first gated verb, or null — callers must check this FIRST and read
  *  nothing else when it's null, so a non-gated command costs zero extra I/O. */
-export function gatedVerb(raw, cwd) {
-  return gatedVerbs(raw, cwd)[0] || null;
+export function gatedVerb(raw, cwd, tool = null) {
+  return gatedVerbs(raw, cwd, tool)[0] || null;
 }
 
 const APPROVE_RE = /\b(commit|push|pr|pull request|merge|ship|land)\b/i;
@@ -1928,8 +1943,8 @@ const askRemedy = (verb) =>
 /** 8. git push / gh pr create / gh pr merge need an approving answer in the
  *  transcript, spent once per verb. `transcriptPath` is read lazily — a
  *  non-gated command never touches disk here. */
-export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined) {
-  const verbs = gatedVerbs(raw, cwd);
+export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined, tool = null) {
+  const verbs = gatedVerbs(raw, cwd, tool);
   if (!verbs.length) return null;
   if (verbs.length > 1) {
     return `This command holds ${verbs.length} gated verbs (${verbs.join(', ')}) — run each gated verb in its own Bash call, so each one is checked against the user's approval on its own. Nothing was spent.`;
@@ -1967,8 +1982,8 @@ const PW_VISIBLE_FLAG = /^--(?:headed|ui|debug)(?:=.*)?$/;
  *  (`npx`, `pnpm exec`, `yarn dlx` …). `--headed` on any other command (a
  *  package script forwarding it) counts too. Headless `playwright test` is a
  *  QA gate and stays ungated. */
-export function browserCommand(raw, cwd) {
-  for (const { cmd, words: w } of commands(scrub(raw), cwd)) {
+export function browserCommand(raw, cwd, tool = null) {
+  for (const { cmd, words: w } of commands(scrub(raw), cwd, false, false, newScope(cwd, tool))) {
     let p = -1;
     if (/^playwright(?:\.cmd|\.exe)?$/i.test(cmd)) p = 0;
     else if (PW_LAUNCHER.test(cmd)) {
@@ -2021,8 +2036,9 @@ export function branchRules(raw, cwd, tool = null) {
 }
 
 /** Do two calls' arm lists (see commands) put them in different arms of one
- *  if/elseif/else chain, so at most one of them runs? */
-const exclusive = (a, b) => a.some((x) => b.some((y) => x.chain === y.chain && x.n !== y.n));
+ *  if/elseif/else chain whose conditions run no command, so at most one of
+ *  them runs and nothing between them commits? */
+const exclusive = (a, b) => a.some((x) => b.some((y) => x.chain === y.chain && x.n !== y.n && x.chain.read));
 
 function callRule({ sub, args, repo, viaOr, loop, arms = [] }, rooted = new Map()) {
   const isCommit = sub === 'commit';
@@ -2097,13 +2113,13 @@ function guard(payload) {
     if (fileReason) block(fileReason);
     return;
   }
-  const browser = browserCommand(cmd, cwd);
+  const browser = browserCommand(cmd, cwd, tool);
   // Browser before push: a blocked command never spends a push approval.
   const reason =
     staticCheck(cmd, cwd, tool) ||
     branchRules(cmd, cwd, tool) ||
     (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
-    pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);
+    pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool);
   if (reason) block(reason);
   // Last, so a command another rule blocks never spends the clearance.
   const billed = billedLaunch(cmd);

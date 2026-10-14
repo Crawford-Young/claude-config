@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asksUser, continuationAsked, humanRepliedAfter, lastAssistantText, lastMerge, lastReflectAt, newestMerge } from '../../hooks/stop-reflect-gate.mjs';
+import { asksUser, continuationAsked, humanRepliedAfter, isMerge, lastAssistantText, lastMerge, lastReflectAt, newestMerge } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
@@ -143,6 +143,14 @@ test('lastMerge: PowerShell merges and gh -R forms count; --auto only queues', (
   assert.equal(lastMerge(tx(call('e', 'echo "gh pr merge 5"'), result('e'))), null);
 });
 
+test('#167: a command nested too deep to read is no merge, and the merges around it still count', () => {
+  const deep = '{ '.repeat(200) + 'gh pr merge 1; ' + '} '.repeat(200);
+  assert.equal(isMerge(deep), false);
+  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+  assert.equal(lastMerge(tx(call('a', 'gh pr merge 2'), result('a'), call('d', deep), result('d'))), 'a');
+  assert.equal(lastMerge(tx(call('d', deep), result('d'), call('b', 'gh pr merge 3'), result('b'))), 'b');
+});
+
 test('#167: --auto is read per merge call, so a block, substitution or shell string holding a queued and a real merge counts', () => {
   const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
   for (const c of ['if ($x) { gh pr merge 1 --auto --squash; gh pr merge 2 }', 'echo $(gh pr merge 1 --auto --squash; gh pr merge 2)', 'bash -c "gh pr merge 1 --auto --squash; gh pr merge 2"', 'gh pr merge 1 --auto; gh pr merge 2']) {
@@ -151,6 +159,8 @@ test('#167: --auto is read per merge call, so a block, substitution or shell str
   for (const c of ['if ($x) { gh pr merge 1 --auto }', 'gh pr merge 1 --auto=true']) {
     assert.equal(lastMerge(tx(call('n', c), result('n'))), null, c);
   }
+  // A merge in a PowerShell condition's block runs.
+  assert.equal(isMerge('if (echo x) { gh pr merge 5 }'), true);
   // Another command's --auto queues nothing.
   assert.equal(lastMerge(tx(call('o', 'gh pr merge 1 --rebase && echo --auto'), result('o'))), 'o');
 });

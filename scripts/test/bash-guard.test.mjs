@@ -2385,3 +2385,59 @@ test('#167: nesting past the depth the guard reads blocks with its own reason, i
   assert.match(r.stderr, /deeper than/);
   assert.doesNotMatch(r.stderr, /failed before/);
 });
+
+test('#167: the nesting limit reads 100 nested bodies and blocks at 101', () => {
+  for (const shape of [(n) => '{ '.repeat(n) + 'git push; ' + '} '.repeat(n), (n) => 'echo ' + '$('.repeat(n) + 'git push' + ')'.repeat(n)]) {
+    assert.deepEqual(gatedVerbs(shape(100), null), ['git push']);
+    assert.throws(() => gatedVerbs(shape(101), null), /deeper than/);
+  }
+});
+
+test('#167 review: echo skips only a block it owns, not one in a condition, a call or a method argument', () => {
+  for (const [c, verb] of [
+    ['if (echo x) { git push }', 'git push'],
+    ['while (echo 1) { git push }', 'git push'],
+    ['if (Write-Output 1) { gh pr create }', 'gh pr create'],
+    ['echo (icm { git push })', 'git push'],
+    ['Write-Host -Object (Invoke-Command { git push })', 'git push'],
+    ['Write-Output @(icm { git push })', 'git push'],
+    ['echo $a.ForEach({ git push })', 'git push'],
+    ['echo $a.Where({ git push })', 'git push'],
+  ]) {
+    assert.deepEqual(gatedVerbs(c, null, 'PowerShell'), [verb], c);
+    assert.deepEqual(gatedVerbs(c, null), [verb], c);
+  }
+});
+
+test('#167 review: in PowerShell an escaped \\; still splits, so what follows it is a command', () => {
+  const ps = 'PowerShell';
+  assert.deepEqual(gatedVerbs('find . -exec echo {} \\; git push', null, ps), ['git push']);
+  assert.match(staticCheck('find . -exec echo {} \\; rm ~/.claude/push-gate-approvals.json', '/work', ps) ?? '', /#190/);
+  // Bash (and an unknown shell) keep it: there `git push` are find's own args.
+  assert.deepEqual(gatedVerbs('find . -exec echo {} \\; git push', null, 'Bash'), []);
+  const h = tmpHome();
+  const app = join(h, 'app');
+  bornRepo(app);
+  const run = (tool) =>
+    spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: tool, tool_input: { command: `cd ${app}; find . -exec echo {} \\; git commit -m x` }, cwd: h }), home: h }).status;
+  assert.equal(run(ps), 2);
+  assert.equal(run('Bash'), 0);
+});
+
+test('#167 review: an if/elseif condition the guard does not read voids the arm exemption', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  for (const cmd of [
+    `cd ${app}; if ($x) { git commit -m a } elseif (git commit -m b) { git commit -m c }`,
+    `cd ${app}; if (Test-Path x) { git commit -m a } else { git commit -m b }`,
+    `cd ${app}; if ($(git commit -m a)) { git commit -m b } else { git commit -m c }`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+  // A bare var, a literal or a comparison of those is no command.
+  for (const cmd of [`cd ${app}; if (-not $x) { git commit -m a } elseif ($y -eq 'b') { git commit -m b } else { git commit -m c }`]) {
+    assert.equal(guardRun(cmd, h), 0, cmd);
+  }
+});

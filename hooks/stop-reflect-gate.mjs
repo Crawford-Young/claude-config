@@ -43,16 +43,23 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isMain } from '../scripts/lib.mjs';
 import { block, claudeDir, readState, run, shellSkillReads, writeState } from './_hooklib.mjs';
-import { ghCalls, scrub } from './bash-guard.mjs';
+import { ghCalls, NestingError, scrub } from './bash-guard.mjs';
 
 const stateFile = join(claudeDir, 'stop-reflect-gate.json');
 const MERGE_TOOLS = new Set(['Bash', 'PowerShell']);
 const REFLECT_SKILL = /skills[\\/]reflect[\\/]SKILL\.md$/i;
 
 /** Does this command run a real (not `--auto`-queued) `gh pr merge`? Read per
- *  call, so a block or substitution holding a queued and a real merge counts (#167). */
+ *  call, so a block or substitution holding a queued and a real merge counts (#167).
+ *  A command nested too deep for the guard to read is no merge: one such line
+ *  must not silence the gate for the rest of the session. */
 export function isMerge(command) {
-  return ghCalls(scrub(command || ''), null).some(({ sub, action, args }) => sub === 'pr' && action === 'merge' && !args.some((a) => /^--auto(?:=|$)/.test(a)));
+  try {
+    return ghCalls(scrub(command || ''), null).some(({ sub, action, args }) => sub === 'pr' && action === 'merge' && !args.some((a) => /^--auto(?:=|$)/.test(a)));
+  } catch (err) {
+    if (err instanceof NestingError) return false;
+    throw err;
+  }
 }
 
 /** {id, at, prevAt} of the newest `gh pr merge` call whose result is not an error, else null; `at` is epoch ms or null,
