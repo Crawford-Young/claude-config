@@ -1530,9 +1530,11 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
         const h = head.trim();
         // echo prints a `{ … }` it owns (bash: words, PowerShell: a script block)
         // unless bash would split it: a separator, redirect or substitution in it
-        // runs. One in a condition, a call or a method argument (`if (echo x) {`,
-        // `echo (icm {`, `.ForEach({`) is no echo arg.
-        if (PRINTED.test(h) && !/[;&|\n<>$`()]/.test(body)) continue;
+        // runs. It owns one only when the clause is the echo: a later block's head
+        // is just the text since the last `}` (`& { … } echo {`). One in a
+        // condition, a call or a method argument (`if (echo x) {`, `echo (icm {`,
+        // `.ForEach({`) is no echo arg.
+        if (PRINTED.test(cmd) && PRINTED.test(h) && !/[;&|\n<>$`()]/.test(body)) continue;
         // Only one arm of a chain runs: each tags the calls in its body (see
         // exclusive). A condition the guard can't read (a command) may itself
         // commit, so it voids the chain's exemption.

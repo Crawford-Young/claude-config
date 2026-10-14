@@ -2441,3 +2441,16 @@ test('#167 review: an if/elseif condition the guard does not read voids the arm 
     assert.equal(guardRun(cmd, h), 0, cmd);
   }
 });
+
+test('#167 review 2: echo skips only the block of its own clause, not a later block after another command', () => {
+  for (const [c, verb] of [
+    ['& { & $args[1] } echo { git push }', 'git push'],
+    ['icm { & $args[1] } Write-Host { gh pr create }', 'gh pr create'],
+    ['& { & $args[1] } echo { gh pr merge 5 }', 'gh pr merge'],
+    ['& { & $args[1] } echo { git push }; echo ok', 'git push'],
+  ]) {
+    assert.deepEqual(gatedVerbs(c, null, 'PowerShell'), [verb], c);
+  }
+  // A clause that is the echo still owns its block.
+  for (const tool of ['PowerShell', 'Bash']) assert.deepEqual(gatedVerbs('echo { git push }', null, tool), [], tool);
+});

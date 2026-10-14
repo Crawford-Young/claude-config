@@ -10,14 +10,14 @@ import { fileURLToPath } from 'node:url';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'guard-replay.mjs');
 
-function checkout(staticBody, approving = 'true', extra = '') {
+function checkout(staticBody, approving = 'true', extra = '', { gated = '() => []', browser = '() => null' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gr-co-'));
   mkdirSync(join(dir, 'hooks'));
   writeFileSync(
     join(dir, 'hooks', 'bash-guard.mjs'),
     `export const staticCheck = (c, cwd, tool) => { ${staticBody} };
-export const gatedVerbs = () => [];
-export const browserCommand = () => null;
+export const gatedVerbs = ${gated};
+export const browserCommand = ${browser};
 export const isApproving = () => ${approving};
 ${extra}
 `,
@@ -190,6 +190,19 @@ export const branchRules = () => null;`);
     'branchRules[born]: allow -> BLOCK | git commit -m x',
     'branchRules[born]: allow -> BLOCK | sc f x',
     'summary: 7 changed; 4 commands, 0 answers from 1 files; --branch: 2 gitCalls, 4 branchRules over 8 probes (unborn + born)',
+  ]);
+});
+
+test('gatedVerbs and browserCommand replay under the tool that ran each command', () => {
+  const toolCo = checkout('return null;', 'true', '', {
+    gated: "(c, cwd, tool) => (tool === 'PowerShell' ? ['git push'] : [])",
+    browser: "(c, cwd, tool) => (tool === 'PowerShell' ? 'playwright' : null)",
+  });
+  const cfg = config({ 's.jsonl': [bash('x'), bash('y', 'PowerShell')] });
+  assert.deepEqual(run(cfg, checkout('return null;'), toolCo).trim().split('\n'), [
+    'gatedVerbs: [] -> ["git push"] | y',
+    'browserCommand: null -> "playwright" | y',
+    'summary: 2 changed; 2 commands, 0 answers from 1 files',
   ]);
 });
 

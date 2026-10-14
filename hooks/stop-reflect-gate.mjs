@@ -53,9 +53,9 @@ const REFLECT_SKILL = /skills[\\/]reflect[\\/]SKILL\.md$/i;
  *  call, so a block or substitution holding a queued and a real merge counts (#167).
  *  A command nested too deep for the guard to read is no merge: one such line
  *  must not silence the gate for the rest of the session. */
-export function isMerge(command) {
+export function isMerge(command, tool = null) {
   try {
-    return ghCalls(scrub(command || ''), null).some(({ sub, action, args }) => sub === 'pr' && action === 'merge' && !args.some((a) => /^--auto(?:=|$)/.test(a)));
+    return ghCalls(scrub(command || ''), null, tool).some(({ sub, action, args }) => sub === 'pr' && action === 'merge' && !args.some((a) => /^--auto(?:=|$)/.test(a)));
   } catch (err) {
     if (err instanceof NestingError) return false;
     throw err;
@@ -76,7 +76,7 @@ export function newestMerge(text) {
       continue;
     }
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
-      if (c?.type === 'tool_use' && MERGE_TOOLS.has(c.name) && isMerge(c.input?.command)) {
+      if (c?.type === 'tool_use' && MERGE_TOOLS.has(c.name) && isMerge(c.input?.command, c.name)) {
         merges.set(c.id, false);
         const t = Date.parse(o?.timestamp);
         times.set(c.id, Number.isNaN(t) ? null : t);

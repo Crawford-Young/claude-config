@@ -177,8 +177,8 @@ async function main() {
 
   const cmdFns = [
     ['staticCheck', (m, c, tool) => verdict(m.staticCheck, c, null, tool)],
-    ['gatedVerbs', (m, c) => verdict(m.gatedVerbs, c, cwd)],
-    ['browserCommand', (m, c) => verdict(m.browserCommand, c, cwd)],
+    ['gatedVerbs', (m, c, tool) => verdict(m.gatedVerbs, c, cwd, tool)],
+    ['browserCommand', (m, c, tool) => verdict(m.browserCommand, c, cwd, tool)],
   ];
   for (const { command: c, tool } of commands) for (const [name, f] of cmdFns) report(name, f(a, c, tool), f(b, c, tool), c);
 

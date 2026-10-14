@@ -503,3 +503,13 @@ test('a previous wave clear-or-continue ask does not satisfy the next wave merge
   const transcript_path = transcript(...mergeAt('w1', 70), reflectRead('r', 50), ask(45, clearQ), ...mergeAt('w2', 20));
   assert.equal(runHook({ transcript_path }, home).code, 2, 'the ask predates the newest merge');
 });
+
+test('#167 review 2: a merge is read under the tool that ran it', () => {
+  const c = 'find . -exec echo {} \\; gh pr merge 5';
+  // PowerShell splits at an escaped \;, so the merge runs; in Bash it is find's args.
+  assert.equal(isMerge(c, 'PowerShell'), true);
+  assert.equal(isMerge(c, 'Bash'), false);
+  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+  assert.equal(lastMerge(tx(call('p', c, 'PowerShell'), result('p'))), 'p');
+  assert.equal(lastMerge(tx(call('b', c), result('b'))), null);
+});
