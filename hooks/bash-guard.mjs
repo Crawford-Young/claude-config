@@ -69,9 +69,15 @@
 //      naming one; a runner's payload (`find -exec`, `xargs`, `env`) is
 //      judged as a call. Static, so best-effort: a script file is out of its
 //      sight, whether it builds the path at runtime or holds it literally
-//      (Write x.mjs, then `node x.mjs`). Wired on
-//      Write|Edit|MultiEdit|NotebookEdit too (editToolReason), where it fails
-//      OPEN, so a broken guard never locks out the Edit tool that fixes it.
+//      (Write x.mjs, then `node x.mjs`). Known limits, accepted: a link or
+//      junction to an ancestor dir (`ln -s ~/.claude /tmp/c`, New-Item
+//      -ItemType Junction) and a write through it; archive extraction (tar
+//      -C, unzip -d, Expand-Archive); Windows path forms the OS folds
+//      (a trailing dot or space, `::$DATA`, `\\?\`); and inline code that
+//      mentions a gate record stays blocked for a pathlib/stream write even to
+//      a literal path. Wired on Write|Edit|MultiEdit|NotebookEdit too
+//      (editToolReason), where it fails OPEN, so a broken guard never locks
+//      out the Edit tool that fixes it.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -297,8 +303,8 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
       cur += ch;
     } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
       cur += ch;
-    } else if (ch === '|' && cmd[i - 1] === '>') {
-      cur += ch; // `>|` is a clobbering redirect, not a pipe
+    } else if (ch === '|' && cmd[i - 1] === '>' && cmd[i - 2] !== '\\') {
+      cur += ch; // `>|` is a clobbering redirect, not a pipe (an escaped `\>` is text)
     } else if (pipes && ch === '|' && cmd[i + 1] !== '|') {
       cur += ch;
       if (cmd[i + 1] === '&') cur += cmd[++i];
@@ -461,7 +467,7 @@ export function staticCheck(raw, cwd = null) {
 
   // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
   //    not as a word someone greps for
-  if (cmds.some(({ cmd: c }) => /^(?:Set-Content|Out-File|Add-Content)$/i.test(c))) {
+  if (cmds.some(({ cmd: c }) => /^(?:Set-Content|Out-File|Add-Content|sc|ac)$/i.test(c))) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
@@ -524,6 +530,12 @@ const COPY = /^(?:cp|mv|install|ln|rsync|scp|copy|move|cpi|mi|copy-item|move-ite
 const MOVE = /^(?:mv|move|mi|move-item)$/i;
 const REMOVE = /^(?:rm|unlink|del|erase|ri|rmdir|rd|remove-item|shred)$/i;
 const RENAME = /^(?:rename-item|ren|rni)$/i;
+/** PowerShell content cmdlets (and aliases): the first path is the file written. */
+const CONTENT = /^(?:set-content|add-content|clear-content|out-file|sc|ac|clc)$/i;
+/** PowerShell item cmdlets that take their source from the pipeline. */
+const PS_ITEM = /^(?:copy-item|cpi|copy|move-item|mi|move|remove-item|ri|del|erase|rm|rename-item|rni|ren)$/i;
+/** Pipeline steps that pass the items they get on unchanged. */
+const PASS_THROUGH = /^(?:select-object|select|sort-object|sort|where-object|where|\?)$/i;
 const DOWNLOAD = /^(?:curl|wget)(?:\.exe)?$/i;
 const TEE = /^(?:tee|tee-object)$/i;
 const IN_PLACE = /^(?:sed|perl)$/i;
@@ -533,8 +545,8 @@ const PS_DEST = /^-dest\w*(?::(.*))?$/i;
 const PS_PATH = /^-(?:path|literalpath|filepath)(?::(.*))?$/i;
 
 /** The file targets of a clause's unquoted redirects (`>`, `>>`, `>|`, `&>`,
- *  `2>`), as words; an fd dup (`>&2`, `2>&1`) and a `>(…)` substitution
- *  are no file. */
+ *  `2>`, `>&file`), as words; an fd dup or close (`>&2`, `2>&1`, `>&-`), an
+ *  escaped `\>` and a `>(…)` substitution are no file. */
 function redirectTargets(text) {
   const out = [];
   let quote = null;
@@ -554,12 +566,15 @@ function redirectTargets(text) {
       i = sub.end - 1;
       continue;
     }
-    if (ch !== '>') continue;
+    if (ch !== '>' || text[i - 1] === '\\') continue;
     let j = i + 1;
     if (text[j] === '>' || text[j] === '|') j++;
     if (text[j] === '&') {
-      i = j;
-      continue;
+      if (/[\d-]/.test(text[j + 1] ?? '')) {
+        i = j;
+        continue;
+      }
+      j++;
     }
     while (text[j] === ' ' || text[j] === '\t') j++;
     let k = j;
@@ -581,13 +596,18 @@ function ownArgs(w) {
   return w.slice(1, end === -1 ? w.length : end);
 }
 
-/** The paths a command call writes, as { word, dirTarget, removes }: its
- *  redirects, and the destination of tee, cp/mv/Copy-Item/Move-Item (a dir
- *  counts, and so does each source's name landing in it), dd of=, sed/perl -i,
- *  truncate, New-Item, curl/wget -o and Rename-Item; a link's source, which a
- *  write through the link reaches; and with `removes` what rm/Remove-Item
- *  delete or mv takes away. */
-function writeTargets({ cmd, words: w, text }) {
+/** The paths a command call writes, as { word, dirTarget, tree, removes,
+ *  deep }: its redirects, and the destination of tee, cp/mv/Copy-Item/
+ *  Move-Item (a dir counts, and so does each source landing in it under its
+ *  own name, as a `tree` that may hold a gate record: `cp -r bk/.claude ~/`;
+ *  a contents copy, `bk/.` or rsync's `bk/`, lands as `*`), dd of=, sed/perl
+ *  -i, truncate, New-Item, the content cmdlets (Set-/Add-/Clear-Content,
+ *  Out-File, sc/ac/clc), curl/wget -o and Rename-Item; a link's source, which
+ *  a write through the link reaches; and with `removes` what rm/Remove-Item/
+ *  `find -delete` (`deep`: its -name at any depth) delete or mv takes away.
+ *  A PowerShell item cmdlet with no source of its own takes `upstream`, the
+ *  paths its pipeline feeds it (`Get-Item x | Remove-Item`). */
+function writeTargets({ cmd, words: w, text, upstream = [] }) {
   const out = redirectTargets(text).map((word) => ({ word }));
   if (!w.length) return out;
   const args = ownArgs(w);
@@ -597,29 +617,45 @@ function writeTargets({ cmd, words: w, text }) {
     const i = args.findIndex((a) => re.test(a));
     return i === -1 ? undefined : (args[i].match(re)[1] ?? args[i + 1]);
   };
+  const fed = (own) => (own.length || !PS_ITEM.test(cmd) ? own : upstream);
   if (COPY.test(cmd)) {
-    const t = args.findIndex((a) => a === '-t' || a.startsWith('--target-directory'));
+    // -t takes the dir, alone or last in a cluster (`-rt`, `install -Dt`);
+    // rsync's -t is --times.
+    const t = /^(?:cp|mv|install|ln)$/i.test(cmd) ? args.findIndex((a) => /^-[a-zA-Z]*t$/.test(a) || a.startsWith('--target-directory')) : -1;
     let dest = flagValue(PS_DEST);
     let sources;
     if (t !== -1) {
       dest = args[t].split('=')[1] ?? args[t + 1];
       sources = positional.filter((a) => a !== dest);
     } else if (dest !== undefined) sources = [...positional, flagValue(PS_PATH)].filter(Boolean);
-    else [dest, sources] = [positional.at(-1), positional.slice(0, -1)];
+    else {
+      // `Copy-Item -Path x dest`: the -Path value is a source, the last positional the dest.
+      [dest, sources] = [positional.at(-1), [...positional.slice(0, -1), flagValue(PS_PATH)].filter(Boolean)];
+    }
     add(dest, { dirTarget: true });
-    for (const s of dest === undefined ? [] : sources) {
-      add(`${dest}/${s.split(/[/\\]/).filter(Boolean).pop() ?? ''}`, { dirTarget: true });
+    const contents = (s) => /(?:^|[/\\])\.$/.test(s) || (/^rsync$/i.test(cmd) && /[/\\]$/.test(s));
+    for (const s of dest === undefined ? [] : fed(sources)) {
+      add(`${dest}/${contents(s) ? '*' : (s.split(/[/\\]/).filter(Boolean).pop() ?? '')}`, { dirTarget: true, tree: true });
       if (MOVE.test(cmd)) add(s, { removes: true });
       if (cmd === 'ln') add(s, { dirTarget: true });
     }
   } else if (REMOVE.test(cmd)) {
-    for (const p of positional) add(p, { removes: true });
-    add(flagValue(PS_PATH), { removes: true });
+    for (const p of fed([...positional, flagValue(PS_PATH)].filter(Boolean))) add(p, { removes: true });
+  } else if (/^find$/i.test(cmd) && args.includes('-delete')) {
+    const start = args.findIndex((a) => /^[-(!]/.test(a));
+    const names = args.flatMap((a, i) => (/^-i?name$/.test(a) && args[i + 1] !== undefined ? [args[i + 1]] : []));
+    const dirs = args.slice(0, start === -1 ? args.length : start);
+    for (const dir of dirs.length ? dirs : ['.']) {
+      if (!names.length) add(dir, { removes: true });
+      for (const name of names) add(`${dir}/${name}`, { removes: true, deep: true });
+    }
   } else if (RENAME.test(cmd)) {
-    const from = flagValue(PS_PATH) ?? positional[0];
+    const from = flagValue(PS_PATH) ?? positional[0] ?? upstream[0];
     const name = flagValue(/^-newname(?::(.*))?$/i) ?? positional[1];
     if (from !== undefined && name !== undefined) add(from.replace(/[^/\\]*[/\\]?$/, '') + name);
     add(from, { removes: true });
+  } else if (CONTENT.test(cmd)) {
+    add(flagValue(PS_PATH) ?? positional[0]);
   } else if (DOWNLOAD.test(cmd)) {
     const flag = /^curl/i.test(cmd) ? /^(?:-[a-zA-Z]*o|--output)$/ : /^(?:-[a-zA-Z]*[oO]|--output-document|--output-file)$/;
     for (const [i, a] of args.entries()) {
@@ -643,6 +679,17 @@ function writeTargets({ cmd, words: w, text }) {
   return out;
 }
 
+/** The paths a pipeline feeds `call` (a PowerShell item cmdlet reads them as
+ *  its source): the arguments of the segment before it, looking through
+ *  Select-/Sort-/Where-Object, which pass items on unchanged. */
+function upstreamPaths(calls, call) {
+  if (!PS_ITEM.test(call.cmd)) return [];
+  let prev = call;
+  do prev = calls.find((c) => c.pipe === call.pipe && c.seg === prev.seg - 1);
+  while (prev && PASS_THROUGH.test(prev.cmd));
+  return prev ? ownArgs(prev.words).filter((a) => !a.startsWith('-')) : [];
+}
+
 /** Is a write to `word` from `dir` a write into a gate's records (or, with
  *  `removes`, a removal of a gate state file)? 'forge' when it resolves to
  *  one; 'unknown' when it can't resolve and looks aimed, which blocks only in
@@ -653,24 +700,33 @@ function writeTargets({ cmd, words: w, text }) {
  *  guard lost after a cd that named one. So `S=$(mktemp -d); … > "$S/o"`
  *  and `cd "$S" && … > all.jsonl` stay open. A `{}` inside a path stands for
  *  any name, judged as a glob (`cp {} ~/.claude/` could land a state file). */
-function targetVerdict({ word, dirTarget, removes }, dir, vars, cmd) {
+function targetVerdict({ word, dirTarget, tree, removes, deep }, dir, vars, cmd) {
   if (word === '{}') return 'unknown';
   const p = toDir(dir, word.replaceAll('{}', '*'), vars);
-  if (typeof p === 'string') return (removes ? removesGateState(p) : isGateRecord(p, dirTarget)) ? 'forge' : null;
+  if (typeof p === 'string') return (removes ? removesGateState(p, deep) : isGateRecord(p, dirTarget, tree)) ? 'forge' : null;
   const names = removes ? namesGateState : namesGateRecord;
-  const refs = [...word.matchAll(VAR_REF)].map(([, braced, bare]) => (braced ?? bare).replace(/^env:/i, ''));
+  const refs = varNames(word);
   if (refs.length || /\$[(@*]|`/.test(word)) {
-    const fed = /\$[@*]/.test(word) || refs.some((n) => /^(?:\d|_|PSItem)$/i.test(n) || feedsVar(cmd, n));
+    const fed = /\$[@*]/.test(word) || refs.some((n) => isFed(cmd, n));
     return names(word) || fed || refs.some((n) => assignedValues(cmd, n).some(names)) ? 'unknown' : null;
   }
   const last = word.split(/[/\\]/).pop();
   return /\.jsonl$|[*?[]/i.test(last) && cdNamesGateRecord(cmd) ? 'unknown' : null;
 }
 
-/** Does the command bind `name` at runtime — `for name in`, `read … name`,
- *  PowerShell `foreach ($name in`? */
-const feedsVar = (cmd, name) =>
-  new RegExp(String.raw`\bfor\s+${name}\s+in\b|\bread\b[^;|&\n]*\s${name}(?!\w)|\bforeach\s*\(\s*\$${name}\s+in\b`, 'i').test(cmd);
+/** The var names `text` references (`$f`, `${f:?}`, `${fs[0]}`, `$env:X`). */
+const varNames = (text) => [...text.matchAll(VAR_REF)].map(([, braced, bare]) => (braced ?? bare).replace(/^env:/i, ''));
+
+/** Is `name` fed at runtime: a positional (`$1`), PowerShell's pipeline item
+ *  (`$_`, `$PSItem`), or bound by the command — `for name in`, `read … name`,
+ *  `mapfile`/`readarray … name`, `printf -v name`, PowerShell
+ *  `foreach ($name in`? */
+const isFed = (cmd, name) =>
+  /^(?:\d|_|PSItem)$/i.test(name) ||
+  new RegExp(
+    String.raw`\bfor\s+${name}\s+in\b|\b(?:read|mapfile|readarray)\b[^;|&\n]*\s${name}(?!\w)|\bprintf\s+-v\s*${name}(?!\w)|\bforeach\s*\(\s*\$${name}\s+in\b`,
+    'i',
+  ).test(cmd);
 
 /** Does a cd/pushd/Set-Location in the command name a gate record? */
 const cdNamesGateRecord = (cmd) =>
@@ -819,7 +875,7 @@ function codeVerdict(code, dir) {
 }
 
 const FORGE_REASON =
-  'This writes into a session transcript (~/.claude/projects/**/*.jsonl) or an approval gate\'s state file (push-gate-approvals, browser-gate-sessions, fable-clearance), or deletes one of those state files. The push and browser gates read user approval from those files, so the model never writes them (#190). Read them freely; write any copy elsewhere (the scratchpad). A write path built at runtime (computed in code, or a subprocess) beside a mention of them can\'t be verified, so give the copy a literal path outside ~/.claude.';
+  'This writes into a session transcript (~/.claude/projects/**/*.jsonl) or an approval gate\'s state file (push-gate-approvals, browser-gate-sessions, fable-clearance), or deletes one of those state files. The push and browser gates read user approval from those files, so the model never writes them (#190). Read them freely; write any copy elsewhere (the scratchpad). Inline code that mentions them and writes a path built at runtime (computed, a subprocess, a pathlib/stream write) can\'t be verified, even when the path is literal: do the write as a separate step, e.g. print the result and redirect it to a literal path outside ~/.claude.';
 
 /** 11, for one parsed call (a runner's payload included). `ctx` is the whole
  *  command: its text, raw form and whether it names a gate record or state
@@ -855,8 +911,10 @@ function callForges(call, ctx, fed = false) {
   const v = codeVerdict(code, call.dir);
   // A computed path is aimed when this call or its code names a gate record,
   // a var the command set does (`f=$(ls …/projects/…)`, then `"$f"`), or a
-  // runner feeds it what the command named.
-  return v === 'forge' || (v === 'opaque' && ((fed && ctx.named) || namesGateRecord(call.text) || namesGateRecord(code) || setsGateRecordVar(ctx.cmd)));
+  // runner, a pipeline or a loop feeds it (`$_`, a foreach var) what the
+  // command named.
+  if (v !== 'opaque') return v === 'forge';
+  return (ctx.named && (fed || varNames(code).some((n) => isFed(ctx.cmd, n)))) || namesGateRecord(call.text) || namesGateRecord(code) || setsGateRecordVar(ctx.cmd);
 }
 
 /** 11. Does a command write into a transcript or a gate state file, or delete
@@ -872,7 +930,8 @@ function callForges(call, ctx, fed = false) {
 export function forgeWrite(raw, cwd = null) {
   const cmd = scrub(raw);
   const ctx = { cmd, raw, named: namesGateRecord(cmd), namedState: namesGateState(cmd) };
-  return commands(cmd, cwd).some((call) => callForges(call, ctx)) ? FORGE_REASON : null;
+  const calls = commands(cmd, cwd);
+  return calls.some((call) => callForges({ ...call, upstream: upstreamPaths(calls, call) }, ctx)) ? FORGE_REASON : null;
 }
 
 /** 11, for the file tools: Write/Edit/MultiEdit/NotebookEdit into a
@@ -911,7 +970,9 @@ const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-pat
 // path joins cleanly; elsewhere VAR_REF substitutes it.
 const HOME_VAR = /^\$(?:\{(?:env:)?(?:HOME|USERPROFILE)\}|(?:env:)?(?:HOME|USERPROFILE)(?!\w))/i;
 const PWD_VAR = /^\$(?:\{PWD\}|PWD(?!\w))/i;
-const VAR_REF = /\$\{((?:env:)?\w+)\}|\$((?:env:)?\w+)/gi;
+// A braced ref may carry an index or an operator (`${fs[0]}`, `${f:?}`,
+// `${f#*/}`): its name still counts, but its value doesn't (expandWord).
+const VAR_REF = /\$\{((?:env:)?\w+)(?:\[[^\]]*\]|[:#%/^,@][^}]*)?\}|\$((?:env:)?\w+)/gi;
 
 // Shell vars are a persistent chain, newest first: { key, value, up } or null.
 // An assignment prepends a link, so a snapshot or a body's copy is the
@@ -934,6 +995,7 @@ function expandWord(p, dir, vars = null) {
     const name = braced ?? bare;
     let v;
     if (/^(?:\.[A-Za-z]|\[)/.test(s.slice(at + m.length, at + m.length + 2))) v = UNKNOWN_DIR;
+    else if (braced && m.length > braced.length + 3) v = UNKNOWN_DIR; // an index or operator
     else if (/^(?:env:)?(?:home|userprofile)$/i.test(name)) v = homedir();
     else if (/^pwd$/i.test(name)) v = dir;
     else if ((v = varOf(vars, `sh:${name}`)) === undefined) v = varOf(vars, `ps:${name.toLowerCase()}`);

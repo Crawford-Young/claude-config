@@ -23,6 +23,7 @@ import {
   branchRules,
   UNKNOWN_DIR,
   editToolReason,
+  forgeWrite,
 } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
@@ -1612,6 +1613,8 @@ test('#180 end-to-end through the real hook: a typed approval passes once', () =
 const P = join(homedir(), '.claude', 'projects');
 const T = `${P.replaceAll('\\', '/')}/C--Users-x/abc.jsonl`;
 const forged = `'{"type":"user"}'`;
+/** Rule 11 blocks `c`, with its own reason (not some other rule's). */
+const forges = (c) => assert.match(staticCheck(c, '/work') ?? '', /#190/, c);
 
 test('#190: a shell redirect, tee, cp/mv, dd or sed -i into a transcript is blocked', () => {
   for (const c of [
@@ -1639,7 +1642,6 @@ test('#190: a shell redirect, tee, cp/mv, dd or sed -i into a transcript is bloc
     `bash -c "echo x >> ${T}"`,
     `cat > ${T} <<'EOF'\n{"type":"user"}\nEOF`,
     `Copy-Item C:/tmp/f.jsonl -Destination ${T}`,
-    `Add-Content -Path ${T} -Value x`,
     `New-Item -Path ${T} -Value x -Force`,
     `for i in 1; do echo x; done >> ${T}`,
     `bash -c "echo x" >> ${T}`,
@@ -1651,7 +1653,7 @@ test('#190: a shell redirect, tee, cp/mv, dd or sed -i into a transcript is bloc
     `echo x > ~/.claude/browser-gate-sessions.json`,
     `echo x > ~/.claude/fable-clearance.json`,
     `echo '{}' > ~/.claude/push-gate-approvals.json`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
 });
 
 test('#190: an inline interpreter write naming a transcript or gate state file is blocked', () => {
@@ -1668,7 +1670,7 @@ test('#190: an inline interpreter write naming a transcript or gate state file i
     `node -e "require('fs').copyFileSync('/tmp/f', '${T}')"`,
     `perl -pi -e 's/a/b/' ${T}`,
     `node -e "const f='${T}';require('fs').appendFileSync(f, 'x')"`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
 });
 
 test('#190: reading transcripts and writing elsewhere, and memory writes, stay allowed', () => {
@@ -1704,12 +1706,12 @@ test('#190: reading transcripts and writing elsewhere, and memory writes, stay a
 });
 
 test('#190: Write/Edit/MultiEdit/NotebookEdit into a transcript or gate state file is blocked', () => {
-  assert.ok(editToolReason('Write', { file_path: T }, '/work'));
-  assert.ok(editToolReason('Edit', { file_path: T.replaceAll('/', '\\') }, '/work'));
-  assert.ok(editToolReason('MultiEdit', { file_path: T.toUpperCase() }, '/work'));
-  assert.ok(editToolReason('NotebookEdit', { notebook_path: T }, '/work'));
-  assert.ok(editToolReason('Write', { file_path: 'abc.jsonl' }, `${P}/C--Users-x`));
-  assert.ok(editToolReason('Write', { file_path: join(homedir(), '.claude', 'browser-gate-sessions.json') }, '/work'));
+  assert.match(editToolReason('Write', { file_path: T }, '/work') ?? '', /#190/);
+  assert.match(editToolReason('Edit', { file_path: T.replaceAll('/', '\\') }, '/work') ?? '', /#190/);
+  assert.match(editToolReason('MultiEdit', { file_path: T.toUpperCase() }, '/work') ?? '', /#190/);
+  assert.match(editToolReason('NotebookEdit', { notebook_path: T }, '/work') ?? '', /#190/);
+  assert.match(editToolReason('Write', { file_path: 'abc.jsonl' }, `${P}/C--Users-x`) ?? '', /#190/);
+  assert.match(editToolReason('Write', { file_path: join(homedir(), '.claude', 'browser-gate-sessions.json') }, '/work') ?? '', /#190/);
   assert.equal(editToolReason('Write', { file_path: `${P}/C--Users-x/memory/a.md` }, '/work'), null);
   assert.equal(editToolReason('Write', { file_path: '/tmp/x.jsonl' }, '/work'), null);
   assert.equal(editToolReason('Read', { file_path: T }, '/work'), null);
@@ -1725,7 +1727,7 @@ test('#190: a copy into ~/.claude lands under the source\'s own name, so that na
     `Copy-Item -Path C:/tmp/fable-clearance.json -Destination ~/.claude`,
     `cp -t ~/.claude /tmp/push-gate-approvals.json`,
     `cp -r /tmp/projects ~/.claude/`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
   for (const c of [
     `cp notes.md ~/.claude/`,
     `cp -r /tmp/skills ~/.claude/`,
@@ -1743,7 +1745,7 @@ test('#190: a loop, read or PowerShell var aimed at a transcript is aimed', () =
     `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | Sort-Object LastWriteTime)[-1].FullName; [IO.File]::AppendAllText($t, 'x')`,
     `foreach ($t in Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl) { "x" >> $t }`,
     `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { "x" >> $_.FullName }`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
   for (const c of [
     `for f in ~/.claude/projects/C--x/*.jsonl; do wc -l "$f"; done > /tmp/counts.txt`,
     `ls ~/.claude/projects | while read d; do echo "$d"; done > /tmp/dirs.txt`,
@@ -1759,7 +1761,7 @@ test('#190: every home spelling resolves to the home dir', () => {
     `echo '{}' > \${env:HOME}/.claude/browser-gate-sessions.json`,
     `echo x >> $USERPROFILE/.claude/projects/C--Users-x/abc.jsonl`,
     `echo x >> /tmp/$USERPROFILE/x && echo x >> "\${USERPROFILE}/.claude/projects/C--x/s.jsonl"`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
   assert.equal(staticCheck(`echo x > $USERPROFILE/notes.txt`, '/work'), null);
 });
 
@@ -1777,7 +1779,7 @@ test('#190: deleting or moving away a gate state file resets its spends, so it i
     `node -e "require('fs').unlinkSync(require('os').homedir()+'/.claude/push-gate-approvals.json')"`,
     `node -e "require('fs').rmSync('${join(homedir(), '.claude', 'push-gate-approvals.json').replaceAll('\\', '/')}')"`,
     `python -c "import os; os.remove('${join(homedir(), '.claude', 'browser-gate-sessions.json').replaceAll('\\', '/')}')"`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
   // Other ~/.claude cleanup stays open, and so does deleting a transcript: it
   // can only take an approval away (the gates fail closed on a missing one),
   // never forge one.
@@ -1792,11 +1794,11 @@ test('#190: deleting or moving away a gate state file resets its spends, so it i
 });
 
 test('#190: Write/Edit file_path `~/…` and a Git Bash drive path are normalised', () => {
-  assert.ok(editToolReason('Write', { file_path: '~/.claude/projects/C--x/s.jsonl' }, '/work'));
-  assert.ok(editToolReason('Edit', { file_path: '~/.claude/push-gate-approvals.json' }, '/work'));
+  assert.match(editToolReason('Write', { file_path: '~/.claude/projects/C--x/s.jsonl' }, '/work') ?? '', /#190/);
+  assert.match(editToolReason('Edit', { file_path: '~/.claude/push-gate-approvals.json' }, '/work') ?? '', /#190/);
   if (process.platform === 'win32') {
     const drive = homedir().replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
-    assert.ok(editToolReason('Write', { file_path: `${drive}/.claude/projects/C--x/s.jsonl` }, '/work'));
+    assert.match(editToolReason('Write', { file_path: `${drive}/.claude/projects/C--x/s.jsonl` }, '/work') ?? '', /#190/);
   }
   assert.equal(editToolReason('Write', { file_path: '~/.claude/projects/C--x/memory/m.md' }, '/work'), null);
   assert.equal(editToolReason('Write', { file_path: '~/notes.md' }, '/work'), null);
@@ -1821,7 +1823,7 @@ test('#190: a read of transcripts beside a write to an unrelated or unresolved p
     `timeout 5 cp /tmp/forged.jsonl ${T}`,
     `cd $(ls -d ~/.claude/projects/*/ | head -1) && echo x >> s.jsonl`,
     `echo x >> "$(ls -t ~/.claude/projects/*/*.jsonl | head -1)"`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
 });
 
 test('#190: a computed write path in code that reads transcripts is refused with how to proceed', () => {
@@ -1838,7 +1840,7 @@ test('#190: curl/wget -o, Rename-Item -NewName and a link to a transcript are wr
     `ln ${T} /tmp/h && echo x >> /tmp/h`,
     `ln -s ${T} /tmp/h`,
     `New-Item -ItemType HardLink -Path C:/tmp/h -Target ${T}`,
-  ]) assert.ok(staticCheck(c, '/work'), c);
+  ]) forges(c);
   for (const c of [
     `curl -s -o /tmp/page.html https://x`,
     `Rename-Item ~/.claude/projects/C--x/memory/a.md -NewName b.md`,
@@ -1846,7 +1848,140 @@ test('#190: curl/wget -o, Rename-Item -NewName and a link to a transcript are wr
   ]) assert.equal(staticCheck(c, '/work'), null, c);
 });
 
-test('#190 end-to-end: the hook blocks a transcript append and a Write, allows a read', () => {
+// ---- #190 re-review ----------------------------------------------------------
+
+test('#190: an escaped `\\>|` is literal text, so the command after the pipe is still read', () => {
+  assert.match(staticCheck('echo x \\>| git add -A') ?? '', /git add -A/);
+  assert.deepEqual(clauses('echo x \\>| git push origin main', true), ['echo x \\>| git push origin main']);
+  assert.ok(gitCalls('echo x \\>| git push origin main', null).some((g) => g.sub === 'push'));
+  assert.deepEqual(clauses('npm test >| out.txt', true), ['npm test >| out.txt']);
+});
+
+test('#190: PowerShell -Path with a positional destination, and pipeline-fed item cmdlets', () => {
+  for (const c of [
+    `Copy-Item -Path C:/tmp/push-gate-approvals.json $HOME\\.claude`,
+    `Move-Item -Path ~/.claude/push-gate-approvals.json C:/tmp`,
+    `Get-Item C:/tmp/push-gate-approvals.json | Copy-Item -Destination $HOME\\.claude`,
+    `Get-ChildItem C:/bk/*.json | Copy-Item -Destination ~/.claude -Force`,
+    `Get-ChildItem C:/bk/*.json | Select-Object -Last 1 | Copy-Item -Destination ~/.claude`,
+    `Get-Item ~/.claude/push-gate-approvals.json | Remove-Item`,
+    `Get-Item ~/.claude/push-gate-approvals.json | Move-Item -Destination C:/tmp`,
+  ]) forges(c);
+  for (const c of [
+    `Get-ChildItem C:/docs/*.md | Copy-Item -Destination ~/.claude`,
+    `Get-ChildItem ~/.claude/projects/C--old -Recurse | Remove-Item`,
+    `Copy-Item -Path ./hooks/x.mjs $HOME/.claude/hooks/`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#190: a .NET write on a pipeline or foreach var, in a command naming a transcript', () => {
+  for (const c of [
+    `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { [IO.File]::AppendAllText($_.FullName, 'x') }`,
+    `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { [IO.File]::AppendAllText($PSItem.FullName, 'x') }`,
+    `foreach ($f in Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl) { [IO.File]::AppendAllText($f.FullName, 'x') }`,
+  ]) forges(c);
+  assert.equal(staticCheck(`Get-ChildItem C:/docs | ForEach-Object { [IO.File]::AppendAllText($_.FullName, 'x') }`, '/work'), null);
+});
+
+test('#190: the content cmdlets and their aliases (ac, sc, clc) are writes; rule 4 knows ac/sc', () => {
+  for (const c of [
+    `sc ~/.claude/push-gate-approvals.json '{}'`,
+    `ac ~/.claude/projects/C--x/s.jsonl '{"type":"user"}'`,
+    `Add-Content -Path ${T} -Value x`,
+    `Set-Content -LiteralPath ~/.claude/push-gate-approvals.json -Value x`,
+  ]) {
+    assert.match(forgeWrite(c, '/work') ?? '', /#190/, c);
+    assert.match(staticCheck(c, '/work') ?? '', /mojibake/, c);
+  }
+  forges(`clc ~/.claude/push-gate-approvals.json`);
+  forges(`Clear-Content ~/.claude/push-gate-approvals.json`);
+  assert.equal(staticCheck(`Clear-Content C:/tmp/log.txt`, '/work'), null);
+});
+
+test('#190: a glob source landing in a dir is judged by what it could match', () => {
+  for (const c of [
+    `cp docs/*.md ~/`,
+    `mv ~/Downloads/*.pdf ~/`,
+    `cp CLAUDE.md agents/*.md ~/.claude/`,
+    `Copy-Item .\\*.md -Destination $HOME`,
+    `echo x > ~/.claude/projects/C--x/*.md`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+  for (const c of [
+    `cp -r /tmp/bk/* ~/.claude/`,
+    `cp /tmp/bk/*.json ~/.claude/`,
+    `cp /tmp/bk/push-* ~/.claude/`,
+    `echo x >> ~/.claude/projects/C--x/*.jsonl`,
+    `echo x >> ~/.claude/projects/*/*`,
+  ]) forges(c);
+});
+
+test('#190: a combined -t (cp/mv/install/ln) names the target dir; rsync -t is --times', () => {
+  for (const c of [
+    `cp -rt ~/.claude /tmp/push-gate-approvals.json`,
+    `cp -vt ~/.claude/ /tmp/bk/push-gate-approvals.json`,
+    `install -Dt ~/.claude /tmp/push-gate-approvals.json`,
+    `mv -ft ~/.claude /tmp/push-gate-approvals.json`,
+    `rsync -t /tmp/push-gate-approvals.json ~/.claude/`,
+  ]) forges(c);
+  assert.equal(staticCheck(`rsync -t ~/.claude/push-gate-approvals.json /tmp/bk/`, '/work'), null);
+});
+
+test('#190: a contents copy, or a dir landing on an ancestor of a gate record', () => {
+  for (const c of [
+    `rsync -a /tmp/bk/ ~/.claude/`,
+    `cp -r /tmp/bk/. ~/.claude/`,
+    `cp -r /tmp/bk/.claude ~/`,
+    `cp -a /tmp/bk/.claude $HOME`,
+    `cp -r /tmp/bk/projects ~/.claude`,
+  ]) forges(c);
+  for (const c of [`rsync -a /tmp/bk/ ~/backup/`, `cp -r /tmp/bk/. ~/.claude/skills/`, `cp settings.json ~/.claude/`, `cp -r ./skills ~/.claude/`]) {
+    assert.equal(staticCheck(c, '/work'), null, c);
+  }
+});
+
+test('#190: find -delete is judged by its start dir and -name', () => {
+  for (const c of [
+    `find ~/.claude -maxdepth 1 -name 'push-gate*' -delete`,
+    `find ~/.claude -maxdepth 1 -name 'push-gate-approvals.json' -delete`,
+    `find ~ -name 'browser-gate-*.json' -delete`,
+    `find ~/.claude -delete`,
+  ]) forges(c);
+  for (const c of [
+    `find ~/.claude/projects -name '*.jsonl' -mtime +30 -delete`,
+    `find ~ -name '*.tmp' -delete`,
+    `find ~/.claude -name '*.log' -delete`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#190: `>&word` with a file word is a file redirect; `>&2` and `>&-` are not', () => {
+  forges(`echo x >& ~/.claude/push-gate-approvals.json`);
+  forges(`echo x >&~/.claude/projects/C--x/s.jsonl`);
+  assert.equal(staticCheck(`echo x >&2; echo y 2>&1 >&- ; cat ${T}`, '/work'), null);
+});
+
+test('#190: a glob-like name with an unclosed bracket never crashes the guard', () => {
+  for (const c of [`rm -f 'draft[1.txt'`, `rm -f notes/a[b.md`, `cp 'a[b' ~/.claude/`, `rm -f '[z-a].txt'`]) {
+    assert.equal(staticCheck(c, '/work'), null, c);
+  }
+});
+
+test('#190: ${f:?}, ${fs[0]}, printf -v and mapfile vars are references the guard follows', () => {
+  for (const c of [
+    `f=$(ls -t ~/.claude/projects/*/*.jsonl | head -1); echo x >> "\${f:?}"`,
+    `mapfile -t fs < <(ls ~/.claude/projects/*/*.jsonl); echo x >> "\${fs[0]}"`,
+    `readarray fs < <(ls ~/.claude/projects/*/*.jsonl); echo x >> "\${fs[0]}"`,
+    `printf -v t '%s/.claude/push-gate-approvals.json' "$HOME"; echo '{}' > "$t"`,
+  ]) forges(c);
+  assert.equal(staticCheck(`f=/tmp/o.txt; grep x ${T} > "\${f:-/tmp/d.txt}"`, '/work'), null);
+});
+
+test('#190: the refusal never promises inline code a pass for a literal path', () => {
+  const reason = staticCheck(`python3 -c "import pathlib;p=pathlib.Path.home()/'.claude'/'projects';pathlib.Path('/tmp/n.txt').write_text(str(len(list(p.rglob('*.jsonl')))))"`, '/work') ?? '';
+  assert.match(reason, /#190/);
+  assert.match(reason, /separate step/);
+});
+
+test('#190 end-to-end: the hook blocks a transcript append, a PowerShell write, a Write and an Edit, allows a read', () => {
   const h = tmpHome();
   const t = join(h, '.claude', 'projects', 'p', 's.jsonl');
   const tf = t.replaceAll('\\', '/');
@@ -1860,6 +1995,10 @@ test('#190 end-to-end: the hook blocks a transcript append and a Write, allows a
   };
   assert.equal(hookRun({ tool_name: 'Bash', tool_input: { command: `echo x >> ${tf}` } }), 2);
   assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: t, content: '{}' } }), 2);
+  assert.equal(hookRun({ tool_name: 'PowerShell', tool_input: { command: `[IO.File]::AppendAllText('${tf}', 'x')` } }), 2);
+  assert.equal(hookRun({ tool_name: 'Edit', tool_input: { file_path: t, old_string: 'a', new_string: 'b' } }), 2);
   assert.equal(hookRun({ tool_name: 'Bash', tool_input: { command: `grep -c x ${tf}` } }), 0);
+  assert.equal(hookRun({ tool_name: 'PowerShell', tool_input: { command: `Get-Content ${tf} -Tail 1` } }), 0);
+  assert.equal(hookRun({ tool_name: 'Edit', tool_input: { file_path: join(h, 'notes.md'), old_string: 'a', new_string: 'b' } }), 0);
   assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: join(h, 'notes.md'), content: 'x' } }), 0);
 });

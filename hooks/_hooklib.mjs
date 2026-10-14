@@ -144,13 +144,53 @@ const under = (p, root) => p === root || p.startsWith(`${root}/`);
 const gateStates = () =>
   [clearanceFile, browserGateStateFile(), pushGateStateFile(), join(claudeDir, 'browser-gate-sessions.json'), join(claudeDir, 'push-gate-approvals.json')].map(normPath);
 
+/** One glob path segment (`*.md`, `push-*`, `a[bc]`) as an anchored RegExp.
+ *  A `[` with no closing `]` is a literal (`draft[1.txt`), and a class the
+ *  engine rejects (`[z-a]`) matches anything, so a refusal errs toward the
+ *  gate and a typo'd name never crashes a fail-closed guard. */
+function segmentRe(glob) {
+  let src = '';
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    const close = ch === '[' ? glob.indexOf(']', i + 2) : -1;
+    if (ch === '*') src += '[^/]*';
+    else if (ch === '?') src += '[^/]';
+    else if (close !== -1) {
+      src += `[${glob.slice(i + 1, close).replace(/^!/, '^').replaceAll('\\', '\\\\')}]`;
+      i = close;
+    } else src += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  try {
+    return new RegExp(`^${src}$`);
+  } catch {
+    return /^/;
+  }
+}
+
+/** The glob in `n` (normalised) split as { dir, name }: `dir` the part before
+ *  the segment holding the first wildcard, `name` the rest; null for no glob. */
+function globParts(n) {
+  const glob = n.search(/[*?[]/);
+  if (glob === -1) return null;
+  const dir = n.slice(0, n.lastIndexOf('/', glob)) || '/';
+  return { dir, name: n.slice(dir.length + 1) };
+}
+
+/** Could a last-segment glob `re` in `dir` name `f` or a dir on its way down
+ *  (`~/*` names `~/.claude`, `~/.claude/*.json` a state file)? */
+const globReaches = (re, dir, f) => under(f, dir) && f !== dir && re.test(f.slice(dir.length + 1).split('/')[0]);
+
 /** Is `p` (absolute) a file the approval gates trust — a session transcript
  *  (`*.jsonl` anywhere under a projects dir, subagent ones included) or a gate
  *  state file (push spends, browser grants, the billed-model clearance)? A
- *  `dirTarget` (a cp/mv destination) counts anywhere under a projects dir, and
- *  a glob counts when it could reach one. The auto-memory dirs
- *  (`projects/<slug>/memory/`) stay writable. #190. */
-export function isGateRecord(p, dirTarget = false) {
+ *  `dirTarget` (a cp/mv destination) counts anywhere under a projects dir; a
+ *  `tree` (a dir a copy lands as: `cp -r bk/.claude ~/`) counts when it holds
+ *  one. A glob counts when it could reach one: a last-segment glob is matched
+ *  against the names on the way (`~/.claude/*.md` can't reach a state file,
+ *  `~/*.md` can't reach `.claude`), and inside a projects dir it counts
+ *  unless its name ends in a literal extension other than `.jsonl`. The
+ *  auto-memory dirs (`projects/<slug>/memory/`) stay writable. #190. */
+export function isGateRecord(p, dirTarget = false, tree = false) {
   const env = process.env;
   const roots = [join(claudeDir, 'projects'), env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, 'projects'), env.CLAUDE_PROJECTS_DIR]
     .filter(Boolean)
@@ -158,33 +198,38 @@ export function isGateRecord(p, dirTarget = false) {
   const states = gateStates();
   const n = normPath(p);
   const inMemory = (q, root) => q.slice(root.length).split('/').includes('memory');
-  const glob = n.search(/[*?[]/);
-  if (glob !== -1) {
-    const prefix = n.slice(0, n.lastIndexOf('/', glob)) || '/';
-    return [...states, ...roots].some((f) => under(f, prefix)) || roots.some((r) => under(prefix, r) && !inMemory(prefix, r));
+  const g = globParts(n);
+  if (g && g.name.includes('/')) {
+    return [...states, ...roots].some((f) => under(f, g.dir)) || roots.some((r) => under(g.dir, r) && !inMemory(g.dir, r));
+  }
+  if (g) {
+    const re = segmentRe(g.name);
+    if ([...states, ...roots].some((f) => globReaches(re, g.dir, f))) return true;
+    const root = roots.find((r) => under(g.dir, r));
+    return !!root && !inMemory(g.dir, root) && (dirTarget || tree || !/\.(?!jsonl$)[^.*?[\]/]+$/.test(g.name));
   }
   if (states.includes(n)) return true;
+  if (tree && [...states, ...roots].some((f) => under(f, n))) return true;
   const root = roots.find((r) => under(n, r));
   if (!root || inMemory(n, root)) return false;
   return dirTarget || n.endsWith('.jsonl');
 }
 
 /** Does removing (or moving away) `p` (absolute) take a gate state file with
- *  it — the file, a dir holding one, or a glob that could match one? Deleting
- *  push-gate-approvals.json forgets every single-use spend, so it counts as a
- *  write. A transcript doesn't: deleting one can only take an approval away
- *  (the gates fail closed on a missing transcript), never forge one. #190. */
-export function removesGateState(p) {
+ *  it — the file, a dir holding one, or a glob that could match one? With
+ *  `deep`, `p`'s last segment is a name matched at any depth below its dir
+ *  (`find DIR -name X -delete`). Deleting push-gate-approvals.json forgets
+ *  every single-use spend, so it counts as a write. A transcript doesn't:
+ *  deleting one can only take an approval away (the gates fail closed on a
+ *  missing transcript), never forge one. #190. */
+export function removesGateState(p, deep = false) {
   const states = gateStates();
   const n = normPath(p);
-  const glob = n.search(/[*?[]/);
-  if (glob === -1) return states.some((f) => under(f, n));
-  const dir = n.slice(0, n.lastIndexOf('/', glob)) || '/';
-  const name = n.slice(dir.length + 1);
-  if (name.includes('/')) return states.some((f) => under(f, dir));
-  // A glob in the last segment only: match it against each state file's name.
-  const re = new RegExp(`^${name.replace(/[.+^${}()|\\]/g, '\\$&').replaceAll('*', '[^/]*').replaceAll('?', '[^/]')}$`);
-  return states.some((f) => f.slice(0, f.lastIndexOf('/')) === dir && re.test(f.slice(f.lastIndexOf('/') + 1)));
+  const g = deep ? { dir: n.slice(0, n.lastIndexOf('/')) || '/', name: n.slice(n.lastIndexOf('/') + 1) } : globParts(n);
+  if (!g) return states.some((f) => under(f, n));
+  if (g.name.includes('/')) return states.some((f) => under(f, g.dir));
+  const re = segmentRe(g.name);
+  return states.some((f) => (deep ? under(f, g.dir) && re.test(f.slice(f.lastIndexOf('/') + 1)) : globReaches(re, g.dir, f)));
 }
 
 /** Walk a transcript JSONL file backward for the most recent user record
