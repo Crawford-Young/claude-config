@@ -982,7 +982,8 @@ const WRAPPER = /^(?:[({!]+|\w+\+?=.*|\$env:\w+=.*|sudo|command|builtin|time|exe
 const LOCATION = /^(?:cd|chdir|sl|set-location|pushd|push-location|popd|pop-location)$/i;
 const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
-const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval)(?:\.exe)?$/i;
+const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)(?:\.exe)?$/i;
+const EVAL = /^(?:eval|iex|invoke-expression)$/i;
 const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
 // Variables that still resolve: HOME and USERPROFILE, in every spelling ($X,
 // ${X}, $env:X, ${env:X}), are the home dir, PWD the dir itself. A leading one becomes `~`/`.` so the
@@ -1130,7 +1131,18 @@ const isCommitCall = (e) => /^git(?:\.exe)?$/i.test(e.cmd) && e.words.includes('
  *  substitution's subshell): it reads the dir, stacks, vars and functions, but
  *  its cd, pushd/popd and assignments move the copy, never the clauses after
  *  it. */
-const scopeCopy = ({ dir, stacks, vars, funcs }) => ({ dir, stacks: stacks && new Map([...stacks].map(([k, v]) => [k, [...v]])), vars, funcs });
+const scopeCopy = ({ dir, stacks, vars, funcs, tool }) => ({ dir, stacks: stacks && new Map([...stacks].map(([k, v]) => [k, [...v]])), vars, funcs, tool });
+
+/** A walk's starting scope. `tool` is the shell that runs the text: 'Bash',
+ *  'PowerShell', or null when unknown (where the two disagree on whether a cd
+ *  outlives a ( … ) group or a pipeline stage, it leaves the dir unknown). */
+const newScope = (cwd, tool = null) => ({ dir: cwd || null, stacks: new Map(), vars: null, funcs: new Map(), tool });
+
+/** The shell a nested command string runs in (see newScope). */
+const shellTool = (cmd) => (/^(?:bash|sh|zsh|dash)(?:\.exe)?$/i.test(cmd) ? 'Bash' : /^(?:pwsh|powershell)(?:\.exe)?$/i.test(cmd) ? 'PowerShell' : null);
+
+// A called function's body is walked from this dir: a cd anywhere moves off it.
+const FUNCTION_START = '\0function-start';
 
 /** The location (the dir and the non-empty pushd stacks) as a comparable key. */
 const locationKey = ({ dir, stacks }) => JSON.stringify([dir, stacks && [...stacks].filter(([, v]) => v.length).sort()]);
@@ -1238,7 +1250,7 @@ function parens(p) {
  *  in `a || cd x && git commit`, which bash reads as `(a || cd x) && …`.
  *  `loop` marks one inside a for/while/until loop (it may run several times).
  *  Location clauses are consumed; a quoted command handed to a shell is
- *  expanded in place (eval shares this shell's location and vars), and so is
+ *  expanded in place (eval/iex share this shell's location and vars), and so is
  *  every substitution body (`…`, $(…), <(…)), which runs before the clause
  *  holding it. A block body (`{ … }`) is walked after its clause's own
  *  substitutions. One that runs in place (a group, a branch, a
@@ -1247,11 +1259,13 @@ function parens(p) {
  *  job, a -Parallel or stored block) gets a copy of the cwd and stacks, which
  *  it can't move back. A body is a `loop` unless it runs once — a bare group,
  *  an if/elseif/else/try/catch/finally branch — since a PowerShell loop has no
- *  `done` to count. A ( … ) subshell's close restores the location before it
- *  (#171). The location is unknown after a cd in a pipeline of several stages,
- *  after a body that moved it but may not run exactly once (an if/case/loop,
- *  or a block that isn't a bare group, try or finally), and after a call to a
- *  function whose body moved it. Other quoted text is an argument, never a
+ *  `done` to count. In bash a ( … ) group's close, or the end of a stage of a
+ *  pipeline of several, restores the location before it (closeSubshells,
+ *  #171); a backgrounded pipeline's cd moves only its job. The location is
+ *  unknown after a body that moved it but may not run exactly once (an
+ *  if/case/loop, or a block that isn't a bare group, try or finally), and
+ *  after a call to a function whose body, walked at the call, moves it. Other
+ *  quoted text is an argument, never a
  *  command. A bare assignment (`W=…`, `export W=…`, `$W = '…'`) sets a var a
  *  later cd target or `git -C` expands (assignVars); one in a loop, a
  *  subshell, a pipeline, a background job, an if/case, an in-place body or
@@ -1260,10 +1274,11 @@ function parens(p) {
  *  function that assigns it. `orFirst`/`inLoop` carry the enclosing clause's
  *  state into a body; `scope` is the cwd, pushd stacks, vars and defined
  *  functions a block shares with its clause. */
-function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd || null, stacks: new Map(), vars: null, funcs: new Map() }) {
+function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cwd)) {
   const out = [];
   let loops = 0; // loops opened in this text and not yet closed by `done`
   let ifs = 0; // bash if/case blocks opened in this text and not yet closed by fi/esac
+  let cases = 0; // the case blocks among them, whose arms open with a pattern
   // The location when the outermost open if/case/loop began: a body that may
   // run zero or many times leaves the location unknown once it closes, if it
   // moved it.
@@ -1274,15 +1289,19 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       region = null;
     } else region ??= locationKey(scope);
   };
-  // The location before each open ( … ) subshell, innermost last: its close
-  // restores it, since a subshell's cd doesn't outlive it.
+  // The location before each open bash subshell (a ( … ) group, or a stage of
+  // a pipeline of several), innermost last: its close restores it, since a
+  // subshell's cd doesn't outlive it. PowerShell runs both in place; with no
+  // tool, a close that changed the location leaves it unknown.
   const subshells = [];
   let closing = 0; // subshells the last clause closed
   const closeSubshells = () => {
     let outer;
     for (; closing > 0 && subshells.length; closing--) outer = subshells.pop();
     closing = 0;
-    if (outer) [scope.dir, scope.stacks] = [outer.dir, outer.stacks];
+    if (!outer) return;
+    if (scope.tool === 'Bash') [scope.dir, scope.stacks] = [outer.dir, outer.stacks];
+    else if (locationKey(scope) !== locationKey(outer)) loseLocation(scope);
   };
   // What `run` assigns in `scope` stands only when `certain`; otherwise each
   // name it assigned is unknown after it.
@@ -1320,6 +1339,8 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
     // it: viaOr clears once one is emitted. A substitution ahead of it
     // (`-m "$(cat …)"`, `FOO=$(date) git …`) leaves it set.
     let viaOr = orCommit || orFirst || orGroup !== -1;
+    // A backgrounded pipeline (`cd x &`) runs as a job: its cd moves only the job.
+    const job = pipeSeps[pi + 1] === '&' && scopeCopy(scope);
     const emit = (...cs) => {
       out.push(...cs);
       if (cs.some(isCommitCall)) [viaOr, orGroup, orFirst] = [false, -1, false];
@@ -1359,7 +1380,17 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
         if (opensLoop(kw)) loops++; // a while/until condition repeats too
         if (/^if$/i.test(kw) && !psBlock()) ifs++;
       }
+      // A case arm's pattern (`a)`, `a|b)`) heads the command it runs, on the
+      // `case … in` line or its own; a `|` in it splits no pipeline stage.
+      if (w[0] === 'case' && w[2] === 'in') {
+        w.splice(0, 3);
+        [ifs, cases] = [ifs + 1, cases + 1];
+      }
+      const arm = cases > 0 && w.length > 1 && /^[^()]+\)$/.test(w[0]);
+      if (arm) w.shift();
       settle();
+      if (segs.length > 1 && !opens && !arm) opens = 1; // a bash stage is a subshell of its own
+      if (scope.tool === 'PowerShell') opens = 0;
       for (let i = 0; i < opens; i++) subshells.push(scopeCopy(scope));
       closing = opens - parens(c).net;
       // A group's closing `)` sticks to its last word (`(git push)`), unless the
@@ -1372,7 +1403,8 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       }
       const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
       const loop = inLoop || loops > 0;
-      const shellAt = !SHELL_C.test(cmd) ? -1 : /^eval/i.test(cmd) ? 0 : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
+      // eval/iex take the command as their words, iex maybe after -Command.
+      const shellAt = !SHELL_C.test(cmd) ? -1 : EVAL.test(cmd) ? (/^-c/i.test(w[1] ?? '') ? 1 : 0) : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
       const shellCmd = shellAt !== -1 && w[shellAt + 1] !== undefined ? w.slice(shellAt + 1).join(' ') : null;
       // A shell's own command string is parsed whole below; reading its
       // substitutions here too would count each gated verb twice.
@@ -1380,13 +1412,14 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       for (const { head, body } of blocks[seg] || []) {
         const h = head.trim();
         const once = /^(?:[&.]\s*)?$|^(?:if|elseif|else|try|catch|finally|then)\b/i.test(h);
-        const inPlace = once || /^(?:foreach|for|while|do|until|switch)(?![\w-])|^(?:ForEach-Object|%|foreach|Where-Object|\?)$/i.test(h);
+        // In place too: a PowerShell switch arm (`'a' { … }`, `default { … }`)
+        // and the body after a condition split at its `;` (`for (…; …; $i++) {`).
+        const inPlace = once || /^(?:foreach|for|while|do|until|switch)(?![\w-])|^(?:ForEach-Object|%|foreach|Where-Object|\?)$|^(?:'[^']*'|"[^"]*"|default|-?\d+|[^()]*\))$/i.test(h);
         if (!inPlace) {
-          const copy = scopeCopy(scope);
-          emit(...commands(body, null, viaOr, loop || !once, copy));
+          emit(...commands(body, null, viaOr, loop || !once, scopeCopy(scope)));
           // A function's call runs its body in the caller's shell (see below).
           const fn = FUNCTION_HEAD.exec(h);
-          if (fn) scope.funcs.set((fn[1] ?? fn[2]).toLowerCase(), { moves: locationKey(copy) !== locationKey(scope), keys: assignedSince(copy.vars, scope.vars) });
+          if (fn) scope.funcs.set((fn[1] ?? fn[2]).toLowerCase(), { body, walking: false });
           continue;
         }
         // An in-place body moves the shared dir, but it may run zero or many
@@ -1413,8 +1446,10 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       } else if (!wrappers.length && PS_SCOPED_ASSIGN.test(c)) setVar(scope, `ps:${c.match(PS_SCOPED_ASSIGN)[1].toLowerCase()}`, UNKNOWN_DIR);
       else if (!wrappers.length && PS_ASSIGN.test(c)) assignVars(scope, null, c, certain);
       else if (/^foreach$/i.test(cmd) && /\(\s*\$(\w+)\s+in\b/i.test(c)) setVar(scope, `ps:${c.match(/\(\s*\$(\w+)\s+in\b/i)[1].toLowerCase()}`, UNKNOWN_DIR);
-      else if (w.length && /^(?:fi|esac)\)*$/.test(cmd)) ifs = Math.max(0, ifs - 1);
-      else if (/^case$/.test(cmd)) ifs++;
+      else if (w.length && /^(?:fi|esac)\)*$/.test(cmd)) {
+        ifs = Math.max(0, ifs - 1);
+        if (cmd.startsWith('esac')) cases = Math.max(0, cases - 1);
+      }
       for (const key of runtimeSets(cmd, w.slice(1))) setVar(scope, key, UNKNOWN_DIR);
       if (!w.length) continue;
       // A clause the branches below consume unemitted can still redirect
@@ -1438,21 +1473,27 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       }
       if (LOCATION.test(cmd)) {
         moveLocation(scope, cmd, w.slice(1));
-        // bash runs each stage of a pipeline in a subshell, PowerShell a cmdlet in place.
-        if (segs.length > 1) loseLocation(scope);
         continue;
       }
       if (SHELL_C.test(cmd)) {
-        // eval runs in this shell: it shares the location and vars.
-        if (shellCmd !== null && /^eval/i.test(cmd)) unlessCertain(certain, () => emit(...commands(shellCmd, null, viaOr, loop, scope)));
-        else if (shellCmd !== null) emit(...commands(shellCmd, scope.dir, viaOr, loop));
+        // eval/iex run in this shell: they share the location and vars.
+        if (shellCmd !== null && EVAL.test(cmd)) unlessCertain(certain, () => emit(...commands(shellCmd, null, viaOr, loop, scope)));
+        else if (shellCmd !== null) emit(...commands(shellCmd, scope.dir, viaOr, loop, newScope(scope.dir, shellTool(cmd))));
         continue;
       }
-      // A function call runs its body here: what it moved or assigned is unknown after it.
+      // A function call runs its body here, as it stands now (a function it
+      // calls may be defined after it): walked from FUNCTION_START, a body that
+      // moves the location or assigns a name leaves it unknown after the call.
+      // A recursive call adds nothing.
       const fn = scope.funcs.get(cmd.toLowerCase());
-      if (fn) {
-        if (fn.moves) loseLocation(scope);
-        for (const key of fn.keys) setVar(scope, key, UNKNOWN_DIR);
+      if (fn && !fn.walking) {
+        const probe = { ...scopeCopy(scope), dir: FUNCTION_START };
+        const start = locationKey(probe);
+        fn.walking = true;
+        commands(fn.body, null, false, loop, probe);
+        fn.walking = false;
+        if (locationKey(probe) !== start) loseLocation(scope);
+        for (const key of assignedSince(probe.vars, scope.vars)) setVar(scope, key, UNKNOWN_DIR);
       }
       // `vars` as they stand here, for a git call's -C (gitCalls).
       const call = { cmd, words: w, text: c, dir: scope.dir, vars: scope.vars, pipe, seg, viaOr, loop };
@@ -1461,6 +1502,10 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = { dir: cwd 
       // makes a following `||` its fallback.
       if (isCommitCall(call) && seg === segs.length - 1 && !negated) committed = true;
       emit(call);
+    }
+    if (job) {
+      closeSubshells();
+      [scope.dir, scope.stacks] = [job.dir, job.stacks];
     }
     // A `case` pattern's `a)` would take the depth below 0.
     depth = Math.max(0, depth + par.net);
@@ -1508,10 +1553,10 @@ function isGate({ cmd, words: w }) {
  *  runs in: the command's dir, then any `-C` on the call (an absolute one
  *  resolves an unknown dir; a relative one keeps it unknown). A null repo means
  *  no info — callers fail open; UNKNOWN_DIR means a cd the guard couldn't
- *  follow — callRule blocks a commit there. */
-export function gitCalls(raw, cwd) {
+ *  follow — callRule blocks a commit there. `tool` is the shell (newScope). */
+export function gitCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w, dir, vars, viaOr, loop } of commands(raw, cwd)) {
+  for (const { cmd, words: w, dir, vars, viaOr, loop } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
     if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
@@ -1850,9 +1895,9 @@ function repoKey(repo) {
   return process.platform === 'win32' ? top.toLowerCase() : top;
 }
 
-export function branchRules(raw, cwd) {
+export function branchRules(raw, cwd, tool = null) {
   const rooted = new Set(); // unborn repos whose one root-commit exemption this command already spent
-  for (const g of gitCalls(scrub(raw), cwd)) {
+  for (const g of gitCalls(scrub(raw), cwd, tool)) {
     const reason = callRule(g, rooted);
     if (reason) return reason;
   }
@@ -1935,7 +1980,7 @@ if (isMain(import.meta.url)) {
       // Browser before push: a blocked command never spends a push approval.
       const reason =
         staticCheck(cmd, cwd, tool) ||
-        branchRules(cmd, cwd) ||
+        branchRules(cmd, cwd, tool) ||
         (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
         pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);
       if (reason) block(reason);

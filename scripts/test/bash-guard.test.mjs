@@ -164,7 +164,7 @@ test('commit-message prose does not trip content rules', () => {
 
 // --- scoping: the shell cd's before git runs ---------------------------------
 
-const repoOf = (cmd, cwd) => gitCalls(cmd, cwd)[0]?.repo;
+const repoOf = (cmd, cwd, tool = null) => gitCalls(cmd, cwd, tool)[0]?.repo;
 
 test('gitCalls walks the cd segments before each git call', () => {
   assert.equal(repoOf('git commit -m x', '/cwd'), '/cwd');
@@ -796,19 +796,31 @@ test('#163: pushd/popd and Push-Location/Pop-Location stacks are modelled', () =
   assert.equal(at('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s }'), '/pb');
   assert.equal(at('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s }; Pop-Location -StackName s'), '/pa');
   assert.equal(at('cd /pa; Push-Location -StackName s /pb; & { Pop-Location -StackName s }'), '/pa');
+  // A conditional pop may not run: the dir after it is unknown (#171).
+  assert.equal(at('cd /pa; Push-Location -StackName s /pb; if ($x) { Pop-Location -StackName s }'), UNKNOWN_DIR);
   assert.equal(repoOf('cd /pa; Push-Location -StackName s /pb; function f { Pop-Location -StackName s; git commit -m x }', '/cwd'), '/pa');
 });
 
-test('#171: a ( … ) subshell restores the dir its cd moved', () => {
-  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd');
+test('#171: a bash ( … ) subshell restores the dir its cd moved', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd', 'Bash');
   for (const cmd of ['(cd /pf)', '( cd /pf )', '(cd /pf && npm i)', '(cd /pf; (cd /pg); true)', '(pushd /pf)', '(cd /pf) | cat', 'if (cd /pf); then true; fi', 'true && (cd /pf)']) {
     assert.equal(at(cmd), '/cwd', cmd);
   }
   assert.equal(at('cd /pa; pushd /pb; (popd); popd'), '/pa');
   // Inside the group the cd holds.
-  assert.equal(repoOf('(cd /pf && git commit -m x)', '/cwd'), '/pf');
-  assert.equal(repoOf('(cd /pf; (cd /pg); git commit -m x)', '/cwd'), '/pf');
-  assert.equal(repoOf('(cd /pf; (cd /pg; git commit -m x))', '/cwd'), '/pg');
+  assert.equal(repoOf('(cd /pf && git commit -m x)', '/cwd', 'Bash'), '/pf');
+  assert.equal(repoOf('(cd /pf; (cd /pg); git commit -m x)', '/cwd', 'Bash'), '/pf');
+  assert.equal(repoOf('(cd /pf; (cd /pg; git commit -m x))', '/cwd', 'Bash'), '/pg');
+  // A bash -c command is bash whatever the tool.
+  assert.equal(repoOf(`pwsh -Command "bash -c '(cd /pf); git commit -m x'"`, '/cwd'), '/cwd');
+});
+
+test('#171 review: PowerShell grouping runs in place; with no tool a group that moved leaves the dir unknown', () => {
+  const at = (cmd, tool) => repoOf(`${cmd}; git commit -m x`, '/cwd', tool);
+  for (const cmd of ['(Set-Location /pf)', '(Push-Location /pf)', '(cd /pf)']) assert.equal(at(cmd, 'PowerShell'), '/pf', cmd);
+  assert.equal(repoOf('(cd /pf) && git commit -m x', '/cwd', 'PowerShell'), '/pf');
+  assert.equal(at('(cd /pf)', null), UNKNOWN_DIR);
+  assert.equal(at('(git status)', null), '/cwd');
 });
 
 test('#171: a cd in a conditional body, a loop or a pipeline leaves the dir unknown after it', () => {
@@ -827,10 +839,6 @@ test('#171: a cd in a conditional body, a loop or a pipeline leaves the dir unkn
     '1 | ForEach-Object { Set-Location /pf }',
     'cd /pa; pushd /pf; if ($x) { popd }',
     'cd /pa; if ($x) { pushd /pf }; popd',
-    // bash runs every stage of a pipeline in a subshell; PowerShell runs a cmdlet in place.
-    'cd /pf | cat',
-    'cat | cd /pf',
-    'pushd /pf | cat',
   ]) {
     assert.equal(at(cmd), UNKNOWN_DIR, cmd);
   }
@@ -840,13 +848,94 @@ test('#171: a cd in a conditional body, a loop or a pipeline leaves the dir unkn
   assert.equal(at('& { Set-Location /pf }'), '/pf');
   assert.equal(at('try { Set-Location /pf } finally { }'), '/pf');
   assert.equal(at('if true; then true; fi; cd /pf'), '/pf');
-  assert.equal(at('if true; then (cd /pg); fi'), '/cwd');
+  assert.equal(repoOf('if true; then (cd /pg); fi; git commit -m x', '/cwd', 'Bash'), '/cwd');
   // A body that puts the location back leaves it known.
   assert.equal(at('cd /pa; 1 | ForEach-Object { Push-Location /pf; Pop-Location }'), '/pa');
   assert.equal(at('cd /pa; for i in 1; do pushd /pf; popd; done'), '/pa');
   assert.equal(at('cd /pf && npm i'), '/pf');
   // Deliberate: the && success path stays certain (`cd X && npm i; git commit` is common).
   assert.equal(at('false && cd /pf'), '/pf');
+});
+
+test('#171 review: a pipeline stage and a background job keep their cd to themselves in bash', () => {
+  const at = (cmd, tool) => repoOf(`${cmd}; git commit -m x`, '/cwd', tool);
+  // bash runs every stage of a pipeline in a subshell; PowerShell runs a cmdlet in place.
+  for (const cmd of ['cd /pf | cat', 'cat | cd /pf', 'pushd /pf | cat']) {
+    assert.equal(at(cmd, 'Bash'), '/cwd', cmd);
+    assert.equal(at(cmd, 'PowerShell'), '/pf', cmd);
+    assert.equal(at(cmd, null), UNKNOWN_DIR, cmd);
+  }
+  // A ( … ) stage holds its cd inside the group.
+  const calls = (cmd) => gitCalls(cmd, '/cwd', 'Bash').map((g) => g.repo);
+  assert.deepEqual(calls('git diff | (cd /pf && git apply && git commit -m x)'), ['/cwd', '/pf', '/pf']);
+  assert.deepEqual(calls('git diff | (cd /pf && git apply); git commit -m x'), ['/cwd', '/pf', '/cwd']);
+  assert.deepEqual(calls('cd /pf | git commit -m x'), ['/cwd']);
+  // A backgrounded cd moves only its job (bash, and PowerShell 7's &).
+  for (const tool of ['Bash', 'PowerShell', null]) {
+    assert.equal(repoOf('cd /pf & git commit -m x', '/cwd', tool), '/cwd', String(tool));
+    assert.equal(repoOf('cd /pf &\ngit commit -m x', '/cwd', tool), '/cwd', String(tool));
+  }
+});
+
+test('#171 review: a case arm on its pattern line, a switch arm and a C-style for body move the dir', () => {
+  const at = (cmd, tool) => repoOf(`${cmd}; git commit -m x`, '/cwd', tool);
+  assert.equal(at('case $x in a) cd /pf;; esac', 'Bash'), UNKNOWN_DIR);
+  assert.equal(at('case $x in\na|b) cd /pf;;\nesac', 'Bash'), UNKNOWN_DIR);
+  assert.equal(repoOf('case $x in a) cd /pf; git commit -m x;; esac', '/cwd', 'Bash'), '/pf');
+  assert.equal(at('case $x in a) true;; esac', 'Bash'), '/cwd');
+  assert.equal(at("switch ($x) { 'a' { cd /pf } }", 'PowerShell'), UNKNOWN_DIR);
+  assert.equal(at('switch ($x) { default { cd /pf } }', 'PowerShell'), UNKNOWN_DIR);
+  assert.equal(at('for ($i=0; $i -lt 1; $i++) { cd /pf }', 'PowerShell'), UNKNOWN_DIR);
+  assert.equal(at('for ($i=0; $i -lt 1; $i++) { git status }', 'PowerShell'), '/cwd');
+});
+
+test('#171 review: a function call is judged by its body when called, not when defined', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd', 'Bash');
+  for (const cmd of [
+    'cd /pf; f() { cd /pf; }; cd /pg; f',
+    'g() { f; }; f() { cd /pf; }; g',
+    'f() { cd sub; }; f',
+    'cd /pa; pushd /pb; f() { popd; }; f',
+    'f() { f; cd /pf; }; f',
+  ]) {
+    assert.equal(at(cmd), UNKNOWN_DIR, cmd);
+  }
+  assert.equal(at('f() { pushd /pf; popd; }; f'), '/cwd');
+  assert.equal(at('f() { f; }; f'), '/cwd');
+  assert.equal(at('g() { f; }; f() { true; }; g'), '/cwd');
+});
+
+test('#171 review: iex and Invoke-Expression run a literal command in place, like eval', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd', 'PowerShell');
+  assert.equal(at('iex "cd /pf"'), '/pf');
+  assert.equal(at("Invoke-Expression 'cd /pf'"), '/pf');
+  assert.equal(at('Invoke-Expression -Command "cd /pf"'), '/pf');
+  assert.equal(repoOf('iex "cd /pf"; git commit -m x', '/cwd', 'Bash'), '/pf');
+});
+
+test('#171 review: the hook judges by its payload tool', () => {
+  const h = tmpHome();
+  const feat = join(h, 'feat');
+  const main = join(h, 'main');
+  branchRepo(feat);
+  bornRepo(main);
+  const run = (tool, command, cwd) => {
+    try {
+      execHarness(hookPath, [], { input: JSON.stringify({ tool_name: tool, tool_input: { command }, cwd }), home: h });
+      return 0;
+    } catch (e) {
+      return e.status;
+    }
+  };
+  assert.equal(run('PowerShell', `(Set-Location ${main}); git commit -m x`, feat), 2);
+  assert.equal(run('Bash', `(cd ${main}); git commit -m x`, feat), 0);
+  assert.equal(run('Bash', `git diff | (cd ${feat} && git apply && git commit -m x)`, main), 0);
+  assert.equal(run('PowerShell', `Set-Location ${feat} | Out-Null; git commit -m x`, main), 0);
+  assert.equal(run('Bash', `cd ${feat} & git commit -m x`, main), 2);
+  assert.equal(run('Bash', `cd ${feat}; case $x in a) cd ${main};; esac; git commit -m x`, h), 2);
+  assert.equal(run('Bash', `cd ${main}; f() { cd ${main}; }; cd ${feat}; f; git commit -m x`, h), 2);
+  assert.equal(run('PowerShell', `cd ${feat}; switch ($x) { 'a' { cd ${main} } }; git commit -m x`, h), 2);
+  assert.equal(run('PowerShell', `cd ${feat}; iex "cd ${main}"; git commit -m x`, h), 2);
 });
 
 test('#171: eval and a function call run in the current shell', () => {
