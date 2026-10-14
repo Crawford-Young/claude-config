@@ -984,6 +984,8 @@ const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
 const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)(?:\.exe)?$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
+// A case arm's pattern word: `a)`, `(a)`, `a|b)`, `*)`, never fi)/done)/esac).
+const CASE_PATTERN = /^\(?(?!(?:esac|fi|done)\)+$)[^()]+\)$/;
 const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
 // Variables that still resolve: HOME and USERPROFILE, in every spelling ($X,
 // ${X}, $env:X, ${env:X}), are the home dir, PWD the dir itself. A leading one becomes `~`/`.` so the
@@ -1133,16 +1135,80 @@ const isCommitCall = (e) => /^git(?:\.exe)?$/i.test(e.cmd) && e.words.includes('
  *  it. */
 const scopeCopy = ({ dir, stacks, vars, funcs, tool }) => ({ dir, stacks: stacks && new Map([...stacks].map(([k, v]) => [k, [...v]])), vars, funcs, tool });
 
+// The function-body characters one walk may read to judge calls (#171). Past
+// it a call fails closed: the dir is unknown after it.
+const FUNCTION_BUDGET = 100_000;
+
 /** A walk's starting scope. `tool` is the shell that runs the text: 'Bash',
  *  'PowerShell', or null when unknown (where the two disagree on whether a cd
- *  outlives a ( … ) group or a pipeline stage, it leaves the dir unknown). */
-const newScope = (cwd, tool = null) => ({ dir: cwd || null, stacks: new Map(), vars: null, funcs: new Map(), tool });
+ *  outlives a ( … ) group or a pipeline stage, it leaves the dir unknown).
+ *  `funcs` holds the functions defined so far (`defs`, name → { body, own,
+ *  walking }), a generation `gen` each new definition bumps, and the call
+ *  effects memoized for it (`effects`, see callEffect). */
+const newScope = (cwd, tool = null) => ({
+  dir: cwd || null,
+  stacks: new Map(),
+  vars: null,
+  funcs: { defs: new Map(), gen: 0, effects: new Map(), budget: FUNCTION_BUDGET },
+  tool,
+});
 
 /** The shell a nested command string runs in (see newScope). */
 const shellTool = (cmd) => (/^(?:bash|sh|zsh|dash)(?:\.exe)?$/i.test(cmd) ? 'Bash' : /^(?:pwsh|powershell)(?:\.exe)?$/i.test(cmd) ? 'PowerShell' : null);
 
+/** Record a function definition; one with the body it already has changes nothing. */
+const defineFunction = (funcs, name, body) => {
+  if (funcs.defs.get(name)?.body === body) return;
+  funcs.defs.set(name, { body, own: null, walking: false });
+  funcs.gen++;
+};
+
 // A called function's body is walked from this dir: a cd anywhere moves off it.
 const FUNCTION_START = '\0function-start';
+
+/** A function's own effect, which depends on its body alone: whether the
+ *  body moves the location (walked from FUNCTION_START with empty stacks, so
+ *  any cd, or any pushd/popd, counts), the var keys it assigns, and every
+ *  command word it calls, recorded rather than followed. Walked once per
+ *  definition; a re-entrant walk (a call in its own substitution) adds
+ *  nothing, and past the budget it counts as moving. */
+function ownEffect(scope, fn) {
+  if (fn.own) return fn.own;
+  const none = { moves: false, keys: new Set(), calls: new Set() };
+  if (fn.walking) return none;
+  scope.funcs.budget -= fn.body.length;
+  if (scope.funcs.budget < 0) return { ...none, moves: true };
+  const probe = { ...scopeCopy(scope), dir: FUNCTION_START, stacks: new Map(), calls: new Set() };
+  fn.walking = true;
+  commands(fn.body, null, false, false, probe);
+  fn.walking = false;
+  const moves = probe.dir !== FUNCTION_START || !probe.stacks || probe.stacks.size > 0;
+  fn.own = { moves, keys: assignedSince(probe.vars, scope.vars), calls: probe.calls };
+  return fn.own;
+}
+
+/** What a call to `name` does to its caller: the union of the own effects of
+ *  every defined function it reaches (so a cycle costs nothing), memoized
+ *  per generation of the definitions. */
+function callEffect(scope, name) {
+  const { funcs } = scope;
+  const memo = funcs.effects.get(name);
+  if (memo?.gen === funcs.gen) return memo;
+  const effect = { gen: funcs.gen, moves: false, keys: new Set() };
+  const seen = new Set([name]);
+  for (const todo = [name]; todo.length; ) {
+    const own = ownEffect(scope, funcs.defs.get(todo.pop()));
+    effect.moves ||= own.moves;
+    for (const key of own.keys) effect.keys.add(key);
+    for (const c of own.calls) {
+      if (seen.has(c) || !funcs.defs.has(c)) continue;
+      seen.add(c);
+      todo.push(c);
+    }
+  }
+  funcs.effects.set(name, effect);
+  return effect;
+}
 
 /** The location (the dir and the non-empty pushd stacks) as a comparable key. */
 const locationKey = ({ dir, stacks }) => JSON.stringify([dir, stacks && [...stacks].filter(([, v]) => v.length).sort()]);
@@ -1264,7 +1330,7 @@ function parens(p) {
  *  #171); a backgrounded pipeline's cd moves only its job. The location is
  *  unknown after a body that moved it but may not run exactly once (an
  *  if/case/loop, or a block that isn't a bare group, try or finally), and
- *  after a call to a function whose body, walked at the call, moves it. Other
+ *  after a call to a function that, with what it calls, moves it (callEffect). Other
  *  quoted text is an argument, never a
  *  command. A bare assignment (`W=…`, `export W=…`, `$W = '…'`) sets a var a
  *  later cd target or `git -C` expands (assignVars); one in a loop, a
@@ -1278,7 +1344,7 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
   const out = [];
   let loops = 0; // loops opened in this text and not yet closed by `done`
   let ifs = 0; // bash if/case blocks opened in this text and not yet closed by fi/esac
-  let cases = 0; // the case blocks among them, whose arms open with a pattern
+  const caseDepths = []; // per open case block, the subshell depth inside it
   // The location when the outermost open if/case/loop began: a body that may
   // run zero or many times leaves the location unknown once it closes, if it
   // moved it.
@@ -1352,6 +1418,10 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
       settle();
       closeSubshells();
       const w = words(c);
+      // A case arm's pattern (`a)`, `(a)`, `a|b)`) heads the command it runs, on
+      // the `case … in` line or its own. On its own line it is told from a
+      // group's `)` by depth: no subshell may have opened since the case began.
+      let pattern = caseDepths.length && subshells.length === caseDepths[caseDepths.length - 1] && CASE_PATTERN.test(w[0] ?? '') ? w.shift() : null;
       // A bash loop keyword; a PowerShell for (…)/while (…) block has no `done`
       // to close it. A lone `(` after the keyword is PowerShell when a `{` body
       // follows it or the `(` runs on past this clause (`for ($i=0; …`); a bash
@@ -1380,19 +1450,20 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
         if (opensLoop(kw)) loops++; // a while/until condition repeats too
         if (/^if$/i.test(kw) && !psBlock()) ifs++;
       }
-      // A case arm's pattern (`a)`, `a|b)`) heads the command it runs, on the
-      // `case … in` line or its own; a `|` in it splits no pipeline stage.
-      if (w[0] === 'case' && w[2] === 'in') {
+      const opensCase = w[0] === 'case' && w[2] === 'in';
+      if (opensCase) {
         w.splice(0, 3);
-        [ifs, cases] = [ifs + 1, cases + 1];
+        ifs++;
+        if (CASE_PATTERN.test(w[0] ?? '')) pattern = w.shift();
       }
-      const arm = cases > 0 && w.length > 1 && /^[^()]+\)$/.test(w[0]);
-      if (arm) w.shift();
       settle();
-      if (segs.length > 1 && !opens && !arm) opens = 1; // a bash stage is a subshell of its own
+      // A `|` in a pattern splits no pipeline stage.
+      if (segs.length > 1 && !opens && pattern === null) opens = 1; // a bash stage is a subshell of its own
       if (scope.tool === 'PowerShell') opens = 0;
       for (let i = 0; i < opens; i++) subshells.push(scopeCopy(scope));
-      closing = opens - parens(c).net;
+      if (opensCase) caseDepths.push(subshells.length);
+      // A pattern's parens open or close no subshell.
+      closing = opens - parens(c).net + (pattern === null ? 0 : parens(pattern).net);
       // A group's closing `)` sticks to its last word (`(git push)`), unless the
       // word opens a `(` of its own for it to close.
       if (w.length) {
@@ -1419,7 +1490,7 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
           emit(...commands(body, null, viaOr, loop || !once, scopeCopy(scope)));
           // A function's call runs its body in the caller's shell (see below).
           const fn = FUNCTION_HEAD.exec(h);
-          if (fn) scope.funcs.set((fn[1] ?? fn[2]).toLowerCase(), { body, walking: false });
+          if (fn) defineFunction(scope.funcs, (fn[1] ?? fn[2]).toLowerCase(), body);
           continue;
         }
         // An in-place body moves the shared dir, but it may run zero or many
@@ -1448,7 +1519,7 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
       else if (/^foreach$/i.test(cmd) && /\(\s*\$(\w+)\s+in\b/i.test(c)) setVar(scope, `ps:${c.match(/\(\s*\$(\w+)\s+in\b/i)[1].toLowerCase()}`, UNKNOWN_DIR);
       else if (w.length && /^(?:fi|esac)\)*$/.test(cmd)) {
         ifs = Math.max(0, ifs - 1);
-        if (cmd.startsWith('esac')) cases = Math.max(0, cases - 1);
+        if (cmd.startsWith('esac')) caseDepths.pop();
       }
       for (const key of runtimeSets(cmd, w.slice(1))) setVar(scope, key, UNKNOWN_DIR);
       if (!w.length) continue;
@@ -1481,19 +1552,17 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
         else if (shellCmd !== null) emit(...commands(shellCmd, scope.dir, viaOr, loop, newScope(scope.dir, shellTool(cmd))));
         continue;
       }
-      // A function call runs its body here, as it stands now (a function it
-      // calls may be defined after it): walked from FUNCTION_START, a body that
-      // moves the location or assigns a name leaves it unknown after the call.
-      // A recursive call adds nothing.
-      const fn = scope.funcs.get(cmd.toLowerCase());
-      if (fn && !fn.walking) {
-        const probe = { ...scopeCopy(scope), dir: FUNCTION_START };
-        const start = locationKey(probe);
-        fn.walking = true;
-        commands(fn.body, null, false, loop, probe);
-        fn.walking = false;
-        if (locationKey(probe) !== start) loseLocation(scope);
-        for (const key of assignedSince(probe.vars, scope.vars)) setVar(scope, key, UNKNOWN_DIR);
+      // A function call runs its body here, as the definitions stand now (a
+      // function it calls may be defined after it): if what it reaches moves
+      // the location or assigns a name, that is unknown after the call
+      // (callEffect). Inside an own-effect walk every command word is only
+      // recorded, since the function it names may be defined later.
+      const name = cmd.toLowerCase();
+      if (scope.calls) scope.calls.add(name);
+      else if (scope.funcs.defs.has(name)) {
+        const effect = callEffect(scope, name);
+        if (effect.moves) loseLocation(scope);
+        for (const key of effect.keys) setVar(scope, key, UNKNOWN_DIR);
       }
       // `vars` as they stand here, for a git call's -C (gitCalls).
       const call = { cmd, words: w, text: c, dir: scope.dir, vars: scope.vars, pipe, seg, viaOr, loop };

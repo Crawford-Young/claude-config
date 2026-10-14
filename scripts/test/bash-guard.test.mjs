@@ -900,9 +900,61 @@ test('#171 review: a function call is judged by its body when called, not when d
   ]) {
     assert.equal(at(cmd), UNKNOWN_DIR, cmd);
   }
-  assert.equal(at('f() { pushd /pf; popd; }; f'), '/cwd');
+  // A body that touches the pushd stacks at all may have moved the caller's.
+  assert.equal(at('f() { pushd /pf; popd; }; f'), UNKNOWN_DIR);
+  assert.equal(at('f() { true; }; f; f'), '/cwd');
   assert.equal(at('f() { f; }; f'), '/cwd');
   assert.equal(at('g() { f; }; f() { true; }; g'), '/cwd');
+});
+
+test('#171 review 2: function calls are memoized and budgeted, so call graphs stay fast', () => {
+  const timed = (cmd) => {
+    const t = performance.now();
+    const repo = repoOf(cmd, '/cwd', 'Bash');
+    return { repo, ms: performance.now() - t };
+  };
+  // Fan-out 2, depth 20: 2^20 call paths before the memo.
+  const fan = Array.from({ length: 20 }, (_, i) => `f${i}() { f${i + 1}; f${i + 1}; cd /pf; }; `).join('') + 'f20() { true; }; f0; git commit -m x';
+  // 50 functions that each call all 50.
+  const mesh = (body) => Array.from({ length: 50 }, (_, i) => `f${i}() { ${Array.from({ length: 50 }, (_, j) => `f${j};`).join(' ')}${body} }; `).join('') + 'f0; git commit -m x';
+  const cases = [
+    [fan, UNKNOWN_DIR],
+    [mesh(''), '/cwd'],
+    [mesh(' true;').replace('f49() {', 'f49() { cd /pf;'), UNKNOWN_DIR],
+    ['f() { cd /pa; W=1; cd /pb; }; ' + 'f; '.repeat(2000) + 'git commit -m x', UNKNOWN_DIR],
+    ['f() { ' + 'true; X=1; '.repeat(200) + '}; ' + 'f; '.repeat(500) + 'git commit -m x', '/cwd'],
+  ];
+  for (const [cmd, want] of cases) {
+    const { repo, ms } = timed(cmd);
+    assert.equal(repo, want, cmd.slice(0, 60));
+    assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms: ${cmd.slice(0, 60)}`);
+  }
+  // Past the walk budget a call fails closed: the dir is unknown.
+  assert.equal(repoOf(`f() { ${'true; '.repeat(40000)}}; f; git commit -m x`, '/cwd', 'Bash'), UNKNOWN_DIR);
+});
+
+test('#171 review 2: a case pattern never counts as a subshell paren', () => {
+  const at = (cmd) => repoOf(`${cmd}; git commit -m x`, '/cwd', 'Bash');
+  assert.equal(at('case $x in (a) cd /pf;; esac'), UNKNOWN_DIR);
+  assert.equal(at('case $x in\n(a) cd /pf;;\nesac'), UNKNOWN_DIR);
+  assert.equal(repoOf('case $x in (a) cd /pf; git commit -m x;; esac', '/cwd', 'Bash'), '/pf');
+  assert.equal(at('case $x in (a) true;; esac'), '/cwd');
+  // The arm's `)` doesn't close the group around the case early.
+  assert.equal(at('cd /pa; (case $x in a) true;; esac; cd /pf)'), '/pa');
+  assert.equal(at('cd /pa; (case $x in\na)\ntrue;;\nesac; cd /pf)'), '/pa');
+  assert.equal(repoOf('cd /pa; (case $x in a) true;; esac; cd /pf; git commit -m x)', '/cwd', 'Bash'), '/pf');
+  const h = tmpHome();
+  const feat = join(h, 'feat');
+  const main = join(h, 'main');
+  branchRepo(feat);
+  bornRepo(main);
+  for (const cmd of [
+    `cd ${feat}; case $x in (a) cd ${main};; esac; git commit -m x`,
+    `cd ${feat}; case $x in (a) cd ${main}; git commit -m x;; esac`,
+    `cd ${main}; (case $x in a) true;; esac; cd ${feat}); git commit -m x`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
 });
 
 test('#171 review: iex and Invoke-Expression run a literal command in place, like eval', () => {
