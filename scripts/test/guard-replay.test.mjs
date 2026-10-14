@@ -15,7 +15,7 @@ function checkout(staticBody, approving = 'true', extra = '') {
   mkdirSync(join(dir, 'hooks'));
   writeFileSync(
     join(dir, 'hooks', 'bash-guard.mjs'),
-    `export const staticCheck = (c) => { ${staticBody} };
+    `export const staticCheck = (c, cwd, tool) => { ${staticBody} };
 export const gatedVerbs = () => [];
 export const browserCommand = () => null;
 export const isApproving = () => ${approving};
@@ -168,6 +168,28 @@ test('--branch diffs gitCalls per call and branchRules verdicts on an unborn and
     'gitCalls#2: none -> {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":true} | for f in a; do git add f; done',
     'branchRules[born]: allow -> BLOCK | git commit -m x',
     'summary: 3 changed; 3 commands, 0 answers from 1 files; --branch: 2 gitCalls, 1 branchRules over 6 probes (unborn + born)',
+  ]);
+});
+
+test('each command replays under the tool that ran it, a command run by both once per tool', () => {
+  // #171: the hook judges a ( … ) group or pipeline stage by its payload tool.
+  const toolCo = checkout("return tool === 'PowerShell' && c === 'sc f x' ? 'blocked' : null;", 'true', `export const scrub = (c) => c;
+export const gitCalls = (c, cwd, tool) => [{ sub: String(tool), args: [], repo: cwd, viaOr: false, loop: false }];
+export const branchRules = (c, cwd, tool) => (tool === 'PowerShell' ? 'blocked' : null);`);
+  const plainCo = checkout('return null;', 'true', `export const scrub = (c) => c;
+export const gitCalls = (c, cwd) => [{ sub: 'Bash', args: [], repo: cwd, viaOr: false, loop: false }];
+export const branchRules = () => null;`);
+  const cfg = config({ 's.jsonl': [bash('git commit -m x'), bash('git commit -m x', 'PowerShell'), bash('sc f x'), bash('sc f x', 'PowerShell')] });
+  const lines = run(cfg, plainCo, toolCo, '--branch').trim().split('\n');
+  assert.deepEqual(lines, [
+    'staticCheck: null -> "blocked" | sc f x',
+    'gitCalls#0: {"sub":"Bash","args":[],"repo":"<repo>","viaOr":false,"loop":false} -> {"sub":"PowerShell","args":[],"repo":"<repo>","viaOr":false,"loop":false} | git commit -m x',
+    'gitCalls#0: {"sub":"Bash","args":[],"repo":"<repo>","viaOr":false,"loop":false} -> {"sub":"PowerShell","args":[],"repo":"<repo>","viaOr":false,"loop":false} | sc f x',
+    'branchRules[unborn]: allow -> BLOCK | git commit -m x',
+    'branchRules[unborn]: allow -> BLOCK | sc f x',
+    'branchRules[born]: allow -> BLOCK | git commit -m x',
+    'branchRules[born]: allow -> BLOCK | sc f x',
+    'summary: 7 changed; 4 commands, 0 answers from 1 files; --branch: 2 gitCalls, 4 branchRules over 8 probes (unborn + born)',
   ]);
 });
 

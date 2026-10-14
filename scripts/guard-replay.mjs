@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // guard-replay.mjs — diff guard verdicts between two checkouts over real transcripts (#106).
 //   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]
-// Replays unique Bash/PowerShell commands through staticCheck, gatedVerbs and browserCommand,
+// Replays unique Bash/PowerShell commands (each under the tool that ran it) through staticCheck, gatedVerbs and browserCommand,
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
 // --branch adds the stateful rules (#165): each command's gitCalls(scrub(c)) diffed structurally,
@@ -82,8 +82,10 @@ const redact = (s) =>
     .replace(/(:\/\/[^\s/:@"']+:)[^\s/@"']+@/g, '$1***@');
 
 /** Unique shell commands and unique AskUserQuestion answer objects across the files. */
+/** The unique commands as { command, tool }: the hook judges a command by the
+ *  tool that ran it (#171), so one run by both Bash and PowerShell counts twice. */
 function collect(paths) {
-  const commands = new Set();
+  const commands = new Map();
   const answers = new Map();
   for (const p of paths) {
     for (const line of readFileSync(p, 'utf8').split('\n')) {
@@ -98,7 +100,7 @@ function collect(paths) {
       if (Array.isArray(content)) {
         for (const c of content) {
           if (c?.type === 'tool_use' && (c.name === 'Bash' || c.name === 'PowerShell') && typeof c.input?.command === 'string') {
-            commands.add(c.input.command);
+            commands.set(`${c.name}\n${c.input.command}`, { command: c.input.command, tool: c.name });
           }
         }
       }
@@ -106,7 +108,7 @@ function collect(paths) {
       if (o?.type === 'user' && a && typeof a === 'object' && !Array.isArray(a)) answers.set(answerKey(a), a);
     }
   }
-  return { commands: [...commands], answers: [...answers.values()] };
+  return { commands: [...commands.values()], answers: [...answers.values()] };
 }
 
 async function load(checkout) {
@@ -174,11 +176,11 @@ async function main() {
   };
 
   const cmdFns = [
-    ['staticCheck', (m, c) => verdict(m.staticCheck, c)],
+    ['staticCheck', (m, c, tool) => verdict(m.staticCheck, c, null, tool)],
     ['gatedVerbs', (m, c) => verdict(m.gatedVerbs, c, cwd)],
     ['browserCommand', (m, c) => verdict(m.browserCommand, c, cwd)],
   ];
-  for (const c of commands) for (const [name, f] of cmdFns) report(name, f(a, c), f(b, c), c);
+  for (const { command: c, tool } of commands) for (const [name, f] of cmdFns) report(name, f(a, c, tool), f(b, c, tool), c);
 
   const ansFns = [
     ['isApproving', (m, x) => verdict(m.isApproving, x)],
@@ -192,18 +194,18 @@ async function main() {
     try {
       const before = changed;
       // One JSON string per call, or the lone missing/throws verdict.
-      const shapes = (m, c) => {
-        const v = verdict((x) => callShape(m.gitCalls(m.scrub(x), repos.unborn), repos.unborn).map((g) => JSON.stringify(g)), c);
+      const shapes = (m, c, tool) => {
+        const v = verdict((x) => callShape(m.gitCalls(m.scrub(x), repos.unborn, tool), repos.unborn).map((g) => JSON.stringify(g)), c);
         return v.startsWith('[') ? JSON.parse(v) : [v];
       };
-      for (const c of commands) {
-        const [o, n] = [shapes(a, c), shapes(b, c)];
+      for (const { command: c, tool } of commands) {
+        const [o, n] = [shapes(a, c, tool), shapes(b, c, tool)];
         for (let i = 0; i < Math.max(o.length, n.length); i++) report(`gitCalls#${i}`, o[i] ?? 'none', n[i] ?? 'none', c);
       }
       const calls = changed - before;
       for (const [label, dir] of Object.entries(repos)) {
-        for (const c of commands) {
-          const [o, n] = [verdict(a.branchRules, c, dir), verdict(b.branchRules, c, dir)];
+        for (const { command: c, tool } of commands) {
+          const [o, n] = [verdict(a.branchRules, c, dir, tool), verdict(b.branchRules, c, dir, tool)];
           report(`branchRules[${label}]`, allowBlock(o), allowBlock(n), c, n);
         }
       }
