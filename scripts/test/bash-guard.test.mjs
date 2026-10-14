@@ -1898,6 +1898,25 @@ test('#190: the content cmdlets and their aliases (ac, sc, clc) are writes; rule
   assert.equal(staticCheck(`Clear-Content C:/tmp/log.txt`, '/work'), null);
 });
 
+test('#190: rule 4 reads sc/ac as PowerShell aliases only; in Bash, sc is sc.exe', () => {
+  assert.equal(staticCheck('sc query x', '/work', 'Bash'), null);
+  assert.equal(staticCheck('ac -p', '/work', 'Bash'), null);
+  assert.match(staticCheck('sc b.txt x', '/work', 'PowerShell') ?? '', /mojibake/);
+  assert.match(staticCheck('Get-Content a | ac b.txt', '/work', 'PowerShell') ?? '', /mojibake/);
+  assert.match(staticCheck('Set-Content b.txt x', '/work', 'Bash') ?? '', /mojibake/);
+});
+
+test('#190: backslashes before `>` never hide a redirect (the Bash spawn collapses `\\\\` to `\\`)', () => {
+  // 3 and 4 raw backslashes reach bash as an escaped backslash and a real `>`.
+  for (const n of [3, 4]) {
+    const bs = '\\'.repeat(n);
+    for (const op of ['>', '>|']) {
+      forges(`printf '%.0s{}' ${bs}${op} ~/.claude/push-gate-approvals.json`);
+      forges(`printf x ${bs}${op} ~/.claude/projects/C--x/s.jsonl`);
+    }
+  }
+});
+
 test('#190: a glob source landing in a dir is judged by what it could match', () => {
   for (const c of [
     `cp docs/*.md ~/`,

@@ -304,7 +304,10 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
     } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
       cur += ch;
     } else if (ch === '|' && cmd[i - 1] === '>' && cmd[i - 2] !== '\\') {
-      cur += ch; // `>|` is a clobbering redirect, not a pipe (an escaped `\>` is text)
+      // `>|` is a clobbering redirect, not a pipe. After a `\` it splits as a
+      // pipe either way, which errs safe: the spawn's `\\`-to-`\` collapse
+      // makes the escape unknowable, and a split reads the command after it.
+      cur += ch;
     } else if (pipes && ch === '|' && cmd[i + 1] !== '|') {
       cur += ch;
       if (cmd[i + 1] === '&') cur += cmd[++i];
@@ -427,7 +430,11 @@ function expandHome(p) {
   return p;
 }
 
-export function staticCheck(raw, cwd = null) {
+/** The static rules (1-4, 10, 11) on one command. `tool` is the payload's
+ *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
+ *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
+ *  reads them as aliases. */
+export function staticCheck(raw, cwd = null, tool = null) {
   if (!raw) return null;
   if (heredocHasDoubledBackslash(raw)) {
     return 'A heredoc body holding a doubled backslash arrives with it collapsed to one (the Bash tool\'s shell spawn eats it), so the file or message written is wrong. Write the file with the Write tool (or Edit) instead of a heredoc.';
@@ -466,8 +473,9 @@ export function staticCheck(raw, cwd = null) {
   }
 
   // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
-  //    not as a word someone greps for
-  if (cmds.some(({ cmd: c }) => /^(?:Set-Content|Out-File|Add-Content|sc|ac)$/i.test(c))) {
+  //    not as a word someone greps for; their sc/ac aliases only off Bash
+  const content = tool === 'Bash' ? /^(?:Set-Content|Out-File|Add-Content)$/i : /^(?:Set-Content|Out-File|Add-Content|sc|ac)$/i;
+  if (cmds.some(({ cmd: c }) => content.test(c))) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
@@ -545,8 +553,8 @@ const PS_DEST = /^-dest\w*(?::(.*))?$/i;
 const PS_PATH = /^-(?:path|literalpath|filepath)(?::(.*))?$/i;
 
 /** The file targets of a clause's unquoted redirects (`>`, `>>`, `>|`, `&>`,
- *  `2>`, `>&file`), as words; an fd dup or close (`>&2`, `2>&1`, `>&-`), an
- *  escaped `\>` and a `>(…)` substitution are no file. */
+ *  `2>`, `>&file`), as words; an fd dup or close (`>&2`, `2>&1`, `>&-`) and
+ *  a `>(…)` substitution are no file. */
 function redirectTargets(text) {
   const out = [];
   let quote = null;
@@ -566,7 +574,9 @@ function redirectTargets(text) {
       i = sub.end - 1;
       continue;
     }
-    if (ch !== '>' || text[i - 1] === '\\') continue;
+    // An escaped `\>` counts too: the Bash tool's spawn collapses `\\` to `\`,
+    // so the backslashes before `>` can't be read off the text reliably.
+    if (ch !== '>') continue;
     let j = i + 1;
     if (text[j] === '>' || text[j] === '|') j++;
     if (text[j] === '&') {
@@ -607,8 +617,8 @@ function ownArgs(w) {
  *  `find -delete` (`deep`: its -name at any depth) delete or mv takes away.
  *  A PowerShell item cmdlet with no source of its own takes `upstream`, the
  *  paths its pipeline feeds it (`Get-Item x | Remove-Item`). */
-function writeTargets({ cmd, words: w, text, upstream = [] }) {
-  const out = redirectTargets(text).map((word) => ({ word }));
+function writeTargets({ cmd, words: w, text, upstream = [], spill }) {
+  const out = [...redirectTargets(text), ...(spill === undefined ? [] : [spill])].map((word) => ({ word }));
   if (!w.length) return out;
   const args = ownArgs(w);
   const add = (word, o = {}) => word !== undefined && out.push({ word, ...o });
@@ -677,6 +687,15 @@ function writeTargets({ cmd, words: w, text, upstream = [] }) {
     add(flagValue(PS_PATH));
   }
   return out;
+}
+
+/** A `\>|` splits as a pipe (clauses), leaving `call` ending in `\>` and the
+ *  redirect's real target as the next segment's command word. The Bash spawn
+ *  collapses `\\` to `\`, so whether that `>` was escaped is unknowable: the
+ *  word is judged as a target too. */
+function spilledTarget(calls, call) {
+  if (!/\\>\s*$/.test(call.text)) return undefined;
+  return calls.find((c) => c.pipe === call.pipe && c.seg === call.seg + 1)?.words[0];
 }
 
 /** The paths a pipeline feeds `call` (a PowerShell item cmdlet reads them as
@@ -931,7 +950,7 @@ export function forgeWrite(raw, cwd = null) {
   const cmd = scrub(raw);
   const ctx = { cmd, raw, named: namesGateRecord(cmd), namedState: namesGateState(cmd) };
   const calls = commands(cmd, cwd);
-  return calls.some((call) => callForges({ ...call, upstream: upstreamPaths(calls, call) }, ctx)) ? FORGE_REASON : null;
+  return calls.some((call) => callForges({ ...call, upstream: upstreamPaths(calls, call), spill: spilledTarget(calls, call) }, ctx)) ? FORGE_REASON : null;
 }
 
 /** 11, for the file tools: Write/Edit/MultiEdit/NotebookEdit into a
@@ -1803,7 +1822,7 @@ if (isMain(import.meta.url)) {
       const browser = browserCommand(cmd, cwd);
       // Browser before push: a blocked command never spends a push approval.
       const reason =
-        staticCheck(cmd, cwd) ||
+        staticCheck(cmd, cwd, tool) ||
         branchRules(cmd, cwd) ||
         (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
         pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);
