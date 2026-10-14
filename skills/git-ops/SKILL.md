@@ -26,7 +26,7 @@ The main checkout is the live junction surface — it never leaves `main` and ne
 node ~/code/claude-config/scripts/land.mjs start <slug> -m "msg" -- <paths...>
 # → ephemeral worktree from origin/main, path-scoped diff applied, committed
 # → user approval → push, PR, rebase-merge
-node ~/code/claude-config/scripts/land.mjs sync -- <paths...>    # after merge
+node ~/code/claude-config/scripts/land.mjs sync                  # after merge; with live edits on main: sync -- <landed paths...>
 node ~/code/claude-config/scripts/land.mjs finish <slug>         # remove worktree
 ```
 

@@ -35,7 +35,7 @@ implementation parallelizes; that is the real concurrency cap.
 
 - Ask one ship question (AskUserQuestion) per PR and finish all its gated verbs (commit, push, PR, merge) before the next ask, because the push gate counts one push per approving answer — a CI-fix push needs a fresh approval. One gated verb per Bash call.
 - Write PR, issue and comment bodies with the Write tool to a file and pass `--body-file`, because bash-guard rule 10 blocks a heredoc holding a doubled backslash (21 blocks, 7.6 min in wave 5).
-- Pass `land.mjs sync -- <path>` a path the merge did NOT touch (CLAUDE.md works) until #220.
+- After a merge, run plain `land.mjs sync`: it fast-forwards a clean main, and refuses live edits (then name the landed paths).
 - A change to a guard gets a bounded fresh-context re-review after each fix round, because green gates and the first review missed the #167 round-1 false allow. Bound each review-fix round to its listed items and file the rest.
 - After a merge, verify from git/GitHub, then queue the next file-disjoint ticket in the same turn without asking, so no unit idles (memory: director-keeps-units-busy).
 

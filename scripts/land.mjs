@@ -7,13 +7,15 @@
 // files (concurrent sessions' live edits stay behind).
 //
 //   node land.mjs start <slug> -m "commit message" -- <path> [path...]
-//   node land.mjs sync -- <path> [path...]     (after the PR merges)
+//   node land.mjs sync [-- <path> [path...]]   (after the PR merges)
 //   node land.mjs finish <slug>                (remove the ephemeral worktree)
 //
 // start: fetch → worktree add chore/<slug> from origin/main → apply the main
 //        checkout's diff for the named paths (untracked files copied) →
 //        commit. Pushing and opening the PR stay with the user's approval.
-// sync:  verify the live edits match origin/main for those paths, then
+// sync:  with no path, fast-forward a clean main (refuses live edits, divergence,
+//        or any branch but main). With paths: verify the live edits match
+//        origin/main for those paths, then
 //        restore tracked copies and fast-forward the main checkout. Untracked
 //        copies of incoming additions (named or not) are adopted if identical,
 //        refused before any reset if not, as is an untracked file where they
@@ -44,7 +46,7 @@ if (!existsSync(join(cfg, '.git'))) die(`claude-config repo not found at ${cfg} 
 if (cmd === 'start') cmdStart();
 else if (cmd === 'sync') cmdSync();
 else if (cmd === 'finish') cmdFinish();
-else die('usage: land.mjs start <slug> -m "msg" -- <paths...> | sync -- <paths...> | finish <slug>');
+else die('usage: land.mjs start <slug> -m "msg" -- <paths...> | sync [-- <paths...>] | finish <slug>');
 
 function paths() {
   const p = args._.slice(cmd === 'start' ? 2 : 1);
@@ -285,9 +287,28 @@ function describeKept(kept) {
   return kept.map((p) => `  ${p.path}  <- edit saved at ${p.file}`).join('\n');
 }
 
+// No path named: the plain post-merge fast-forward. Only a checkout on main
+// with no tracked live edits qualifies; the named-path form is the one that
+// reconciles around other sessions' edits (claude-config#220).
+function requireCleanMain() {
+  const branch = currentBranch(cfg);
+  if (branch !== 'main' && branch !== 'master') {
+    die(`main checkout is on ${branch ? `"${branch}"` : 'a detached HEAD'} — sync fast-forwards main only. Fix that first.`);
+  }
+  // Raw spawnSync, not git(): trim() would eat the first line's leading space,
+  // making an unstaged ` M` read like a staged `M `.
+  const status = spawnSync('git', ['-C', cfg, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' });
+  if (status.status !== 0) die(`git status failed:\n${status.stderr}`);
+  const dirty = status.stdout.replace(/\r?\n$/, '');
+  if (dirty) {
+    die(`live edits on the main checkout — name the paths you landed (sync -- <paths...>) to reconcile around them:\n${dirty}`);
+  }
+}
+
 function cmdSync() {
-  const files = paths();
+  const files = args._.length > 1 ? paths() : [];
   gitOrDie(cfg, ['fetch', 'origin']);
+  if (files.length === 0) requireCleanMain();
   const added = zList(cfg, ['diff', '--name-only', '--diff-filter=A', '--no-renames', 'HEAD', 'origin/main']);
   fileDirBlocks(added);
   const { tracked, adopt } = classifySyncPaths([...files, ...incomingAdditions(files, added)]);

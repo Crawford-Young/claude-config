@@ -637,3 +637,109 @@ test('sync puts a carried edit back when the ff-merge itself fails after the res
   assert.equal(head(cfg), before, 'still on the old commit');
   assert.equal(lf(readFileSync(join(cfg, 'shared.md'), 'utf8')), lf(edited), 'the carried edit is back');
 });
+
+// --- sync with no path: fast-forward a clean, strictly-behind main (#220) -----
+
+const runBareSync = (env) => execHarness(script, ['sync'], { encoding: 'utf8', env });
+
+test('sync with no path fast-forwards a clean main that is strictly behind', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n', 'new.md': 'added\n' }, 'upstream');
+
+  runBareSync(env);
+
+  assert.ok(headsMatch(cfg));
+  assert.equal(readFileSync(join(cfg, 'a.md'), 'utf8').replace(/\r\n/g, '\n'), 'v2\n');
+  assert.ok(existsSync(join(cfg, 'new.md')));
+});
+
+test('sync with no path is a no-op success when already up to date', () => {
+  const { cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  const before = sh(cfg, 'git', ['rev-parse', 'HEAD']);
+
+  runBareSync(env);
+
+  assert.equal(sh(cfg, 'git', ['rev-parse', 'HEAD']), before);
+  assert.ok(headsMatch(cfg));
+});
+
+test('sync with no path refuses, resetting nothing, when a tracked file has a live edit', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n', 'b.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n' }, 'upstream');
+  writeFileSync(join(cfg, 'b.md'), 'foreign edit\n');
+
+  assert.throws(() => runBareSync(env), /live edits/);
+
+  assert.ok(!headsMatch(cfg), 'HEAD did not move');
+  assert.equal(readFileSync(join(cfg, 'b.md'), 'utf8'), 'foreign edit\n');
+});
+
+test('sync with no path refuses when main has diverged from origin/main', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  writeFileSync(join(cfg, 'local.md'), 'local\n');
+  sh(cfg, 'git', ['add', 'local.md']);
+  sh(cfg, 'git', ['commit', '-m', 'local only']);
+  const head = sh(cfg, 'git', ['rev-parse', 'HEAD']);
+  pushUpstream(root, origin, { 'a.md': 'v2\n' }, 'upstream');
+
+  assert.throws(() => runBareSync(env), /not an ancestor/);
+
+  assert.equal(sh(cfg, 'git', ['rev-parse', 'HEAD']), head);
+});
+
+test('sync with no path refuses when the main checkout is off main', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n' }, 'upstream');
+  sh(cfg, 'git', ['checkout', '-q', '-b', 'stray']);
+
+  assert.throws(() => runBareSync(env), /stray/);
+
+  assert.ok(!headsMatch(cfg));
+});
+
+test('sync with no path names a detached HEAD as such', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n' }, 'upstream');
+  sh(cfg, 'git', ['checkout', '-q', '--detach']);
+
+  assert.throws(() => runBareSync(env), /detached HEAD/);
+
+  assert.ok(!headsMatch(cfg));
+});
+
+test('sync with no path keeps staged and unstaged edits distinguishable in the refusal', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n', 'b.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n' }, 'upstream');
+  writeFileSync(join(cfg, 'a.md'), 'unstaged\n');
+  writeFileSync(join(cfg, 'b.md'), 'staged\n');
+  sh(cfg, 'git', ['add', 'b.md']);
+
+  assert.throws(() => runBareSync(env), (e) => /live edits/.test(e.message) && /^ M a\.md$/m.test(e.message) && /^M {2}b\.md$/m.test(e.message));
+
+  assert.ok(!headsMatch(cfg));
+  assert.equal(readFileSync(join(cfg, 'b.md'), 'utf8'), 'staged\n');
+});
+
+test('sync with no path refuses a staged-but-uncommitted change', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'a.md': 'v2\n' }, 'upstream');
+  writeFileSync(join(cfg, 'staged.md'), 'new\n');
+  sh(cfg, 'git', ['add', 'staged.md']);
+
+  assert.throws(() => runBareSync(env), /live edits/);
+
+  assert.ok(!headsMatch(cfg));
+  assert.equal(readFileSync(join(cfg, 'staged.md'), 'utf8').replace(/\r\n/g, '\n'), 'new\n');
+});
+
+test('sync with no path refuses, keeping the file, when an untracked file sits at an incoming addition', () => {
+  const { root, origin, cfg, env } = scratchRepo({ 'a.md': 'v1\n' });
+  pushUpstream(root, origin, { 'new.md': 'incoming\n' }, 'upstream');
+  writeFileSync(join(cfg, 'new.md'), 'mine\n');
+  const head = sh(cfg, 'git', ['rev-parse', 'HEAD']);
+
+  assert.throws(() => runBareSync(env), /differs from origin\/main/);
+
+  assert.equal(sh(cfg, 'git', ['rev-parse', 'HEAD']), head);
+  assert.equal(readFileSync(join(cfg, 'new.md'), 'utf8'), 'mine\n');
+});
