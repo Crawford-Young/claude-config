@@ -1181,6 +1181,12 @@
    "label": "isMain"
   },
   {
+   "from": "hook:context-gauge",
+   "to": "hook:inline-edit-nudge",
+   "kind": "reads",
+   "label": "stateFile, to sweep its legacy lock (#217)"
+  },
+  {
    "from": "hook:inline-edit-nudge",
    "to": "script:lib",
    "kind": "reads",

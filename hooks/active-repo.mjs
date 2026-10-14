@@ -9,13 +9,11 @@
 // is recorded: the statusline reads branch and worktree from .git on each render,
 // so a checkout or branch switch after the last edit still shows. Never blocks.
 
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isMain } from '../scripts/lib.mjs';
-import { claudeDir, run } from './_hooklib.mjs';
+import { claudeDir, pruneOlderThan, run, WEEK_MS } from './_hooklib.mjs';
 import { gitInfo } from '../statusline/statusline.mjs';
-
-const WEEK_MS = 7 * 24 * 3600 * 1000;
 
 export const activeRepoDir = (env = process.env) => env.CLAUDE_ACTIVE_REPO_DIR || join(claudeDir, 'active-repo');
 
@@ -35,19 +33,8 @@ export function record(payload, dir = activeRepoDir(), now = Date.now()) {
     fresh = true;
   }
   writeFileSync(out, JSON.stringify({ top: g.top, ts: now }));
-  if (fresh) prune(dir, now); // one file per session and nothing else deletes them
+  if (fresh) pruneOlderThan(dir, WEEK_MS, now); // one file per session and nothing else deletes them
   return g.top;
-}
-
-function prune(dir, now) {
-  for (const f of readdirSync(dir)) {
-    const p = join(dir, f);
-    try {
-      if (now - statSync(p).mtimeMs > WEEK_MS) rmSync(p, { force: true });
-    } catch {
-      /* raced with another session */
-    }
-  }
 }
 
 if (isMain(import.meta.url)) run('active-repo', (payload) => record(payload));

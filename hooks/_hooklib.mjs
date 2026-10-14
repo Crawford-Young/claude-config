@@ -8,7 +8,7 @@
 // silent allow there is invisible, where a block is not. H21 is the case in
 // point: a BOM on stdin disarmed bash-guard and nothing said so.
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, dirname, resolve } from 'node:path';
 
@@ -305,6 +305,22 @@ export function writeState(file, state, io = {}) {
     }
   } catch {
     // best-effort
+  }
+}
+
+export const WEEK_MS = 7 * 24 * 3600 * 1000;
+
+/** Remove files in `dir` last modified more than `ms` before `now`, for state dirs that
+ *  nothing else empties (#77, #217). Throws when `dir` can't be listed; a file another
+ *  session raced away is skipped. */
+export function pruneOlderThan(dir, ms, now) {
+  for (const f of readdirSync(dir)) {
+    const p = join(dir, f);
+    try {
+      if (now - statSync(p).mtimeMs > ms) rmSync(p, { force: true });
+    } catch {
+      /* raced with another session */
+    }
   }
 }
 

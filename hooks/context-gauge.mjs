@@ -37,12 +37,14 @@
 //   * every failure path is fail-open (see _hooklib.run)
 //
 // Bands re-arm on their own: when context drops back under the nudge line
-// (a /clear or /compact landed), the session's state file is dropped.
+// (a /clear or /compact landed), the session's state file is dropped. A session
+// that ends above the line keeps its file, so each write sweeps week-old ones (#217).
 
-import { existsSync, openSync, readdirSync, readFileSync, readSync, closeSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, openSync, readdirSync, readFileSync, readSync, closeSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { isMain } from '../scripts/lib.mjs';
-import { block, claudeDir, readState as readHookState, run, withClaim, writeState as writeHookState } from './_hooklib.mjs';
+import { block, claudeDir, pruneOlderThan, readState as readHookState, run, WEEK_MS, withClaim, writeState as writeHookState } from './_hooklib.mjs';
+import { stateFile as nudgeStateFile } from './inline-edit-nudge.mjs';
 
 const stateDir = join(claudeDir, 'context-gauge');
 
@@ -192,7 +194,23 @@ const stateFile = (sid) => join(stateDir, `${String(sid).replace(/[^\w-]/g, '_')
 
 // Atomic writes: a parallel call reading mid-write would see no state and fire again.
 const readState = (sid) => readHookState(stateFile(sid));
-const writeState = (sid, state) => writeHookState(stateFile(sid), state);
+const writeState = (sid, state) => {
+  writeHookState(stateFile(sid), state);
+  prune(Date.now());
+};
+
+/** A session that ends above the nudge line never drops its file, and a crash leaves its
+ *  claim and temp sidecars, so each write sweeps week-old files, as active-repo does (#217).
+ *  Writes are rare (once per band), so the sweep is too. */
+function prune(now) {
+  try {
+    pruneOlderThan(stateDir, WEEK_MS, now);
+    // One-time pre-#139 migration (inline-edit-nudge's old breakable lock): delete after 2026-11-14 (#228).
+    rmSync(`${nudgeStateFile()}.lock`, { force: true });
+  } catch {
+    // best-effort, like the write it follows
+  }
+}
 
 /** Record `band` as fired → true when this call is the one to announce it. The re-read and
  *  write run under withClaim, so parallel PostToolUse calls crossing a band together

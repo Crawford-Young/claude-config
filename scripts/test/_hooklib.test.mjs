@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness, raceHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -276,6 +276,19 @@ test('raceHarness fails loudly when fewer than 2 children reach the start line o
     raceHarness(3, join(hooksDir, '_hooklib.mjs'), `process.stdout.write('x');`, { home: home(), leadMs: 0 }),
     /0 of 3 children reached the start line in time/,
   );
+});
+
+test('pruneOlderThan removes files past the age, keeps younger ones, and throws only on an unreadable dir (#217)', async () => {
+  const { pruneOlderThan, WEEK_MS } = await import(hooklibUrl);
+  const dir = join(home(), '.claude');
+  const now = Date.now();
+  for (const [name, age] of [['old.json', WEEK_MS + 60_000], ['old.json.lock.1', WEEK_MS + 60_000], ['young.json', WEEK_MS - 60_000]]) {
+    writeFileSync(join(dir, name), '');
+    utimesSync(join(dir, name), new Date(now - age), new Date(now - age));
+  }
+  pruneOlderThan(dir, WEEK_MS, now);
+  assert.deepEqual(readdirSync(dir), ['young.json']);
+  assert.throws(() => pruneOlderThan(join(dir, 'missing'), WEEK_MS, now), /ENOENT/);
 });
 
 test('writeState writes atomically (no temp litter) and stays fail-open', async () => {
