@@ -61,8 +61,9 @@ test('start lands a file whose last line is blank (patch ends in a lone-space co
   // reports "corrupt patch at <n>" one line past the end. This cost two
   // workstreams a manual land, and neither the byte-identity nor the CRLF
   // fixtures above can catch it: the content is pure ASCII and applies fine.
-  // scratchRepo models the real repo (autocrlf + `* text=auto`); the bug does
-  // not reproduce without that setup, which is itself worth knowing.
+  // scratchRepo models the real repo's line-ending config; when this was
+  // written (autocrlf + `* text=auto`, CRLF checkouts) the bug did not
+  // reproduce without that setup, which is itself worth knowing.
   const { root, cfg, env } = scratchRepo({ 'doc.md': 'intro\n\n## Your job\n\n' });
 
   // Edit an EARLIER line, leaving the trailing blank line as trailing context.
@@ -269,9 +270,11 @@ test('start refuses when the main checkout is off main', () => {
 //
 // The two scratch repos above use a bare `git init` with no .gitattributes and
 // no autocrlf, so content round-trips byte-for-byte. The real claude-config repo
-// does not: core.autocrlf=true plus `* text=auto` means every text file is CRLF
-// in the worktree and LF in the blob. A sync fix tested only on LF content is a
-// permanent no-op on the real checkout, so these fixtures configure it.
+// does not: it sets `* text=auto eol=lf` under Git for Windows' system
+// core.autocrlf=true. Checkouts are LF, but a file written on disk as CRLF
+// (an editor, a `*.ps1`, a checkout from before `eol=lf`) still reads clean to
+// git while differing byte-for-byte from its LF blob. A sync fix tested only
+// on byte-identical content misses that, so these fixtures configure both.
 
 function scratchRepo(seedFiles = {}) {
   const root = mkdtempSync(join(tmpdir(), 'land-'));
@@ -281,8 +284,8 @@ function scratchRepo(seedFiles = {}) {
 
   // Seed origin/main from a plain clone, then check `cfg` out FRESH with
   // autocrlf. The main checkout has to be a tree git itself wrote, so the
-  // index stat cache agrees with the CRLF worktree. Hand-writing LF files
-  // into an autocrlf repo produces a state git never creates, and in it even
+  // index stat cache agrees with the worktree. Hand-writing files into a
+  // repo instead produces a state git never creates, and in it even
   // a correct sync fails: `git diff` reports no change while the stale stat
   // makes `merge --ff-only` refuse. That is a fixture bug, not a bug worth
   // coding around — build the fixture the way the real checkout exists.
@@ -290,7 +293,7 @@ function scratchRepo(seedFiles = {}) {
   sh(root, 'git', ['clone', origin, seed]);
   sh(seed, 'git', ['config', 'user.email', 't@t']);
   sh(seed, 'git', ['config', 'user.name', 't']);
-  writeFileSync(join(seed, '.gitattributes'), '* text=auto\n');
+  writeFileSync(join(seed, '.gitattributes'), '* text=auto eol=lf\n');
   sh(seed, 'git', ['add', '.gitattributes']);
   for (const [p, content] of Object.entries(seedFiles)) {
     mkdirSync(dirname(join(seed, p)), { recursive: true });

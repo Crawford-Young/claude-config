@@ -131,12 +131,12 @@ function classifySyncPaths(files) {
     if (remote.code !== 0) continue;
     // Nothing on disk: no conflict, the fast-forward just creates it.
     if (!existsSync(join(cfg, f))) continue;
-    // Compare GIT-NORMALIZED, never byte-for-byte. This repo sets
-    // core.autocrlf=true with `* text=auto`, so every text file is CRLF on disk
-    // and LF in the blob — _hooklib.mjs is 1948 bytes on disk and 1890 as a
-    // blob while `git status` calls it clean. A raw byte compare therefore
-    // reports drift for every text file and this branch would never fire.
-    // `hash-object --path` applies the same filters git applies on checkin.
+    // Compare GIT-NORMALIZED, never byte-for-byte. Blobs are LF, but the file
+    // on disk can still be CRLF (`*.ps1` checks out CRLF, a Windows editor can
+    // write CRLF, a checkout predating `eol=lf` still holds it) while
+    // `git status` calls it clean. A raw byte compare reports drift for every
+    // such file and this branch would never fire. `hash-object --path` applies
+    // the same filters git applies on checkin.
     const local = git(cfg, ['hash-object', '--path', f, '--', f]);
     if (local.code !== 0) {
       die(`cannot hash local ${f} to compare against origin/main:\n${local.err}`);
