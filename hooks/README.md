@@ -48,6 +48,11 @@ double-quoted `-m` payload, or an unquoted-delimiter heredoc (`<<EOF`). So
 escaped backticks and `<<'EOF'` bodies stay literal. A heredoc fed to
 node/python/deno/bun is that language's code, not shell, and is read as data.
 
+**Nesting is bounded (#167)** — blocks, groups, substitutions and shell
+strings are followed at most 100 levels deep. Each level re-reads its body, so
+a deeper command would cost quadratic time and overflow the stack: it is
+blocked with its own reason instead of a guard crash.
+
 **Guard scoping** — three rules about *what a rule is allowed to read*, each one a
 fixed false verdict; change them only with a test:
 

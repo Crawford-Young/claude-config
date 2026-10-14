@@ -143,6 +143,18 @@ test('lastMerge: PowerShell merges and gh -R forms count; --auto only queues', (
   assert.equal(lastMerge(tx(call('e', 'echo "gh pr merge 5"'), result('e'))), null);
 });
 
+test('#167: --auto is read per merge call, so a block, substitution or shell string holding a queued and a real merge counts', () => {
+  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+  for (const c of ['if ($x) { gh pr merge 1 --auto --squash; gh pr merge 2 }', 'echo $(gh pr merge 1 --auto --squash; gh pr merge 2)', 'bash -c "gh pr merge 1 --auto --squash; gh pr merge 2"', 'gh pr merge 1 --auto; gh pr merge 2']) {
+    assert.equal(lastMerge(tx(call('m', c), result('m'))), 'm', c);
+  }
+  for (const c of ['if ($x) { gh pr merge 1 --auto }', 'gh pr merge 1 --auto=true']) {
+    assert.equal(lastMerge(tx(call('n', c), result('n'))), null, c);
+  }
+  // Another command's --auto queues nothing.
+  assert.equal(lastMerge(tx(call('o', 'gh pr merge 1 --rebase && echo --auto'), result('o'))), 'o');
+});
+
 test('parallel sessions each get their own reminder once, with no ping-pong', () => {
   const home = mkdtempSync(join(tmpdir(), 'gate-home-'));
   const a = transcript(call('ma', 'gh pr merge 1 --rebase'), result('ma'));

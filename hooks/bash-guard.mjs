@@ -202,6 +202,8 @@ function closeGroup(s, at, open = '(', close = ')') {
 // the whole line, so a long command stays linear.
 const BLOCK_BEFORE = /(?:^|[\s(){};|&%]|(?:^|[^\w-])(?:else|try|finally|do))$/i;
 const BLOCK_AFTER = /^(?:$|[\s;|&)}<>]|(?:else|elseif|catch|finally|while|until)\b)/i;
+// A clause holding a find -exec/-execdir/-ok/-okdir payload.
+const FIND_EXEC = /(?:^|\s)-(?:exec|execdir|ok|okdir)\s/;
 
 /** The block opening at i — a PowerShell script block (`if (…) { … }`,
  *  `ForEach-Object { … }`) or a bash brace group (`{ a; b; }`) — as { body,
@@ -260,8 +262,8 @@ export function substitutions(s, quotesLiteral = false) {
  *  separators, so a flag in one clause can't be attributed to a command in
  *  another and quoted text stays with the command that owns it. A substitution
  *  body stays whole (`echo $(a; b)` is one clause), and so does a redirection
- *  (`2>&1`, `&>f`). With `pipes`, a pipeline (`a | b`, `a |& b`) is one piece
- *  — `pipelines()`. Unbalanced quotes fall back to the plain split — never
+ *  (`2>&1`, `&>f`), and so does find's `-exec … \;`. With `pipes`, a pipeline
+ *  (`a | b`, `a |& b`) is one piece — `pipelines()`. Unbalanced quotes fall back to the plain split — never
  *  swallow the rest of the line. When `seps` is an array it is filled, parallel to
  *  the result, with the separator before each clause ('' for the first); the
  *  unbalanced-quote fallback leaves it empty. A block body (`{ … }`, see
@@ -303,6 +305,10 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
       cur += ch;
     } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
       cur += ch;
+    } else if (ch === '\\' && cmd[i + 1] === ';' && FIND_EXEC.test(cur)) {
+      // find's escaped `\;` ends its -exec payload, not the clause. Anywhere
+      // else it splits: PowerShell reads `\` as a plain character.
+      cur += ch + cmd[++i];
     } else if (ch === '|' && cmd[i - 1] === '>' && cmd[i - 2] !== '\\') {
       // `>|` is a clobbering redirect, not a pipe. After a `\` it splits as a
       // pipe either way, which errs safe: the spawn's `\\`-to-`\` collapse
@@ -333,6 +339,20 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
   if (seps) keep.forEach((c, k) => c && seps.push(before[k]));
   if (blocks) keep.forEach((c, k) => c && blocks.push(found[k]));
   return keep.filter(Boolean);
+}
+
+// How deep commands() follows blocks, groups, substitutions and shell strings
+// into each other (#167). Each level re-reads its body and recurses, so a
+// deeper line costs quadratic time and overflows the stack; real commands
+// nest a few levels.
+const MAX_NESTING = 100;
+let nesting = 0;
+
+/** A line nested past MAX_NESTING: the guard can't read it, so it blocks. */
+export class NestingError extends Error {
+  constructor() {
+    super(`This command nests blocks, groups or substitutions more than ${MAX_NESTING} levels deep, deeper than the guard reads, so it is blocked unread (#167). Flatten the nesting.`);
+  }
 }
 
 /** The pipelines of a compound command: clauses that keep `|` inside. */
@@ -791,8 +811,7 @@ function runnerPayloads(cmd, args) {
     const out = [];
     for (let i = 0; i < args.length; i++) {
       if (!/^-(?:exec|execdir|ok|okdir)$/.test(args[i])) continue;
-      // The clause splitter leaves an escaped `\;` as a lone `\`.
-      const end = args.findIndex((a, j) => j > i && /^(?:\\?[;+]|\\)$/.test(a));
+      const end = args.findIndex((a, j) => j > i && /^\\?[;+]$/.test(a));
       out.push(args.slice(i + 1, end === -1 ? args.length : end));
       if (end !== -1) i = end;
     }
@@ -984,6 +1003,7 @@ const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
 const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)(?:\.exe)?$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
+const PRINTS = /^(?:echo|printf|write|write-output|write-host)$/i;
 // A case arm's pattern word: `a)`, `(a)`, `a|b)`, `*)`, never fi)/done)/esac).
 const CASE_PATTERN = /^\(?(?!(?:esac|fi|done)\)+$)[^()]+\)$/;
 const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
@@ -1312,9 +1332,12 @@ function parens(p) {
  *  commit's: run directly, last in its pipeline, not under `!`): a commit in
  *  the alternative's first pipeline, or in the leading `&&` pipelines of a
  *  body it enters (`|| { …; }`, `|| bash -c "…"`), or, when that
- *  pipeline opens a `( … )` group, in the group's `&&` pipelines (#160) — not
+ *  pipeline opens a `( … )` group, in any of the group's pipelines (#160,
+ *  #167: the whole group is the alternative, so its `;` keeps the carry) — not
  *  in `a || cd x && git commit`, which bash reads as `(a || cd x) && …`.
  *  `loop` marks one inside a for/while/until loop (it may run several times).
+ *  `arms` (when set) lists the arms of the PowerShell if/elseif/else chains
+ *  (one clause each) it sits in, as { chain, n }: only one arm of a chain runs.
  *  Location clauses are consumed; a quoted command handed to a shell is
  *  expanded in place (eval/iex share this shell's location and vars), and so is
  *  every substitution body (`…`, $(…), <(…)), which runs before the clause
@@ -1339,8 +1362,19 @@ function parens(p) {
  *  var, the names runtimeSets reads, a scoped `$global:W =`, and a call to a
  *  function that assigns it. `orFirst`/`inLoop` carry the enclosing clause's
  *  state into a body; `scope` is the cwd, pushd stacks, vars and defined
- *  functions a block shares with its clause. */
-function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cwd)) {
+ *  functions a block shares with its clause. Past MAX_NESTING it throws a
+ *  NestingError, which the hook turns into a block. */
+function commands(...args) {
+  if (nesting >= MAX_NESTING) throw new NestingError();
+  nesting++;
+  try {
+    return walkCommands(...args);
+  } finally {
+    nesting--;
+  }
+}
+
+function walkCommands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cwd)) {
   const out = [];
   let loops = 0; // loops opened in this text and not yet closed by `done`
   let ifs = 0; // bash if/case blocks opened in this text and not yet closed by fi/esac
@@ -1390,8 +1424,9 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
     // fallback — its commit spends like any other).
     const orCommit = pipeSeps[pi] === '||' && committed;
     committed = false;
+    // The whole group runs only as the alternative, so any separator inside
+    // it keeps the carry; past its close the carry ends (below).
     if (orCommit && p.startsWith('(')) orGroup = depth;
-    else if (pipeSeps[pi] !== '&&') orGroup = -1;
     // A body entered as an alternative (`|| { …; }`, `|| bash -c "…"`) carries
     // it across its leading && pipelines, like an `|| ( … )` group.
     if (pi > 0 && pipeSeps[pi] !== '&&') orFirst = false;
@@ -1480,8 +1515,20 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
       // A shell's own command string is parsed whole below; reading its
       // substitutions here too would count each gated verb twice.
       if (shellCmd === null) for (const body of substitutions(c)) emit(...commands(body, null, viaOr, loop, scopeCopy(scope)));
+      let chain = null; // the PowerShell if/elseif/else chain this clause's blocks are arms of
       for (const { head, body } of blocks[seg] || []) {
         const h = head.trim();
+        // echo prints a `{ … }` (bash: words, PowerShell: a script block) unless
+        // bash would split it: a separator, redirect or substitution in it runs.
+        if (PRINTS.test(cmd) && !/[;&|\n<>$`()]/.test(body)) continue;
+        // Only one arm of a chain runs: each tags the calls in its body (see exclusive).
+        if (/^if\s*\(/i.test(h)) chain = { arms: 0 };
+        else if (!/^(?:elseif|else)\b/i.test(h)) chain = null;
+        const arm = chain && { chain, n: chain.arms++ };
+        const inArm = (cs) => {
+          if (arm) for (const call of cs) (call.arms ??= []).push(arm);
+          return cs;
+        };
         const once = /^(?:[&.]\s*)?$|^(?:if|elseif|else|try|catch|finally|then)\b/i.test(h);
         // In place too: a PowerShell switch arm (`'a' { … }`, `default { … }`)
         // and the body after a condition split at its `;` (`for (…; …; $i++) {`).
@@ -1497,7 +1544,7 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
         // times: a name it assigns is unknown after it, and so is the location
         // it moved, unless it surely runs once (a bare group, try, finally).
         const at = locationKey(scope);
-        unlessCertain(false, () => emit(...commands(body, null, viaOr, loop || !once, scope)));
+        unlessCertain(false, () => emit(...inArm(commands(body, null, viaOr, loop || !once, scope))));
         if (locationKey(scope) !== at && !/^(?:[&.]\s*)?$|^(?:try|finally)\b/i.test(h)) loseLocation(scope);
       }
       // A bare assignment sets a shell var for the clauses after it; a prefix one
@@ -1625,7 +1672,7 @@ function isGate({ cmd, words: w }) {
  *  follow — callRule blocks a commit there. `tool` is the shell (newScope). */
 export function gitCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w, dir, vars, viaOr, loop } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
+  for (const { cmd, words: w, dir, vars, viaOr, loop, arms = [] } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
     if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
@@ -1633,21 +1680,21 @@ export function gitCalls(raw, cwd, tool = null) {
       if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i], vars);
       else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
     }
-    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr, loop });
+    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr, loop, arms });
   }
   return out;
 }
 
 /** Every `gh` call's subcommand pair (`gh pr create` → sub 'pr', action
- *  'create'), parsed by command word the same way as a git call — never by
- *  substring, so quoted text and commit messages never trigger it. */
-function ghCalls(raw, cwd) {
+ *  'create') and its args, parsed by command word the same way as a git call
+ *  — never by substring, so quoted text and commit messages never trigger it. */
+export function ghCalls(raw, cwd) {
   const out = [];
   for (const { cmd, words: w } of commands(raw, cwd)) {
     if (!/^gh(?:\.exe)?$/i.test(cmd)) continue;
     // `-R x` / `--repo x` take a value, before the subcommand or after it.
     const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
-    out.push({ sub: nonFlag[0] || null, action: nonFlag[1] || null });
+    out.push({ sub: nonFlag[0] || null, action: nonFlag[1] || null, args: w.slice(1) });
   }
   return out;
 }
@@ -1965,7 +2012,7 @@ function repoKey(repo) {
 }
 
 export function branchRules(raw, cwd, tool = null) {
-  const rooted = new Set(); // unborn repos whose one root-commit exemption this command already spent
+  const rooted = new Map(); // unborn repo → the arms of each commit that spent its root-commit exemption
   for (const g of gitCalls(scrub(raw), cwd, tool)) {
     const reason = callRule(g, rooted);
     if (reason) return reason;
@@ -1973,7 +2020,11 @@ export function branchRules(raw, cwd, tool = null) {
   return null;
 }
 
-function callRule({ sub, args, repo, viaOr, loop }, rooted = new Set()) {
+/** Do two calls' arm lists (see commands) put them in different arms of one
+ *  if/elseif/else chain, so at most one of them runs? */
+const exclusive = (a, b) => a.some((x) => b.some((y) => x.chain === y.chain && x.n !== y.n));
+
+function callRule({ sub, args, repo, viaOr, loop, arms = [] }, rooted = new Map()) {
   const isCommit = sub === 'commit';
   // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
   // worktree) — `restore --staged` alone only unstages and is left alone.
@@ -2017,11 +2068,14 @@ function callRule({ sub, args, repo, viaOr, loop }, rooted = new Set()) {
     // A commit after `||` only runs if the first failed (still unborn): it neither spends
     // nor is denied the exemption. A commit in a loop body may be several commits, and a
     // hook can only block the whole command, so a loop commit gets no exemption at all.
+    // A commit in another arm of an if/elseif/else chain than every commit that spent
+    // it runs instead of them, so it gets the exemption as well (#167).
     if (!loop && isUnborn(repo)) {
       const key = repoKey(repo);
+      const spent = rooted.get(key) ?? [];
       // A viaOr commit spends the exemption too: if it runs, the repo is born.
-      if (viaOr || !rooted.has(key)) {
-        rooted.add(key);
+      if (viaOr || spent.every((s) => exclusive(s, arms))) {
+        rooted.set(key, [...spent, arms]);
         return null;
       }
     }
@@ -2033,36 +2087,47 @@ function callRule({ sub, args, repo, viaOr, loop }, rooted = new Set()) {
 
 // ---- main (only when executed as a hook, so tests can import the rules) -----
 
+/** The hook's checks on one payload, in order; the first that blocks exits. */
+function guard(payload) {
+  const cmd = payload?.tool_input?.command || '';
+  const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
+  const tool = payload?.tool_name;
+  if (tool && tool !== 'Bash' && tool !== 'PowerShell') {
+    const fileReason = fileToolReason(tool, payload?.tool_input, cwd);
+    if (fileReason) block(fileReason);
+    return;
+  }
+  const browser = browserCommand(cmd, cwd);
+  // Browser before push: a blocked command never spends a push approval.
+  const reason =
+    staticCheck(cmd, cwd, tool) ||
+    branchRules(cmd, cwd, tool) ||
+    (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
+    pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);
+  if (reason) block(reason);
+  // Last, so a command another rule blocks never spends the clearance.
+  const billed = billedLaunch(cmd);
+  if (billed) {
+    const ok = consumeClearance();
+    logBilled(`${ok ? 'ALLOW' : 'BLOCK'} shell model=${billed}`);
+    if (!ok) {
+      block(
+        `A shell-launched claude on "${billed}" is usage-billed and needs per-run user clearance: ask the user to reply with "FABLE OK" (grants one billed act for 30 minutes), then re-run.`,
+      );
+    }
+  }
+}
+
 if (isMain(import.meta.url)) {
   run(
     'bash-guard',
     (payload) => {
-      const cmd = payload?.tool_input?.command || '';
-      const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
-      const tool = payload?.tool_name;
-      if (tool && tool !== 'Bash' && tool !== 'PowerShell') {
-        const fileReason = fileToolReason(tool, payload?.tool_input, cwd);
-        if (fileReason) block(fileReason);
-        return;
-      }
-      const browser = browserCommand(cmd, cwd);
-      // Browser before push: a blocked command never spends a push approval.
-      const reason =
-        staticCheck(cmd, cwd, tool) ||
-        branchRules(cmd, cwd, tool) ||
-        (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
-        pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id);
-      if (reason) block(reason);
-      // Last, so a command another rule blocks never spends the clearance.
-      const billed = billedLaunch(cmd);
-      if (billed) {
-        const ok = consumeClearance();
-        logBilled(`${ok ? 'ALLOW' : 'BLOCK'} shell model=${billed}`);
-        if (!ok) {
-          block(
-            `A shell-launched claude on "${billed}" is usage-billed and needs per-run user clearance: ask the user to reply with "FABLE OK" (grants one billed act for 30 minutes), then re-run.`,
-          );
-        }
+      try {
+        guard(payload);
+      } catch (err) {
+        // Too deep to read is a verdict of its own, not a guard crash.
+        if (err instanceof NestingError) block(err.message);
+        throw err;
       }
     },
     { failClosed: true },

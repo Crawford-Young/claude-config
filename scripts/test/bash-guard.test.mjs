@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { execHarness } from './_spawn.mjs';
+import { execHarness, spawnHarness } from './_spawn.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -2287,4 +2287,101 @@ test('#190 end-to-end: the hook blocks a transcript append, a PowerShell write, 
   assert.equal(hookRun({ tool_name: 'PowerShell', tool_input: { command: `Get-Content ${tf} -Tail 1` } }), 0);
   assert.equal(hookRun({ tool_name: 'Edit', tool_input: { file_path: join(h, 'notes.md'), old_string: 'a', new_string: 'b' } }), 0);
   assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: join(h, 'notes.md'), content: 'x' } }), 0);
+});
+
+// --- #167: fail-closed over-reads --------------------------------------------
+
+test('#167: an escaped \\; ends a find -exec payload without splitting the clause', () => {
+  assert.deepEqual(clauses('find . -name x -exec rm {} \\; && git push'), ['find . -name x -exec rm {} \\;', 'git push']);
+  assert.deepEqual(clauses('find . -exec grep -l a {} \\; -print'), ['find . -exec grep -l a {} \\; -print']);
+  assert.deepEqual(clauses('find . -execdir mv {} b \\;\necho done'), ['find . -execdir mv {} b \\;', 'echo done']);
+  // Outside a find payload a `\;` still splits: PowerShell reads `\` as a plain character (`cd C:\x\; git push`).
+  assert.deepEqual(clauses('cd C:\\x\\; git push'), ['cd C:\\x\\', 'git push']);
+  assert.deepEqual(gatedVerbs('find . -exec true {} \\; ; git push', null), ['git push']);
+});
+
+test("#167: an || ( … ) group carries viaOr across any separator inside it, to its first commit only", () => {
+  const viaOr = (c) => gitCalls(c, null).map((g) => g.viaOr);
+  assert.deepEqual(viaOr('git commit -m a || (cd .; git commit -m b)'), [false, true]);
+  assert.deepEqual(viaOr('git commit -m a || (cd .\n git commit -m b)'), [false, true]);
+  assert.deepEqual(viaOr('git commit -m a || (cd . & git commit -m b)'), [false, true]);
+  assert.deepEqual(viaOr('git commit -m a || (cd .; (cd .; git commit -m b))'), [false, true]);
+  assert.deepEqual(viaOr('git commit -m a || (cd .; git commit -m b; git commit -m c)'), [false, true, false]);
+  // Not past the group's close.
+  assert.deepEqual(viaOr('git commit -m a || (cd .; true); git commit -m b'), [false, false]);
+  assert.deepEqual(viaOr('git commit -m a || (cd .) ; git commit -m b'), [false, false]);
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || (cd .; git commit -m b)`, h), 0);
+  assert.equal(guardRun(`cd ${app} && git commit -m a || (cd .; git commit -m b; git commit -m c)`, h), 2);
+});
+
+test('#167: on an unborn main, each arm of a PowerShell if/elseif/else chain may hold the root commit', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  mkdirSync(app);
+  execFileSync('git', ['init', '-q', '-b', 'main', app]);
+  for (const cmd of [
+    `cd ${app}; if ($x) { git commit -m a } else { git commit -m b }`,
+    `cd ${app}; if ($x) { git commit -m a } elseif ($y) { git commit -m b } else { git commit -m c }`,
+    `cd ${app}; if($x){git commit -m a}else{git commit -m b}`,
+    `cd ${app}; if ($x) { if ($y) { git commit -m a } else { git commit -m b } } else { git commit -m c }`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 0, cmd);
+  }
+  for (const cmd of [
+    `cd ${app}; if ($x) { git commit -m a } else { git commit -m b }; git commit -m c`,
+    `cd ${app}; git commit -m a; if ($x) { git commit -m b } else { git commit -m c }`,
+    `cd ${app}; if ($x) { git commit -m a; git commit -m b } else { git commit -m c }`,
+    `cd ${app}; if ($x) { git commit -m a }; if ($y) { git commit -m b } else { echo no }`,
+    `cd ${app}; if ($x) { if ($y) { git commit -m a }; git commit -m b } else { git commit -m c }`,
+    // A bash if's condition runs before its else: `if { …; } then …; else { …; } fi` is no chain.
+    `cd ${app} && if { git commit -m a; } then true; else { git commit -m b; } fi`,
+    // Given up: catch runs after a try whose commit succeeded and a later step threw, so both commits can land.
+    `cd ${app}; try { git commit -m a } catch { git commit -m b }`,
+  ]) {
+    assert.equal(guardRun(cmd, h), 2, cmd);
+  }
+});
+
+test('#167: a { … } that echo prints is text, not a gated verb', () => {
+  for (const c of ['echo { git push }', 'Write-Output { gh pr merge 1 }', 'printf { git push }', 'echo a { git push } b']) {
+    assert.deepEqual(gatedVerbs(c, null), [], c);
+  }
+  // Still counted: bash runs what follows a separator inside it (`echo { a; git push }` runs `git push }`),
+  // and a substitution in it runs first.
+  for (const c of ['echo { a; git push }', 'echo { a | git push }', 'echo {\ngit push\n}', 'echo { $(git push) }', 'echo { `git push` }']) {
+    assert.deepEqual(gatedVerbs(c, null), ['git push'], c);
+  }
+  assert.ok(staticCheck('echo { a > ~/.claude/push-gate-approvals.json }', '/work'));
+  // Given up: a stored block (`$sb = { … }`, a hashtable value) may run later in the same command (`& $a.x`),
+  // which the guard doesn't follow, so its body still counts.
+  assert.deepEqual(gatedVerbs('$a = @{ x = { git push } }', null), ['git push']);
+  assert.deepEqual(gatedVerbs('$sb = { git push }', null), ['git push']);
+});
+
+test('#167: nesting past the depth the guard reads blocks with its own reason, in linear time', () => {
+  const shapes = {
+    group: (n) => '{ '.repeat(n) + 'git push; ' + '} '.repeat(n),
+    powershell: (n) => 'if ($x) { '.repeat(n) + 'git push ' + '} '.repeat(n),
+    substitution: (n) => 'echo ' + '$('.repeat(n) + 'git push' + ')'.repeat(n),
+  };
+  for (const [name, shape] of Object.entries(shapes)) {
+    assert.deepEqual(gatedVerbs(shape(20), null), ['git push'], `${name} 20`);
+    for (const n of [1500, 5000]) {
+      const c = shape(n);
+      const t = performance.now();
+      for (const rule of [staticCheck, gatedVerbs, branchRules, forgeWrite]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${n} ${rule.name}`);
+      const ms = performance.now() - t;
+      assert.ok(ms < LINEAR_MS, `${name} ${n}: ${Math.round(ms)} ms`);
+    }
+  }
+  // The hook names the depth, not a guard crash.
+  const h = tmpHome();
+  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_input: { command: shapes.group(5000) }, cwd: h }), home: h });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /deeper than/);
+  assert.doesNotMatch(r.stderr, /failed before/);
 });

@@ -310,7 +310,8 @@
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
     "One gated verb per Bash call — a compound with two is blocked unspent",
     "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated",
-    "No write into a session transcript or gate state file (push-gate-approvals, browser-gate-sessions, fable-clearance), nor a delete/move-away of a state file, by shell, PowerShell, a runner payload, inline interpreter or Write/Edit tool; auto-memory exempt; a script file is out of reach"
+    "No write into a session transcript or gate state file (push-gate-approvals, browser-gate-sessions, fable-clearance), nor a delete/move-away of a state file, by shell, PowerShell, a runner payload, inline interpreter or Write/Edit tool; auto-memory exempt; a script file is out of reach",
+    "A command nesting blocks, groups or substitutions more than 100 levels deep is blocked unread (#167)"
    ]
   },
   {
