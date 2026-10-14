@@ -51,7 +51,7 @@ Roster: `implementer` (code via TDD, and docs/prose edits), `reviewer` (read-onl
 
 - **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort was silently dropped on Haiku 4.5; Haiku 5.5 now documents effort support, so #112 re-tests this. Lower the effort, not the model.
 - **sonnet** — scoped implementation with a clear brief; verbatim/mechanical batches; adjudication-style reviews with enumerated probes.
-- **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations). An opus `implementer` override also passes `effort: high` (the frontmatter's `medium` is the Sonnet default; ROUTING.md).
+- **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations). An opus `implementer` override also passes `effort: high` and omits `name:`, since a named dispatch drops the effort (#219; ROUTING.md).
 - **fable** — usage-billed; per-run user clearance required (the Agent hook enforces it — user replies `FABLE OK`). Reserve for diagnostics after an opus failure or exceptional-stakes review.
 
 Set `model:` explicitly on every dispatch of a type without a frontmatter default (hook-enforced). Any brief, any model: omit "verify your work" scaffolding (over-verification — the harness's verifier is a fresh-context subagent regardless of which model wrote the brief); add one scope line that fixes the file boundary (parallel safety) and leaves improvement inside it to the agent; cap delegation explicitly when the dispatched type carries the `Agent` tool.
