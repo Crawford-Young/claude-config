@@ -344,8 +344,17 @@ test('asksUser: a question line outside code fences, or a closing imperative act
   assert.equal(asksUser(approveBold), true, 'a bold **Approve …:** item');
   for (const verb of ['Decide', 'Pick', 'Choose', 'Confirm', 'Tell me']) assert.equal(asksUser(`Done.\n\n## Your call\n- ${verb} which one lands.`), true, verb);
   assert.equal(asksUser('Ready.\n\n- Approve the push.'), true, 'a trailing list with no heading');
-  assert.equal(asksUser('## Your action items\n- Approve the push.\n- None else right now.'), false, 'a None line means nothing is pending');
+  // The house closer "Nothing else is needed from you." (1aedc125:1581) does not cancel an ask beside it.
+  assert.equal(asksUser('## Your action items\n- Approve the commit, push and PR for `fix/x` (Closes #1).\n- Nothing else is needed from you.'), true, 'ask + Nothing else');
+  assert.equal(asksUser('## Your action items\n- None right now.'), false, 'a lone None');
   assert.equal(asksUser('## Your action items\n- Nothing right now. When CI is green, I\'ll ask you to approve the merge.'), false, 'Nothing');
+  // 8458d694-…jsonl:120, verbatim.
+  assert.equal(asksUser('## Your action items\n- Say "ridden" and I\'ll analyze all four captures together. Or tell me to relaunch if the ride didn\'t cover A-10 ×1, A-15 ×3 and BR-15 ×2.'), true, 'Say');
+  assert.equal(asksUser('## Your action items\n- [ ] Approve the push.'), true, 'a checkbox item');
+  assert.equal(asksUser('## Your action items\n- Pick up #12 in a fresh session.'), false, 'Pick up is not Pick');
+  assert.equal(asksUser('Ready.\n\n- Approve the push.\n'), true, 'no heading, trailing newline');
+  assert.equal(asksUser('## Your action items\n- Approve the push.\n\n**Thanks.**'), true, 'a bold-only last line is not a heading');
+  assert.equal(asksUser('~~~\nreally?\n~~~\n\nDone.'), false, 'a question inside a ~~~ fence');
   assert.equal(asksUser('## Proposals\n- Decide on X.\n\n## Your action items\n- Run `/clear`.'), false, 'only the final section counts');
   assert.equal(asksUser('## Your action items\n- Delete the remote branch `feat/x`.'), false, 'other imperatives are not asks');
   assert.equal(asksUser(undefined), false, 'no text');
@@ -368,6 +377,10 @@ test('the Stop payload last_assistant_message is preferred over the transcript s
   assert.equal(runHook({ transcript_path: asking, last_assistant_message: finished }, h2).code, 2, 'the payload is finished: block');
   const h3 = mkdtempSync(join(tmpdir(), 'gate-home-'));
   assert.equal(runHook({ transcript_path: asking }, h3).code, 0, 'absent: the transcript scan decides');
+  for (const blank of ['', '  ']) {
+    const h = mkdtempSync(join(tmpdir(), 'gate-home-'));
+    assert.equal(runHook({ transcript_path: asking, last_assistant_message: blank }, h).code, 0, `blank ${JSON.stringify(blank)}: the transcript scan decides`);
+  }
 });
 
 test('records with a null content block are skipped, not thrown on', () => {
@@ -445,7 +458,7 @@ test('scenario 6: an unreflected wave B after a reflect that finished with the c
 test("reflect's landing PR merged after the continuation ask: the reminder fires, the continuation block stays quiet", () => {
   // The real case scenario 6's tightening changes: ~/.claude/projects/C--Users-young-code/945f43a3-03fc-4d62-b94d-f754f4a62c9d.jsonl
   // :283 reflect read, :308 reply, :390-391 one ask holding the landing approval and clear-or-continue (answered Clear),
-  // :429 landing merge, :472 the turn-ending text. 9bfff229-2313-48bf-a219-a26b37f8fcb6.jsonl:310-387 has the same shape.
+  // :429 landing merge, :472 the turn-ending text (its closing two lines, verbatim). 9bfff229-2313-48bf-a219-a26b37f8fcb6.jsonl:310-387 has the same shape.
   // The continuation ask was already answered, so asking again is noise. #140 gave [2,2].
   const landQ = { question: 'Land the reflect edits?', header: 'Land edits', multiSelect: false, options: [{ label: 'Commit, push, PR and merge both' }, { label: 'Hold' }] };
   const nextQ = { question: 'After landing: clear or continue?', header: 'Next', multiSelect: false, options: [{ label: 'Clear', description: 'I emit a continuation prompt for the next unit.' }, { label: 'Continue', description: 'Keep working in this window.' }] };

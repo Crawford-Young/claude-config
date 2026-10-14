@@ -34,10 +34,10 @@
 // A reply is a typed message or an AskUserQuestion answer. A later typed pause (commit
 // approval, say) also passes when the turn's closing text (the Stop payload's
 // last_assistant_message, else the transcript's last assistant text) asks the user
-// (asksUser, #199): a line outside ``` fences ending in a question mark, or a closing
-// action item starting Approve / Decide / Pick / Choose / Confirm / Tell me, with no
-// None/Nothing item beside it. Anything else counts as finished, so a background wait
-// ("I'll pick up when the implementer reports") still spends the block.
+// (asksUser, #199): a line outside ``` or ~~~ fences ending in a question mark, or a
+// closing action item starting Approve / Decide / Pick / Choose / Confirm / Tell me /
+// Say. Anything else counts as finished, so a background wait ("I'll pick up when
+// the implementer reports") still spends the block.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -142,26 +142,26 @@ const QUESTION_LINE = /\?[\s*_)`'"\]]*$/;
 /** A markdown heading, or a line that is only bold text (`**Your action items**`). */
 const HEADING = /^\s{0,3}(?:#{1,6}\s|\*\*[^*]+\*\*:?\s*$)/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
-/** The house-style approval asks: `- Approve the commit, push and PR …`, `- **Approve commit + push + PR:** …`. */
-const ASK_ITEM = /^(?:approve|decide|pick|choose|confirm|tell me)\b/i;
-const NONE_ITEM = /^(?:none|nothing)\b/i;
+/** The house-style approval asks: `- Approve the commit, push and PR …`, `- **Approve commit + push + PR:** …`,
+ *  `- [ ] Approve …`, `- Say "ridden" and I'll …`. "Pick up #12" is a task, not a choice. */
+const ASK_ITEM = /^(?:\[[ x]\]\s*)?(?:approve|decide|pick(?!\s+up\b)|choose|confirm|tell me|say)\b/i;
 
-/** Does this turn-ending message wait on the user? True when a line outside ``` fences ends in a question mark,
- *  or a list item in the closing section (after the last heading, else the last paragraph) starts with an ask verb
- *  (Approve, Decide, Pick, Choose, Confirm, Tell me), unless an item there says None or Nothing (#199). */
+/** Does this turn-ending message wait on the user? True when a line outside ``` or ~~~ fences ends in a question
+ *  mark, or a list item in the closing section (after the last heading, else the last paragraph) starts with an
+ *  ask verb (Approve, Decide, Pick, Choose, Confirm, Tell me, Say) (#199). */
 export function asksUser(message) {
   if (typeof message !== 'string') return false;
   let fenced = false;
-  const lines = message.split('\n').filter((l) => {
-    if (!/^\s*```/.test(l)) return !fenced;
+  const lines = message.trimEnd().split('\n').filter((l) => {
+    if (!/^\s*(?:```|~~~)/.test(l)) return !fenced;
     fenced = !fenced;
     return false;
   });
   if (lines.some((l) => QUESTION_LINE.test(l))) return true;
-  const heading = lines.findLastIndex((l) => HEADING.test(l));
+  // A bold-only last line ("**Thanks.**") closes the message; it heads nothing.
+  const heading = lines.findLastIndex((l, i) => HEADING.test(l) && i < lines.length - 1);
   const closing = heading >= 0 ? lines.slice(heading + 1) : lines.slice(lines.findLastIndex((l) => !l.trim()) + 1);
-  const items = closing.map((l) => LIST_ITEM.exec(l)?.[1].replace(/^[*_]+/, '')).filter((t) => t !== undefined);
-  return !items.some((t) => NONE_ITEM.test(t)) && items.some((t) => ASK_ITEM.test(t));
+  return closing.some((l) => ASK_ITEM.test(LIST_ITEM.exec(l)?.[1].replace(/^[*_]+/, '') ?? ''));
 }
 
 /** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), reflect Skill call, or user-typed /reflect, else null. */
@@ -255,8 +255,9 @@ function main() {
 
     // Second gate: reflect ran for this merge, but no fresh-session-or-continue ask followed it.
     // No human reply since the read, or a turn ending in an ask (asksUser), means reflect is paused on the user:
-    // pass without spending the block. The Stop payload carries the closing text; older payloads lack it.
-    const closingText = typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : lastAssistantText(text);
+    // pass without spending the block. The Stop payload carries the closing text; older payloads lack it, or send it blank.
+    const m = payload.last_assistant_message;
+    const closingText = typeof m === 'string' && m.trim() ? m : lastAssistantText(text);
     if (!reflectRan || !humanRepliedAfter(text, reflectAt) || asksUser(closingText)) return;
     const cur = readState(stateFile);
     const asked = Array.isArray(cur.cont) ? cur.cont : [];
