@@ -8,9 +8,9 @@
 // silent allow there is invisible, where a block is not. H21 is the case in
 // point: a BOM on stdin disarmed bash-guard and nothing said so.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { basename, join, dirname, resolve } from 'node:path';
 
 export const claudeDir = join(homedir(), '.claude');
 
@@ -305,6 +305,56 @@ export function writeState(file, state, io = {}) {
     }
   } catch {
     // best-effort
+  }
+}
+
+// ---- claim: one parallel hook process at a time (#139) ----------------------
+// A lease, not a breakable lock, so there is no stale break to race: a hook makes
+// `<base>.lock.<epoch>` (epoch = now / CLAIM_LEASE_MS) with 'wx', then backs off if a
+// claim exists in an adjacent epoch or its own epoch rolled over meanwhile. Two
+// claimants in one epoch collide on 'wx'; in adjacent epochs each creates before it
+// checks, so at least one sees the other (both may back off: a skipped note, retried on
+// the next call). A crash-left claim blocks only its own and the adjacent epochs
+// (≤ 2 leases) and is swept after that. Holds while fn finishes inside one lease.
+export const CLAIM_LEASE_MS = 5_000;
+export const claimFile = (base, epoch) => `${base}.lock.${epoch}`;
+
+/** Run `fn` under the claim on `base` → fn's result, or null when another hook holds it
+ *  or it cannot be made — the caller skips its note, never blocks. `now` is a test seam. */
+export function withClaim(base, fn, now = Date.now) {
+  const epoch = Math.floor(now() / CLAIM_LEASE_MS);
+  const own = claimFile(base, epoch);
+  try {
+    mkdirSync(dirname(base), { recursive: true });
+    writeFileSync(own, String(process.pid), { flag: 'wx' });
+  } catch {
+    return null; // held this epoch, or no lock can be made here
+  }
+  try {
+    if (existsSync(claimFile(base, epoch - 1)) || existsSync(claimFile(base, epoch + 1))) return null;
+    if (Math.floor(now() / CLAIM_LEASE_MS) !== epoch) return null;
+    sweepClaims(base, epoch);
+    return fn();
+  } finally {
+    try {
+      unlinkSync(own);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/** Remove crash-left claims older than the adjacent epoch; they no longer block anyone. */
+function sweepClaims(base, epoch) {
+  const prefix = `${basename(base)}.lock.`;
+  try {
+    for (const f of readdirSync(dirname(base))) {
+      if (!f.startsWith(prefix)) continue;
+      const e = Number(f.slice(prefix.length));
+      if (Number.isInteger(e) && e < epoch - 1) unlinkSync(join(dirname(base), f));
+    }
+  } catch {
+    // best-effort: a leftover claim stops blocking after two leases anyway
   }
 }
 

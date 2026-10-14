@@ -24,7 +24,8 @@
 //   4. nothing: the bands stand as they are. No window is required.
 //
 // Two triggers share ~/.claude/context-gauge/<sid>.json, so each band fires
-// once per session across both:
+// once per session across both (parallel calls decide under _hooklib's withClaim,
+// `<sid>.json.lock.<epoch>`, so a band crossed by several at once is announced once):
 //   * UserPromptSubmit — nudge/warn print to stdout; block exits 2.
 //   * PostToolUse — so long autonomous turns see the gauge. Emits
 //     additionalContext JSON (exit 0; a tool that already ran can't be
@@ -38,21 +39,10 @@
 // Bands re-arm on their own: when context drops back under the nudge line
 // (a /clear or /compact landed), the session's state file is dropped.
 
-import {
-  existsSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  closeSync,
-  statSync,
-  writeFileSync,
-  unlinkSync,
-} from 'node:fs';
+import { existsSync, openSync, readdirSync, readFileSync, readSync, closeSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { isMain } from '../scripts/lib.mjs';
-import { block, claudeDir, run } from './_hooklib.mjs';
+import { block, claudeDir, readState as readHookState, run, withClaim, writeState as writeHookState } from './_hooklib.mjs';
 
 const stateDir = join(claudeDir, 'context-gauge');
 
@@ -200,22 +190,22 @@ export function classify(tokens, t) {
 
 const stateFile = (sid) => join(stateDir, `${String(sid).replace(/[^\w-]/g, '_')}.json`);
 
-function readState(sid) {
-  try {
-    const f = stateFile(sid);
-    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : {};
-  } catch {
-    return {};
-  }
-}
+// Atomic writes: a parallel call reading mid-write would see no state and fire again.
+const readState = (sid) => readHookState(stateFile(sid));
+const writeState = (sid, state) => writeHookState(stateFile(sid), state);
 
-function writeState(sid, state) {
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(stateFile(sid), JSON.stringify(state));
-  } catch {
-    // advisory state only — losing it costs a duplicate nudge, nothing more
-  }
+/** Record `band` as fired → true when this call is the one to announce it. The re-read and
+ *  write run under withClaim, so parallel PostToolUse calls crossing a band together
+ *  announce it once (#139); a call that finds the claim held skips the note, and the next
+ *  call retries it. */
+function claimBand(sid, band, tokens) {
+  const claimed = withClaim(stateFile(sid), () => {
+    const state = readState(sid);
+    if (!shouldFire(band, state) || (band === 'block' && state.bypass)) return false;
+    writeState(sid, { ...state, fired: band, lastTokens: tokens });
+    return true;
+  });
+  return claimed === true;
 }
 
 /**
@@ -314,8 +304,7 @@ export function main(payload) {
     const bypassed = state.bypass || /\bCONTEXT OK\b/.test(prompt);
     if (post) {
       // A tool that already ran can't be blocked: announce once.
-      if (!state.bypass && shouldFire('block', state)) {
-        writeState(sid, { ...state, fired: 'block', lastTokens: tokens });
+      if (!state.bypass && shouldFire('block', state) && claimBand(sid, 'block', tokens)) {
         announce(blockText(tokens, t, floored), true);
       }
       return;
@@ -329,8 +318,7 @@ export function main(payload) {
     return;
   }
 
-  if (!shouldFire(band, state)) return;
-  writeState(sid, { ...state, fired: band, lastTokens: tokens });
+  if (!shouldFire(band, state) || !claimBand(sid, band, tokens)) return;
   announce(band === 'warn' ? warnText(tokens, t, floored) : nudgeText(tokens, t, floored), post);
 }
 

@@ -12,24 +12,23 @@
 // only until the last Agent/Task tool_use. Fired runs are remembered in
 // ~/.claude/inline-edit-nudge.json (CLAUDE_INLINE_NUDGE_STATE overrides), keyed
 // by session, value = the run id (the dispatch's tool_use id, or "start").
-// Sidecars next to the state file: `<state>.lock` is an exclusive claim held for the
-// read-check-write (a parallel hook that finds it fresh stays silent; a lock older than
-// 10 s or dated in the future is broken), and writeState's `<state>.<pid>.tmp` is the
-// temp file it renames into place. Both are removed after use.
+// Sidecars next to the state file: `<state>.lock.<epoch>` is _hooklib's withClaim lease,
+// held for the read-check-write (a parallel hook that finds it held stays silent), and
+// writeState's `<state>.<pid>.tmp` is the temp file it renames into place. Both are
+// removed after use.
 // Fail-open: advisory, never blocks.
 
-import { closeSync, fstatSync, openSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isMain } from '../scripts/lib.mjs';
-import { claudeDir, readState, run, writeState } from './_hooklib.mjs';
+import { claudeDir, readState, run, withClaim, writeState } from './_hooklib.mjs';
 
 export const THRESHOLD = 6;
 const EDITS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const DISPATCHES = new Set(['Agent', 'Task']);
 const CHUNK = 256 * 1024;
 const ERR_RE = /"is_error"\s*:\s*true/;
-const LOCK_STALE_MS = 10_000;
 
 export const MESSAGE = `${THRESHOLD} files edited inline since the last dispatch — agent-factory: dispatch multi-file work; inline is for ≤2-file docs/config.`;
 
@@ -99,31 +98,14 @@ export function currentRun(transcriptPath) {
   return { runId: 'start', files };
 }
 
-/** Record (sid, runId) as fired. False when already fired, or when a parallel hook holds a
- *  fresh claim lock right now (it is firing this very run). The lock is global across
- *  sessions, so another session holding it delays this one's nudge by an edit. Fail-open:
- *  a lock that cannot be created, a stale or future-dated one, or one that cannot be
- *  removed never silences the nudge — it proceeds without the lock. */
+/** Record (sid, runId) as fired. False when already fired, or when a parallel hook holds
+ *  the claim right now (it is firing this very run) or it cannot be made: the nudge is
+ *  skipped and retried on the next edit. The claim is global across sessions, so another
+ *  session holding it delays this one's nudge by an edit. */
 function claimRun(file, sid, runId) {
-  const lock = `${file}.lock`;
-  let held = false;
-  for (let attempt = 0; attempt < 2 && !held; attempt++) {
-    try {
-      writeFileSync(lock, String(process.pid), { flag: 'wx' });
-      held = true;
-    } catch (err) {
-      if (err?.code !== 'EEXIST') break;
-      try {
-        const age = Date.now() - statSync(lock).mtimeMs;
-        if (age > -2000 && age < LOCK_STALE_MS) return false;
-        unlinkSync(lock); // stale or future-dated: a crashed hook
-      } catch {
-        break; // cannot inspect or remove it: proceed without the lock
-      }
-    }
-  }
-  try {
-    const state = readState(file); // re-read under the lock
+  if (readState(file)[sid] === runId) return false; // already fired: no claim needed
+  const claimed = withClaim(file, () => {
+    const state = readState(file); // re-read under the claim
     if (state[sid] === runId) return false;
     delete state[sid]; // re-insert last so the newest 200 survive the trim
     state[sid] = runId;
@@ -131,15 +113,8 @@ function claimRun(file, sid, runId) {
     for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete state[k];
     writeState(file, state);
     return true;
-  } finally {
-    if (held) {
-      try {
-        unlinkSync(lock);
-      } catch {
-        // already gone
-      }
-    }
-  }
+  });
+  return claimed === true;
 }
 
 /** → the reminder JSON to print, or null. Records the run as fired. */

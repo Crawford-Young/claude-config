@@ -1,8 +1,8 @@
 // node --test scripts/test/inline-edit-nudge.test.mjs — #99's main-session nudge.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness } from './_spawn.mjs';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { execHarness, raceHarness } from './_spawn.mjs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,21 +134,39 @@ test('subagent transcripts are separate files: an isSidechain flag does not hide
   assert.deepEqual([...currentRun(setup([line]).transcript).files], ['s.ts']);
 });
 
-test('a fresh claim by a concurrent hook suppresses the second nudge; a stale one does not', async () => {
+test('a claim held by a concurrent hook suppresses the second nudge; a crash-left one does not', async () => {
   const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
+  const { claimFile, CLAIM_LEASE_MS } = await import('../../hooks/_hooklib.mjs');
   const ctx = setup(five);
   const state = join(ctx.h, 'state.json');
   const payload = { session_id: 's9', transcript_path: ctx.transcript, tool_input: { file_path: 'cur.ts' } };
-  writeFileSync(`${state}.lock`, '');
-  assert.equal(nudge(payload, state), null, 'lock held by a parallel hook');
-  const old = new Date(Date.now() - 60_000);
-  utimesSync(`${state}.lock`, old, old);
-  assert.ok(nudge(payload, state), 'stale lock is broken');
-  assert.equal(existsSync(`${state}.lock`), false, 'lock released');
+  const epoch = Math.floor(Date.now() / CLAIM_LEASE_MS);
+  writeFileSync(claimFile(state, epoch), '');
+  assert.equal(nudge(payload, state), null, 'claim held by a parallel hook');
+  rmSync(claimFile(state, epoch));
+  writeFileSync(claimFile(state, epoch - 5), '');
+  assert.ok(nudge(payload, state), 'a crash-left claim from earlier leases does not silence it');
+  assert.deepEqual(readdirSync(ctx.h).filter((f) => f.includes('.lock')), [], 'claim released, crash-left one swept');
   assert.equal(nudge(payload, state), null, 'run recorded');
 });
 
-test('claimRun fails open (fires) when a stale lock cannot be removed or its mtime is in the future', async () => {
+test('parallel hooks racing a crash-left <state>.lock nudge at most once, and a lost race still nudges next edit (#139)', async () => {
+  const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
+  for (let trial = 0; trial < 3; trial++) {
+    const ctx = setup(five);
+    const state = join(ctx.h, 'state.json');
+    const payload = { session_id: 's1', transcript_path: ctx.transcript, tool_input: { file_path: 'cur.ts' } };
+    writeFileSync(`${state}.lock`, '');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(`${state}.lock`, old, old);
+    const outs = await raceHarness(12, hook, `process.stdout.write(m.nudge(${JSON.stringify(payload)}, ${JSON.stringify(state)}) ? 'F' : '.');`, { home: ctx.h });
+    const fired = outs.filter((o) => o === 'F').length;
+    assert.ok(fired <= 1, `trial ${trial}: ${fired} of 12 parallel hooks nudged`);
+    assert.equal(fired + (nudge(payload, state) ? 1 : 0), 1, `trial ${trial}: the run nudges exactly once`);
+  }
+});
+
+test('a pre-#139 <state>.lock (file or directory, any age) never silences the nudge; an unmakeable claim skips it without throwing', async () => {
   const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
   const ctx = setup(five);
   const state = join(ctx.h, 'state.json');
@@ -156,11 +174,10 @@ test('claimRun fails open (fires) when a stale lock cannot be removed or its mti
   writeFileSync(`${state}.lock`, '');
   const future = new Date(Date.now() + 3_600_000);
   utimesSync(`${state}.lock`, future, future);
-  assert.ok(nudge(payload, state), 'future-dated lock does not silence the nudge');
-  // a lock that is a directory is stale-by-age but cannot be unlinked
+  assert.ok(nudge(payload, state), 'future-dated legacy lock file');
   const state2 = join(ctx.h, 'state2.json');
   mkdirSync(`${state2}.lock`);
-  const old = new Date(Date.now() - 60_000);
-  utimesSync(`${state2}.lock`, old, old);
-  assert.ok(nudge({ ...payload, session_id: 's7' }, state2), 'undeletable stale lock fires');
+  assert.ok(nudge({ ...payload, session_id: 's7' }, state2), 'legacy lock directory');
+  writeFileSync(join(ctx.h, 'not-a-dir'), '');
+  assert.equal(nudge(payload, join(ctx.h, 'not-a-dir', 'state.json')), null, 'no claim can be made under a file');
 });

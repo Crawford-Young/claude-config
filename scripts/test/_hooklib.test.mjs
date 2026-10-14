@@ -3,8 +3,8 @@
 // this covers (H21 BOM, H3 unbounded logs) only appear across the process boundary.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { execHarness, raceHarness } from './_spawn.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -187,6 +187,69 @@ test('shellSkillReads: counts reader verbs per command segment; grep/echo/wc/cp/
   for (const c of ['grep x skills/a/SKILL.md', 'echo skills/a/SKILL.md', 'wc -c skills/a/SKILL.md', 'cp skills/a/SKILL.md /tmp/x', 'node scripts/land.mjs x skills/a/SKILL.md']) {
     assert.deepEqual(shellSkillReads(c), [], c);
   }
+});
+
+test('withClaim runs fn under the claim, returns its result and removes its lock file', async () => {
+  const { withClaim } = await import(hooklibUrl);
+  const dir = join(home(), '.claude');
+  const base = join(dir, 's.json');
+  let inside;
+  assert.equal(withClaim(base, () => ((inside = readdirSync(dir)), 'ran')), 'ran');
+  assert.equal(inside.length, 1, 'one lock file while fn runs');
+  assert.deepEqual(readdirSync(dir), [], 'released');
+});
+
+test('withClaim: a claim held in this or an adjacent lease epoch skips fn; an older crash-left one is ignored and swept', async () => {
+  const { withClaim, claimFile, CLAIM_LEASE_MS } = await import(hooklibUrl);
+  const dir = join(home(), '.claude');
+  const base = join(dir, 's.json');
+  const at = 1_000 * CLAIM_LEASE_MS + 1;
+  const now = () => at;
+  for (const e of [999, 1000, 1001]) {
+    writeFileSync(claimFile(base, e), '');
+    assert.equal(withClaim(base, () => 'ran', now), null, `held in epoch ${e}`);
+    assert.deepEqual(readdirSync(dir), [`s.json.lock.${e}`], 'the held claim is left alone');
+    rmSync(claimFile(base, e));
+  }
+  writeFileSync(claimFile(base, 990), ''); // a hook crashed holding a claim long ago
+  writeFileSync(`${base}.lock`, ''); // the pre-#139 lock name means nothing now
+  assert.equal(withClaim(base, () => 'ran', now), 'ran');
+  assert.deepEqual(readdirSync(dir), ['s.json.lock'], 'crash-left claim swept');
+});
+
+test('withClaim backs off when the lease epoch rolls over mid-claim', async () => {
+  const { withClaim, CLAIM_LEASE_MS } = await import(hooklibUrl);
+  const dir = join(home(), '.claude');
+  let t = 5 * CLAIM_LEASE_MS - 1;
+  assert.equal(withClaim(join(dir, 's.json'), () => 'ran', () => t++), null);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('withClaim returns null without throwing when the lock cannot be made, and releases when fn throws', async () => {
+  const { withClaim } = await import(hooklibUrl);
+  assert.equal(withClaim(join(home({ claudeIsAFile: true }), '.claude', 's.json'), () => 'ran'), null);
+  const dir = join(home(), '.claude');
+  assert.throws(() => withClaim(join(dir, 's.json'), () => { throw new Error('boom'); }), /boom/);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('withClaim excludes across real processes racing a crash-left claim (#139)', async () => {
+  const { withClaim, claimFile, CLAIM_LEASE_MS } = await import(hooklibUrl);
+  const h = home();
+  const base = join(h, '.claude', 's.json');
+  writeFileSync(claimFile(base, Math.floor(Date.now() / CLAIM_LEASE_MS) - 5), '');
+  // Inside the claim each child holds a 'wx' marker for 50 ms: a second holder at the same time fails to create it.
+  const body = `const fs = await import('node:fs'); const r = m.withClaim(${JSON.stringify(base)}, () => {
+    try { fs.writeFileSync(${JSON.stringify(`${base}.in`)}, '', { flag: 'wx' }); } catch { return 'X'; }
+    const until = Date.now() + 50; while (Date.now() < until);
+    fs.unlinkSync(${JSON.stringify(`${base}.in`)}); return 'C';
+  }); process.stdout.write(r ?? '.');`;
+  // Start mid-epoch, so no lease rollover can make every child back off and leave nothing tested.
+  const leadMs = 2000 + ((CLAIM_LEASE_MS * 1.5 - ((Date.now() + 2000) % CLAIM_LEASE_MS)) % CLAIM_LEASE_MS);
+  const outs = await raceHarness(12, join(hooksDir, '_hooklib.mjs'), `(async () => { ${body} })()`, { home: h, leadMs });
+  assert.equal(outs.filter((o) => o === 'X').length, 0, `overlapping holders: ${outs.join('')}`);
+  assert.ok(outs.includes('C'), `someone claimed: ${outs.join('')}`);
+  assert.equal(withClaim(base, () => 'ran'), 'ran', 'free again after the race');
 });
 
 test('writeState writes atomically (no temp litter) and stays fail-open', async () => {

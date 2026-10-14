@@ -4,10 +4,11 @@
 // _hooklib's claudeDir comes from homedir() at import time, so isolation has to be in
 // the child's env, not mutated in-process. scripts/test/source-hygiene.test.mjs fails a
 // test file that spawns node on a script without this helper.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** Env vars the harness reads that name a path, mapped to a location under the temp home. */
 const PATH_OVERRIDES = {
@@ -64,4 +65,26 @@ export function execHarness(script, args = [], opts = {}) {
     throw e;
   }
   return r.stdout;
+}
+
+/**
+ * A real multi-process race: `n` node children, each in the isolated env of `home`, import
+ * `module`, busy-wait to one shared start instant, then run `body` with the module bound as
+ * `m`. Imports finish before the start line, so the bodies overlap. → their stdouts; rejects
+ * when a child exits non-zero.
+ */
+export function raceHarness(n, module, body, { home, env, leadMs = 2500 } = {}) {
+  const start = Date.now() + leadMs;
+  const code = `import(${JSON.stringify(pathToFileURL(module).href)}).then((m) => { while (Date.now() < ${start}); ${body}\n});`;
+  const one = () =>
+    new Promise((resolve, reject) => {
+      const c = spawn(process.execPath, ['-e', code], { env: isolatedEnv(home, env) });
+      let out = '';
+      let err = '';
+      c.stdout.on('data', (d) => (out += d));
+      c.stderr.on('data', (d) => (err += d));
+      c.on('error', reject);
+      c.on('close', (status) => (status === 0 ? resolve(out) : reject(new Error(`race child exited ${status}: ${err}`))));
+    });
+  return Promise.all(Array.from({ length: n }, one));
 }
