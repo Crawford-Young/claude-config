@@ -208,6 +208,14 @@ function claimBand(sid, band, tokens) {
   return claimed === true;
 }
 
+/** UserPromptSubmit's block record (plus `extra`, e.g. the CONTEXT OK bypass), re-read and
+ *  written under the claim so an in-flight claimBand can't overwrite it with a stale spread
+ *  and lose the bypass. It is written anyway when the claim is held: the block is never gated. */
+function markBlock(sid, tokens, extra = {}) {
+  const write = () => writeState(sid, { ...readState(sid), fired: 'block', lastTokens: tokens, ...extra });
+  withClaim(stateFile(sid), () => (write(), true)) ?? write();
+}
+
 /**
  * Should this band announce itself? Bands fire once each, and only ever
  * escalate — crossing `warn` does not re-fire `nudge`.
@@ -311,10 +319,10 @@ export function main(payload) {
     }
     // Slash commands must always reach the CLI — /exit, /clear and /compact are the ways out.
     if (!bypassed && !prompt.trimStart().startsWith('/')) {
-      writeState(sid, { ...state, fired: 'block', lastTokens: tokens });
+      markBlock(sid, tokens);
       block(blockText(tokens, t, floored));
     }
-    if (/\bCONTEXT OK\b/.test(prompt)) writeState(sid, { ...state, bypass: true, fired: 'block', lastTokens: tokens });
+    if (/\bCONTEXT OK\b/.test(prompt)) markBlock(sid, tokens, { bypass: true });
     return;
   }
 

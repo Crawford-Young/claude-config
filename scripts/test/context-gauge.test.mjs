@@ -415,6 +415,23 @@ test('parallel PostToolUse calls crossing a band together announce it once, and 
   }
 });
 
+test('while a PostToolUse holds the claim, UserPromptSubmit still blocks and still records CONTEXT OK (#139)', async () => {
+  const { claimFile, CLAIM_LEASE_MS } = await import('../../hooks/_hooklib.mjs');
+  const home = sharedHome();
+  try {
+    const base = join(home, '.claude', 'context-gauge', 'e2e-sid.json');
+    mkdirSync(join(home, '.claude', 'context-gauge'), { recursive: true });
+    const e = Math.floor(Date.now() / CLAIM_LEASE_MS);
+    for (const k of [e - 1, e, e + 1, e + 2]) writeFileSync(claimFile(base, k), ''); // held across any rollover mid-test
+    assert.equal(runHook('keep building', line(usage(0, 262_000)), { home }).code, 2, 'the block is never gated by the claim');
+    assert.equal(runHook('CONTEXT OK', line(usage(0, 262_000)), { home }).code, 0);
+    for (const k of [e - 1, e, e + 1, e + 2]) rmSync(claimFile(base, k));
+    assert.equal(runHook('keep building', line(usage(0, 262_000)), { home }).code, 0, 'the bypass was recorded despite the held claim');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('a block announced on PostToolUse is announced once, and UserPromptSubmit still exits 2', () => {
   const home = sharedHome();
   try {

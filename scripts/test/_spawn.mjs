@@ -67,15 +67,19 @@ export function execHarness(script, args = [], opts = {}) {
   return r.stdout;
 }
 
+/** A race child's stderr marker: it reached the start line before the start instant. */
+const ON_TIME = 'race:on-time';
+
 /**
  * A real multi-process race: `n` node children, each in the isolated env of `home`, import
  * `module`, busy-wait to one shared start instant, then run `body` with the module bound as
  * `m`. Imports finish before the start line, so the bodies overlap. → their stdouts; rejects
- * when a child exits non-zero.
+ * when a child exits non-zero, or when fewer than 2 children reached the start line before
+ * it passed (a loaded runner raced nothing, so a pass would prove nothing).
  */
-export function raceHarness(n, module, body, { home, env, leadMs = 2500 } = {}) {
+export async function raceHarness(n, module, body, { home, env, leadMs = 2500 } = {}) {
   const start = Date.now() + leadMs;
-  const code = `import(${JSON.stringify(pathToFileURL(module).href)}).then((m) => { while (Date.now() < ${start}); ${body}\n});`;
+  const code = `import(${JSON.stringify(pathToFileURL(module).href)}).then((m) => { process.stderr.write(Date.now() < ${start} ? '${ON_TIME}' : ''); while (Date.now() < ${start}); ${body}\n});`;
   const one = () =>
     new Promise((resolve, reject) => {
       const c = spawn(process.execPath, ['-e', code], { env: isolatedEnv(home, env) });
@@ -84,7 +88,10 @@ export function raceHarness(n, module, body, { home, env, leadMs = 2500 } = {}) 
       c.stdout.on('data', (d) => (out += d));
       c.stderr.on('data', (d) => (err += d));
       c.on('error', reject);
-      c.on('close', (status) => (status === 0 ? resolve(out) : reject(new Error(`race child exited ${status}: ${err}`))));
+      c.on('close', (status) => (status === 0 ? resolve({ out, onTime: err.includes(ON_TIME) }) : reject(new Error(`race child exited ${status}: ${err}`))));
     });
-  return Promise.all(Array.from({ length: n }, one));
+  const children = await Promise.all(Array.from({ length: n }, one));
+  const onTime = children.filter((c) => c.onTime).length;
+  if (onTime < 2) throw new Error(`raceHarness: ${onTime} of ${n} children reached the start line in time, so nothing raced; raise leadMs`);
+  return children.map((c) => c.out);
 }

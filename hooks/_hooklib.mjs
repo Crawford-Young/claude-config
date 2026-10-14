@@ -315,13 +315,16 @@ export function writeState(file, state, io = {}) {
 // claimants in one epoch collide on 'wx'; in adjacent epochs each creates before it
 // checks, so at least one sees the other (both may back off: a skipped note, retried on
 // the next call). A crash-left claim blocks only its own and the adjacent epochs
-// (≤ 2 leases) and is swept after that. Holds while fn finishes inside one lease.
+// (≤ 2 leases) and is swept after that. Holds while fn finishes inside one lease: a
+// claimant stalled for more than a lease, or the wall clock stepping back, can still let
+// a second hook in, and the worst outcome is a note announced twice.
 export const CLAIM_LEASE_MS = 5_000;
 export const claimFile = (base, epoch) => `${base}.lock.${epoch}`;
 
 /** Run `fn` under the claim on `base` → fn's result, or null when another hook holds it
- *  or it cannot be made — the caller skips its note, never blocks. `now` is a test seam. */
-export function withClaim(base, fn, now = Date.now) {
+ *  or it cannot be made — the caller skips its note, never blocks. `now` and `io` (the
+ *  sweep's unlinkSync) are test seams. */
+export function withClaim(base, fn, now = Date.now, io = {}) {
   const epoch = Math.floor(now() / CLAIM_LEASE_MS);
   const own = claimFile(base, epoch);
   try {
@@ -333,7 +336,7 @@ export function withClaim(base, fn, now = Date.now) {
   try {
     if (existsSync(claimFile(base, epoch - 1)) || existsSync(claimFile(base, epoch + 1))) return null;
     if (Math.floor(now() / CLAIM_LEASE_MS) !== epoch) return null;
-    sweepClaims(base, epoch);
+    sweepClaims(base, epoch, io.unlinkSync ?? unlinkSync);
     return fn();
   } finally {
     try {
@@ -345,16 +348,23 @@ export function withClaim(base, fn, now = Date.now) {
 }
 
 /** Remove crash-left claims older than the adjacent epoch; they no longer block anyone. */
-function sweepClaims(base, epoch) {
+function sweepClaims(base, epoch, unlink) {
   const prefix = `${basename(base)}.lock.`;
+  let names;
   try {
-    for (const f of readdirSync(dirname(base))) {
-      if (!f.startsWith(prefix)) continue;
-      const e = Number(f.slice(prefix.length));
-      if (Number.isInteger(e) && e < epoch - 1) unlinkSync(join(dirname(base), f));
-    }
+    names = readdirSync(dirname(base));
   } catch {
-    // best-effort: a leftover claim stops blocking after two leases anyway
+    return; // best-effort: a leftover claim stops blocking after two leases anyway
+  }
+  for (const f of names) {
+    if (!f.startsWith(prefix)) continue;
+    const e = Number(f.slice(prefix.length));
+    if (!Number.isInteger(e) || e >= epoch - 1) continue;
+    try {
+      unlink(join(dirname(base), f));
+    } catch {
+      // EPERM/EBUSY on one file: the rest still get swept
+    }
   }
 }
 

@@ -212,9 +212,28 @@ test('withClaim: a claim held in this or an adjacent lease epoch skips fn; an ol
     rmSync(claimFile(base, e));
   }
   writeFileSync(claimFile(base, 990), ''); // a hook crashed holding a claim long ago
+  writeFileSync(claimFile(base, 998), ''); // two epochs back: past the adjacent one
+  writeFileSync(claimFile(base, 1002), ''); // two epochs ahead: future, not adjacent
   writeFileSync(`${base}.lock`, ''); // the pre-#139 lock name means nothing now
-  assert.equal(withClaim(base, () => 'ran', now), 'ran');
-  assert.deepEqual(readdirSync(dir), ['s.json.lock'], 'crash-left claim swept');
+  assert.equal(withClaim(base, () => 'ran', now), 'ran', 'e-2 and e+2 do not block');
+  assert.deepEqual(readdirSync(dir).sort(), ['s.json.lock', 's.json.lock.1002'], 'e-2 and older swept; e+2 kept');
+});
+
+test('withClaim: one unlink refused while sweeping does not stop the rest of the sweep', async () => {
+  const { withClaim, claimFile, CLAIM_LEASE_MS } = await import(hooklibUrl);
+  const dir = join(home(), '.claude');
+  const base = join(dir, 's.json');
+  const now = () => 1_000 * CLAIM_LEASE_MS + 1;
+  writeFileSync(claimFile(base, 990), '');
+  writeFileSync(claimFile(base, 991), '');
+  let calls = 0;
+  const unlinkSync = (p) => {
+    if (calls++ === 0) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+    rmSync(p);
+  };
+  assert.equal(withClaim(base, () => 'ran', now, { unlinkSync }), 'ran');
+  assert.equal(calls, 2, 'both crash-left claims were tried');
+  assert.equal(readdirSync(dir).length, 1, 'the second was swept; only the refused one is left');
 });
 
 test('withClaim backs off when the lease epoch rolls over mid-claim', async () => {
@@ -250,6 +269,13 @@ test('withClaim excludes across real processes racing a crash-left claim (#139)'
   assert.equal(outs.filter((o) => o === 'X').length, 0, `overlapping holders: ${outs.join('')}`);
   assert.ok(outs.includes('C'), `someone claimed: ${outs.join('')}`);
   assert.equal(withClaim(base, () => 'ran'), 'ran', 'free again after the race');
+});
+
+test('raceHarness fails loudly when fewer than 2 children reach the start line on time', async () => {
+  await assert.rejects(
+    raceHarness(3, join(hooksDir, '_hooklib.mjs'), `process.stdout.write('x');`, { home: home(), leadMs: 0 }),
+    /0 of 3 children reached the start line in time/,
+  );
 });
 
 test('writeState writes atomically (no temp litter) and stays fail-open', async () => {
