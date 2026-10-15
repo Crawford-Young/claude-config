@@ -31,6 +31,8 @@ implementation parallelizes; that is the real concurrency cap.
 - A recon or other subagent a unit wants goes back to you: the unit reports the need and you dispatch it, so spawn depth and cost stay in one place.
 - Units leave work uncommitted plus a commit-message file path (`What:` / `Verified:` (cmd → rc) / `Next:` / `Ruled out:`) and you commit, because the auto-mode classifier blocks a subagent's `git commit` (3 blocks + 1 bypass, 8.9 min in wave 5; 0 once units stopped committing).
 - Units run gates unpiped, each redirected to a file, because a pipe masks the gate's rc.
+- Brief each unit to keep its final report to about 2k characters, with the detail in a scratchpad file it names, because a longer result is cut off and costs a SendMessage round-trip (both 2026-10-15 reviewer reports).
+- Post each review verdict, and the worktree's uncommitted state, to the issue as soon as it arrives, because a window can end without a handoff. 3b14fba3's #243 PASS and #214 rounds were lost, and the next window paid to review both again.
 
 ## Ship
 
