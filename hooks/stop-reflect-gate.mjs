@@ -38,12 +38,12 @@
 // closing action item starting Approve / Decide / Pick / Choose / Confirm / Tell me /
 // Say. A turn end while a background Agent, Bash or PowerShell task launched since the
 // reflect read and the merge is still running also passes (hasPendingBackground, #206): the
-// launch has no <task-notification>, successful TaskStop or "stopped by the user" result yet,
-// so "I'll pick up when the implementer reports" is a wait, not a finished reflect. This
-// reads the transcript's structure, not the wait phrasing. Known false negative: a named
-// teammate wait (status "teammate_spawned", completed by teammate messages) or a SendMessage-
-// resumed agent is not seen, so those turn ends still spend the block. Anything else counts
-// as finished and spends the block.
+// launch has no <task-notification>, successful TaskStop or "stopped by the user" record yet,
+// so "I'll pick up when the implementer reports" is a wait, not a finished reflect. A named
+// teammate spawned in that window, or an agent or teammate sent a SendMessage there, is a wait
+// too until it reports (a teammate message, hand-back or notification) after the spawn or
+// send, or is stopped (#227). This reads the transcript's structure, not the wait phrasing.
+// Anything else counts as finished and spends the block.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -100,13 +100,17 @@ export function lastMerge(text) {
   return newestMerge(text)?.id ?? null;
 }
 
+/** A message's text: string content, or its text blocks joined (tool results excluded), else null. */
+function textOf(c) {
+  if (typeof c === 'string') return c;
+  return Array.isArray(c) ? c.filter((x) => x?.type === 'text' && typeof x.text === 'string').map((x) => x.text).join('\n') : null;
+}
+
 /** Text of a genuine human-typed user record (origin.kind "human", not isMeta), else null.
  *  Stop-hook feedback, peer messages and reminders are isMeta or carry another origin. */
 function humanText(o) {
   if (o?.type !== 'user' || o.isMeta || o.origin?.kind !== 'human') return null;
-  const c = o.message?.content;
-  if (typeof c === 'string') return c;
-  return Array.isArray(c) ? c.filter((x) => x?.type === 'text' && typeof x.text === 'string').map((x) => x.text).join('\n') : null;
+  return textOf(o.message?.content);
 }
 
 // A typed skill command is `<command-message>reflect</command-message>\n<command-name>/reflect</command-name>`
@@ -179,48 +183,79 @@ export function asksUser(message) {
 }
 
 const BG_TOOLS = new Set(['Agent', 'Bash', 'PowerShell']);
-const NOTIFIED_ID = /<task-notification>[\s\S]*?<tool-use-id>([^<]+)<\/tool-use-id>/g;
-const STOPPED_AGENT = /Agent (\w+) was stopped by the user/g;
+const WAIT_TOOLS = new Set([...BG_TOOLS, 'SendMessage', 'TaskStop']);
+const WAIT_RECORD = /run_in_background|TaskStop|tool_result|"name":"(?:Agent|SendMessage)"|task-notification|teammate-message|agent-message|stopped by the user/;
+// A notification runs to its closing tag, or to the line's end when a record truncates it.
+const NOTIFICATION = /<task-notification>[\s\S]*?(?:<\/task-notification>|$)/g;
+const NOTIFIED_ID = /<(?:task-id|tool-use-id)>([^<]+)</g;
+const STOPPED_AGENT = /Agent ([\w-]+) was stopped by the user/g;
+// Matched on the raw line, where the description's quotes arrive JSON-escaped; descKey escapes a launch's the same way.
+const STOPPED_DESCRIPTION = /Background agent \\"(.*?)\\" was stopped by the user/g;
+const MESSAGE_FROM = /<(?:teammate-message teammate_id|agent-message from)="([^"]+)"/g;
 const LAUNCHED_ID = /running in background with ID: (\w+)/;
+const descKey = (d) => (typeof d === 'string' ? `desc:${JSON.stringify(d).slice(1, -1)}` : null);
 
-/** Is a background Agent, Bash or PowerShell task launched at or after `after` (epoch ms) and still running (#206)?
- *  A launch is a tool_result for a run_in_background call (true or "true") that is not an error, or any toolUseResult
- *  with status async_launched. It is resolved by a <task-notification> naming the launching call's tool-use id
- *  (queue-operation or attachment), a successful TaskStop of its task id (backgroundTaskId or agentId), or a later
- *  "Agent <agentId> was stopped by the user" result. Launches before `after` are outside the gate window.
- *  Not seen: named-teammate waits (status "teammate_spawned", completed by teammate messages) and agents resumed
- *  with SendMessage, so those turn ends still spend the block. */
+/** Is the director waiting on a background task or a teammate it started or resumed at or after `after` (epoch ms)?
+ *  (#206, #227.) A wait is a non-error tool_result for:
+ *  - a background launch: a run_in_background Agent, Bash or PowerShell call (true or "true"), or any toolUseResult
+ *    with status async_launched. It resolves on any record naming it, earlier or later (#206).
+ *  - a named-teammate spawn: toolUseResult status teammate_spawned, with or without run_in_background, keyed on its
+ *    toolUseResult.name (the spawn may rename it) and agentId.
+ *  - a SendMessage whose toolUseResult reached an agent: success with routing (a teammate's inbox), resumedAgentId
+ *    (a finished background agent resumed) or pin (queued for a running one), keyed on input.to, resumedAgentId and
+ *    pin.id. A cross-session peer's result has none of these, and a stopped agent's is success false.
+ *  Only non-empty string ids key a wait.
+ *  A spawn or SendMessage resolves only on a record timestamped at or after it, since a teammate idles after every
+ *  turn and a resumed agent's first-pass notice is already in the transcript. Resolving records: a <task-notification>
+ *  naming the tool-use id or task id, a <teammate-message teammate_id> or <agent-message from> user record (an idle
+ *  notification or a plain message: a teammate may report with no idle after it, 98122171:392), a successful
+ *  TaskStop of its task id, name or agentId, "Agent <id> was stopped by the user", or the harness's "Background agent
+ *  "<description>" was stopped by the user" (matched on the launch's description). A queue-operation remove carries
+ *  its dequeue time, so it and untimed records resolve background launches only. Waits before `after` are outside
+ *  the gate window. Agents sharing a description resolve together on a description stop. */
 export function hasPendingBackground(text, after = 0) {
-  const bgCalls = new Set();
-  const stopCalls = new Map();
-  const launches = new Map();
-  const done = new Set();
+  const calls = new Map();
+  const agents = new Map(); // any key of a launched agent -> all its keys
+  const waits = [];
+  const heard = new Map(); // key -> newest resolving record time
+  const hear = (key, at) => heard.set(key, Math.max(heard.get(key) ?? -Infinity, at));
   for (const l of text.split('\n')) {
-    if (l.includes('<task-notification>')) {
-      for (const m of l.matchAll(NOTIFIED_ID)) done.add(m[1]);
-      continue;
-    }
-    if (!l.includes('run_in_background') && !l.includes('TaskStop') && !l.includes('tool_result')) continue;
-    for (const m of l.matchAll(STOPPED_AGENT)) done.add(m[1]);
-    let o;
+    if (!WAIT_RECORD.test(l)) continue;
+    let o = null;
     try {
       o = JSON.parse(l);
-    } catch {
-      continue;
-    }
+    } catch {} // an unparsable line's notification and stop text still count, untimed
     const t = Date.parse(o?.timestamp);
+    const at = Number.isNaN(t) || o.operation === 'remove' ? -Infinity : t;
+    for (const [n] of l.matchAll(NOTIFICATION)) for (const [, id] of n.matchAll(NOTIFIED_ID)) hear(id, at);
+    for (const [, id] of l.matchAll(STOPPED_AGENT)) hear(id, at);
+    for (const [, d] of l.matchAll(STOPPED_DESCRIPTION)) hear(`desc:${d}`, at);
+    if (o?.type === 'user') for (const [, from] of (textOf(o.message?.content) ?? '').matchAll(MESSAGE_FROM)) hear(from, at);
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
-      if (c?.type === 'tool_use' && BG_TOOLS.has(c.name) && String(c.input?.run_in_background) === 'true') bgCalls.add(c.id);
-      if (c?.type === 'tool_use' && c.name === 'TaskStop' && typeof c.input?.task_id === 'string') stopCalls.set(c.id, c.input.task_id);
+      if (c?.type === 'tool_use' && WAIT_TOOLS.has(c.name)) calls.set(c.id, c);
       if (c?.type !== 'tool_result' || c.is_error) continue;
-      if (stopCalls.has(c.tool_use_id)) done.add(stopCalls.get(c.tool_use_id));
-      if (!bgCalls.has(c.tool_use_id) && o.toolUseResult?.status !== 'async_launched') continue;
-      const named = typeof c.content === 'string' ? LAUNCHED_ID.exec(c.content)?.[1] : null;
-      const taskId = o.toolUseResult?.agentId ?? o.toolUseResult?.backgroundTaskId ?? named;
-      if (!Number.isNaN(t) && t >= after) launches.set(c.tool_use_id, taskId);
+      const call = calls.get(c.tool_use_id);
+      const r = o.toolUseResult;
+      if (call?.name === 'TaskStop' && typeof call.input?.task_id === 'string') hear(call.input.task_id, at);
+      let keys = null;
+      let since = t;
+      // A named spawn is a teammate even with run_in_background set (3b14fba3:94/:96): it reports by teammate message, not notification.
+      if (r?.status === 'teammate_spawned') {
+        keys = [c.tool_use_id, r.name, r.agentId, descKey(call?.input?.description)];
+      } else if ((BG_TOOLS.has(call?.name) && String(call.input?.run_in_background) === 'true') || r?.status === 'async_launched') {
+        const named = typeof c.content === 'string' ? LAUNCHED_ID.exec(c.content)?.[1] : null;
+        keys = [c.tool_use_id, r?.agentId, r?.backgroundTaskId, named, descKey(r?.description), descKey(call?.input?.description)];
+        since = -Infinity;
+      } else if (call?.name === 'SendMessage' && typeof call.input?.to === 'string' && r?.success === true && (r.routing || r.resumedAgentId || r.pin)) {
+        keys = [call.input.to, r.resumedAgentId, r.pin?.id].flatMap((k) => agents.get(k) ?? [k]);
+      }
+      if (!keys) continue;
+      keys = [...new Set(keys.filter((k) => typeof k === 'string' && k))];
+      for (const k of keys) agents.set(k, keys);
+      if (!Number.isNaN(t) && t >= after) waits.push({ keys, since });
     }
   }
-  return [...launches].some(([id, taskId]) => !done.has(id) && !done.has(taskId));
+  return waits.some(({ keys, since }) => !keys.some((k) => heard.has(k) && heard.get(k) >= since));
 }
 
 /** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), reflect Skill call, or user-typed /reflect, else null. */
