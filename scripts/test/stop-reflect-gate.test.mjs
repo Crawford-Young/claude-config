@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asksUser, continuationAsked, humanRepliedAfter, isMerge, lastAssistantText, lastMerge, lastReflectAt, newestMerge } from '../../hooks/stop-reflect-gate.mjs';
+import { asksUser, continuationAsked, hasPendingBackground, humanRepliedAfter, isMerge, lastAssistantText, lastMerge, lastReflectAt, newestMerge } from '../../hooks/stop-reflect-gate.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'stop-reflect-gate.mjs');
 
@@ -512,4 +512,123 @@ test('#167 review 2: a merge is read under the tool that ran it', () => {
   const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
   assert.equal(lastMerge(tx(call('p', c, 'PowerShell'), result('p'))), 'p');
   assert.equal(lastMerge(tx(call('b', c), result('b'))), null);
+});
+
+// ---- background-wait pauses (#206) ----
+// Minimal record shapes, trimmed from ~/.claude/projects/C--Users-young-code/: the Agent launch (4e1e54dd-c768-4d79-963d-aaec663a9c28.jsonl
+// :176 call, :178 result), a background Bash launch (68e3139e-c87e-4d79-a371-7f52dd768090.jsonl:543-544) and the completion
+// task-notification (68e3139e:602 queue-operation enqueue; 4e1e54dd has the same text as an attachment).
+const bgAgent = (min, id) => ({
+  type: 'assistant',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description: 'implementer', subagent_type: 'implementer', run_in_background: true } }] },
+});
+const bgAgentLaunched = (min, id, agentId) => ({
+  type: 'user',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: `Async agent launched successfully.\nagentId: ${agentId}` }] }] },
+  toolUseResult: { isAsync: true, status: 'async_launched', agentId },
+});
+const bgBash = (min, id) => ({
+  type: 'assistant',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'gh run watch 1', run_in_background: true } }] },
+});
+const bgBashLaunched = (min, id, taskId) => ({
+  type: 'user',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: false, content: `Command running in background with ID: ${taskId}. Output is being written to: x.output.` }] },
+  toolUseResult: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: taskId },
+});
+const notified = (min, id, taskId, op = 'enqueue') => ({
+  type: 'queue-operation',
+  operation: op,
+  timestamp: ago(min),
+  content: `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n</task-notification>`,
+});
+const lines = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+// Verbatim turn-ending waits: 68e3139e:456, 68e3139e:678, 4e1e54dd:234.
+const waitProbe = "The probe manifest is ready, and its `main.rs` waits for the #14 API. I'll pick up when the implementer reports.";
+const waitAction = "The #15 implementer is running and its probe is scaffolded. I'll verify and probe once it reports.\n\n## Your action items\n- Run `/rename strate-15`.";
+const waitLand =
+  "The land.mjs implementer is still running. You'll get its result when it hands back, and I'll check its gates before anything is committed.\n\n## Your action items\n- Nothing yet. Once the implementer's gates pass, I'll ask for approval to commit and land the land.mjs change and the docs rule-history line.";
+
+test('hasPendingBackground: a launched background Agent or Bash task with no task-notification is pending', () => {
+  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1'))), true, 'agent launched');
+  assert.equal(hasPendingBackground(lines(bgBash(9, 'b1'), bgBashLaunched(9, 'b1', 'bt1'))), true, 'bash launched');
+  assert.equal(hasPendingBackground(lines(bgBash(9, 'b1'))), false, 'a call with no launch result is not yet a launch');
+  assert.equal(hasPendingBackground(lines(call('b2', 'ls'), result('b2'))), false, 'a foreground call');
+  assert.equal(hasPendingBackground(''), false, 'no records');
+});
+
+test('hasPendingBackground: a completed background agent or task is not pending (enqueue or remove record)', () => {
+  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1'), notified(5, 'a1', 'ag1'))), false);
+  assert.equal(hasPendingBackground(lines(bgBash(9, 'b1'), bgBashLaunched(9, 'b1', 'bt1'), notified(5, 'b1', 'bt1', 'remove'))), false);
+  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1'), notified(5, 'a1', 'ag1'), bgAgent(4, 'a2'), bgAgentLaunched(4, 'a2', 'ag2'))), true, 'a second launch is still pending');
+  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1'), notified(5, 'other', 'ag9'))), true, 'another task finishing does not count');
+});
+
+test('a background-wait turn end after reflect does not spend the continuation block (#206)', () => {
+  const base = [...mergeAt('w1', 60), reflectRead('r', 50), say(49, pauseCall), human(48, 'go ahead')];
+  for (const [name, wait] of [['68e3139e:456', waitProbe], ['68e3139e:678', waitAction], ['4e1e54dd:234', waitLand]]) {
+    const records = [...base, bgAgent(46, 'a1'), bgAgentLaunched(46, 'a1', 'ag1'), say(40, wait)];
+    assert.deepEqual(stopCodes(records, [records.length]), [0], name);
+  }
+});
+
+test('a finished reflect or a turn end after the background agent completed still gets the block (#206)', () => {
+  const base = [...mergeAt('w1', 60), reflectRead('r', 50), say(49, pauseCall), human(48, 'go ahead')];
+  const done = [...base, bgAgent(46, 'a1'), bgAgentLaunched(46, 'a1', 'ag1'), notified(44, 'a1', 'ag1'), say(40, finished)];
+  assert.deepEqual(stopCodes(done, [done.length]), [2], 'agent completed');
+  const none = [...base, say(40, finished)];
+  assert.deepEqual(stopCodes(none, [none.length]), [2], 'no background work');
+});
+
+// TaskStop call and result, 369ac623-8116-4f35-ba19-602cb32de9bc.jsonl:584-585.
+const taskStop = (min, id, taskId) => ({
+  type: 'assistant',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_use', id, name: 'TaskStop', input: { task_id: taskId } }] },
+});
+const taskStopped = (min, id, taskId, is_error = false) => ({
+  type: 'user',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_result', tool_use_id: id, is_error, content: JSON.stringify({ message: `Successfully stopped task: ${taskId} (x)`, task_id: taskId, task_type: 'local_bash' }) }] },
+  toolUseResult: { message: `Successfully stopped task: ${taskId} (x)`, task_id: taskId, task_type: 'local_bash' },
+});
+// The later SendMessage result for a user-stopped agent, 48ca871b-3656-4626-9fb8-820a9327aa96.jsonl:196.
+const agentStoppedByUser = (min, id, agentId) => ({
+  type: 'user',
+  timestamp: ago(min),
+  message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Agent ${agentId} was stopped by the user and won't be resumed.` }) }] }] },
+  toolUseResult: { success: false, message: `Agent ${agentId} was stopped by the user and won't be resumed.` },
+});
+
+test('#206 review: a stopped task resolves its launch (TaskStop by backgroundTaskId or agentId, or a user-stopped agent)', () => {
+  const bash = [bgBash(9, 'b1'), bgBashLaunched(9, 'b1', 'bt1')];
+  const agent = [bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1')];
+  assert.equal(hasPendingBackground(lines(...bash, taskStop(5, 's1', 'bt1'), taskStopped(5, 's1', 'bt1'))), false, 'TaskStop of a Bash task');
+  assert.equal(hasPendingBackground(lines(...agent, taskStop(5, 's1', 'ag1'), taskStopped(5, 's1', 'ag1'))), false, 'TaskStop of an agent');
+  assert.equal(hasPendingBackground(lines(...bash, taskStop(5, 's1', 'bt1'), taskStopped(5, 's1', 'bt1', true))), true, 'a failed TaskStop stops nothing');
+  assert.equal(hasPendingBackground(lines(...bash, taskStop(5, 's1', 'other'), taskStopped(5, 's1', 'other'))), true, 'another task stopped');
+  assert.equal(hasPendingBackground(lines(...agent, agentStoppedByUser(5, 'm1', 'ag1'))), false, 'agent stopped by the user');
+  assert.equal(hasPendingBackground(lines(...agent, agentStoppedByUser(5, 'm1', 'ag9'))), true, 'another agent stopped by the user');
+});
+
+test('#206 review: run_in_background arrives as the string "true" too (48ca871b:153)', () => {
+  const call = { ...bgBash(9, 'b1') };
+  call.message = { content: [{ ...call.message.content[0], input: { command: 'x', run_in_background: 'true' } }] };
+  assert.equal(hasPendingBackground(lines(call, bgBashLaunched(9, 'b1', 'bt1'))), true);
+});
+
+test('#206 review: only launches after the cutoff count', () => {
+  const text = lines(bgAgent(90, 'a1'), bgAgentLaunched(90, 'a1', 'ag1'));
+  assert.equal(hasPendingBackground(text, Date.now() - 60 * 60_000), false, 'launched before the cutoff');
+  assert.equal(hasPendingBackground(text, Date.now() - 100 * 60_000), true, 'launched after the cutoff');
+});
+
+test('#206 review: a dev server launched long before the merge does not suppress the block (369ac623:489, merge :1127, stops :1164/:1173)', () => {
+  // The Tauri dev server (:488-489) ran from before the merge to the end of the session; main blocked at the end.
+  const records = [bgBash(90, 'b1'), bgBashLaunched(90, 'b1', 'bt1'), ...mergeAt('w1', 60), reflectRead('r', 50), say(49, pauseCall), human(48, 'go ahead'), say(40, finished)];
+  assert.deepEqual(stopCodes(records, [records.length]), [2]);
 });

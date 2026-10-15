@@ -36,8 +36,14 @@
 // last_assistant_message, else the transcript's last assistant text) asks the user
 // (asksUser, #199): a line outside ``` or ~~~ fences ending in a question mark, or a
 // closing action item starting Approve / Decide / Pick / Choose / Confirm / Tell me /
-// Say. Anything else counts as finished, so a background wait ("I'll pick up when
-// the implementer reports") still spends the block.
+// Say. A turn end while a background Agent, Bash or PowerShell task launched since the
+// reflect read and the merge is still running also passes (hasPendingBackground, #206): the
+// launch has no <task-notification>, successful TaskStop or "stopped by the user" result yet,
+// so "I'll pick up when the implementer reports" is a wait, not a finished reflect. This
+// reads the transcript's structure, not the wait phrasing. Known false negative: a named
+// teammate wait (status "teammate_spawned", completed by teammate messages) or a SendMessage-
+// resumed agent is not seen, so those turn ends still spend the block. Anything else counts
+// as finished and spends the block.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -172,6 +178,51 @@ export function asksUser(message) {
   return closing.some((l) => ASK_ITEM.test(LIST_ITEM.exec(l)?.[1].replace(/^[*_]+/, '') ?? ''));
 }
 
+const BG_TOOLS = new Set(['Agent', 'Bash', 'PowerShell']);
+const NOTIFIED_ID = /<task-notification>[\s\S]*?<tool-use-id>([^<]+)<\/tool-use-id>/g;
+const STOPPED_AGENT = /Agent (\w+) was stopped by the user/g;
+const LAUNCHED_ID = /running in background with ID: (\w+)/;
+
+/** Is a background Agent, Bash or PowerShell task launched at or after `after` (epoch ms) and still running (#206)?
+ *  A launch is a tool_result for a run_in_background call (true or "true") that is not an error, or any toolUseResult
+ *  with status async_launched. It is resolved by a <task-notification> naming the launching call's tool-use id
+ *  (queue-operation or attachment), a successful TaskStop of its task id (backgroundTaskId or agentId), or a later
+ *  "Agent <agentId> was stopped by the user" result. Launches before `after` are outside the gate window.
+ *  Not seen: named-teammate waits (status "teammate_spawned", completed by teammate messages) and agents resumed
+ *  with SendMessage, so those turn ends still spend the block. */
+export function hasPendingBackground(text, after = 0) {
+  const bgCalls = new Set();
+  const stopCalls = new Map();
+  const launches = new Map();
+  const done = new Set();
+  for (const l of text.split('\n')) {
+    if (l.includes('<task-notification>')) {
+      for (const m of l.matchAll(NOTIFIED_ID)) done.add(m[1]);
+      continue;
+    }
+    if (!l.includes('run_in_background') && !l.includes('TaskStop') && !l.includes('tool_result')) continue;
+    for (const m of l.matchAll(STOPPED_AGENT)) done.add(m[1]);
+    let o;
+    try {
+      o = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    const t = Date.parse(o?.timestamp);
+    for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
+      if (c?.type === 'tool_use' && BG_TOOLS.has(c.name) && String(c.input?.run_in_background) === 'true') bgCalls.add(c.id);
+      if (c?.type === 'tool_use' && c.name === 'TaskStop' && typeof c.input?.task_id === 'string') stopCalls.set(c.id, c.input.task_id);
+      if (c?.type !== 'tool_result' || c.is_error) continue;
+      if (stopCalls.has(c.tool_use_id)) done.add(stopCalls.get(c.tool_use_id));
+      if (!bgCalls.has(c.tool_use_id) && o.toolUseResult?.status !== 'async_launched') continue;
+      const named = typeof c.content === 'string' ? LAUNCHED_ID.exec(c.content)?.[1] : null;
+      const taskId = o.toolUseResult?.agentId ?? o.toolUseResult?.backgroundTaskId ?? named;
+      if (!Number.isNaN(t) && t >= after) launches.set(c.tool_use_id, taskId);
+    }
+  }
+  return [...launches].some(([id, taskId]) => !done.has(id) && !done.has(taskId));
+}
+
 /** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), reflect Skill call, or user-typed /reflect, else null. */
 export function lastReflectAt(text) {
   let at = null;
@@ -266,7 +317,7 @@ function main() {
     // pass without spending the block. The Stop payload carries the closing text; older payloads lack it, or send it blank.
     const m = payload.last_assistant_message;
     const closingText = typeof m === 'string' && m.trim() ? m : lastAssistantText(text);
-    if (!reflectRan || !humanRepliedAfter(text, reflectAt) || asksUser(closingText)) return;
+    if (!reflectRan || !humanRepliedAfter(text, reflectAt) || asksUser(closingText) || hasPendingBackground(text, Math.max(reflectAt, mergeAt))) return;
     const cur = readState(stateFile);
     const asked = Array.isArray(cur.cont) ? cur.cont : [];
     if (asked.includes(id) || continuationAsked(text, Math.max(reflectAt, mergeAt))) return;
