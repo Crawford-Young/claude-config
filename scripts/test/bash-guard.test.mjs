@@ -2484,3 +2484,263 @@ test('#167 review 2: echo skips only the block of its own clause, not a later bl
   // A clause that is the echo still owns its block.
   for (const tool of ['PowerShell', 'Bash']) assert.deepEqual(gatedVerbs('echo { git push }', null, tool), [], tool);
 });
+
+// --- #214: false allows ------------------------------------------------------
+
+test('#214: a PowerShell if/elseif/while condition runs, so a gated verb in it is gated', () => {
+  for (const [c, verb] of [
+    ['if (git push) { }', 'git push'],
+    ['elseif (git push) { }', 'git push'],
+    ['if ($x) { } elseif (git push) { }', 'git push'],
+    ['while (gh pr create) { }', 'gh pr create'],
+    ['if (gh pr merge 5) { echo ok }', 'gh pr merge'],
+  ]) {
+    for (const tool of ['PowerShell', 'Bash', null]) assert.deepEqual(gatedVerbs(c, null, tool), [verb], `${tool} ${c}`);
+  }
+  // The condition is read once: a substitution in it is not counted twice.
+  assert.deepEqual(gatedVerbs('if ($(git push)) { } elseif ($(gh pr create)) { }', null, 'PowerShell'), ['git push', 'gh pr create']);
+  for (const c of ['if (echo "git push") { }', 'if ($true) { echo x }', 'while ($i -lt 3) { $i++ }', 'if (Test-Path x) { echo y }']) {
+    assert.deepEqual(gatedVerbs(c, null, 'PowerShell'), [], c);
+  }
+});
+
+test('#214: a commit in a PowerShell condition is a commit on main', () => {
+  const h = tmpHome();
+  const app = join(h, 'app');
+  bornRepo(app);
+  const run = (cmd) =>
+    spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: cmd }, cwd: h }), home: h }).status;
+  assert.equal(run(`cd ${app}; if (git commit -m x) { echo ok }`), 2);
+  assert.equal(run(`cd ${app}; if ($x) { } elseif (git commit -m x) { }`), 2);
+  assert.equal(run(`cd ${app}; if (git status) { echo ok }`), 0);
+});
+
+test('#214: find -exec rm/mv of what a -name/-iname/-path predicate names is judged like -delete', () => {
+  for (const c of [
+    `find ~/.claude -name push-gate-approvals.json -exec rm {} \\;`,
+    `find ~/.claude -iname push-gate-approvals.json -exec rm {} \\;`,
+    `find ~/.claude -path '*push-gate-approvals.json' -exec rm {} \\;`,
+    `find ~/.claude -name push-gate-approvals.json -exec mv {} /tmp \\;`,
+    `find ~/.claude -name push-gate-approvals.json -execdir rm {} +`,
+    `find ~/.claude -name push-gate-approvals.json -ok rm -f {} \\;`,
+    `find ~/.claude -name 'push-gate*' -exec rm {} \\;`,
+    `find ~ -name 'browser-gate-*.json' -exec rm {} +`,
+  ]) forges(c);
+  assert.match(staticCheck(`find ~/.claude -name push-gate-approvals.json -exec rm {} \\;`, '/work', 'PowerShell') ?? '', /#190/);
+  for (const c of [
+    `find . -name '*.log' -exec rm {} \\;`,
+    `find ~/.claude -name push-gate-approvals.json`,
+    `find ~/.claude -name push-gate-approvals.json -exec cat {} \\;`,
+    `find ~/.claude -name '*.log' -exec rm {} +`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+test('#214 review: a -path beside a -name never widens what find removes', () => {
+  const h = homedir().replaceAll('\\', '/');
+  for (const [c, cwd] of [
+    [`find ~ -path '*/node_modules/*' -name '*.tmp' -delete`, h],
+    [`find ~ -path '*/node_modules/*' -name '*.tmp' -delete`, '/work'],
+    // {} as mv's destination: what find matches is where x lands, not what goes.
+    [`find . -type d -exec mv x {} \\;`, '/work'],
+  ]) assert.equal(staticCheck(c, cwd), null, c);
+  forges(`find ~/.claude -path '*push-gate-approvals.json' -delete`);
+});
+
+// --- #214 review 2 -----------------------------------------------------------
+
+/** Rule 11 blocks `c` in each shell (null: no tool, as in a replay). */
+const forgesIn = (c, tools = ['Bash', 'PowerShell', null]) => {
+  for (const tool of tools) assert.match(staticCheck(c, '/work', tool) ?? '', /#190/, `${tool} ${c}`);
+};
+
+/** Rule 11 allows `c` in each shell. */
+const allowedIn = (c, cwd = '/work', tools = ['Bash', 'PowerShell', null]) => {
+  for (const tool of tools) assert.equal(staticCheck(c, cwd, tool), null, `${tool} ${c}`);
+};
+
+test('#214 review 2: a wildcard in -path matches across /, so it names * plus the text after its last *', () => {
+  forgesIn(`find ~ -path '*/.claude*' -type f -delete`);
+  forgesIn(`find ~ -path '*claude*' -delete`);
+  forgesIn(`find ~/.claude -path '*.json' -delete`);
+  // What follows the last * holds a /, so the last segment is the name.
+  for (const c of [`find ~/.claude -path '*/debug/*.txt' -delete`, `find ~/.claude -path '*/projects/*/memory/*.md' -mtime +30 -delete`]) {
+    for (const tool of ['Bash', 'PowerShell', null]) assert.equal(staticCheck(c, '/work', tool), null, `${tool} ${c}`);
+  }
+});
+
+test('#214 review 2: under Bash an escaped \\! is find\'s !, under PowerShell a literal start path', () => {
+  forgesIn(`find ~/.claude \\! -name foo -delete`, ['Bash', null]);
+  assert.equal(staticCheck(`find ~/.claude \\! -name foo -delete`, '/work', 'PowerShell'), null);
+});
+
+test('#214 review 2: a recursive rm or an mv of a matched dir removes the state files under it', () => {
+  for (const c of [
+    `find ~ -name .claude -exec rm -rf {} +`,
+    `find ~ -name .claude -exec rm -fR {} +`,
+    `find ~ -path '*/.claude' -exec rm -rf {} +`,
+    `find ~ -name .claude -exec mv {} /tmp \\;`,
+    `find ~ -name .claude -exec Remove-Item -Recurse {} \\;`,
+  ]) forgesIn(c);
+  // Not recursive: rm of a dir fails, and -delete never empties one.
+  for (const c of [
+    `find ~ -name .claude -exec rm {} +`,
+    `find ~ -name .claude -exec rm -f {} +`,
+    `find ~ -name .claude -exec Remove-Item -Force {} +`,
+    `find ~ -path '*/.claude' -delete`,
+    `find ~ -type d -name node_modules -exec rm -rf {} +`,
+  ]) assert.equal(staticCheck(c, '/work'), null, c);
+});
+
+// --- #214 review 3 -----------------------------------------------------------
+
+test('#214 review 3: a -path holding a bracket class is judged as its whole start dir', () => {
+  forgesIn(`find ~/.claude -path '*/.claude[/]push-gate-approvals.json' -delete`);
+  forgesIn(`find ~/.claude -path '*/.claude[!a]push-gate-approvals.json' -exec rm {} +`);
+  const h = homedir().replaceAll('\\', '/');
+  forgesIn(`find ${h}/.claude -path '${h}/.claude[/]push-gate-approvals.json' -exec rm {} +`);
+});
+
+test('#214 review 3: a find -exec removal is read through runners, wrappers, .exe and sh -c', () => {
+  for (const x of [
+    `env rm -rf {} +`,
+    `sudo rm -rf {} +`,
+    `nice rm -rf {} +`,
+    `rm.exe -rf {} +`,
+    `xargs rm -rf {} +`,
+    `sh -c 'rm -rf "$1"' _ {} \\;`,
+    `bash -c 'rm -rf {}' \\;`,
+    `sh -c 'mv "$@" /tmp' _ {} +`,
+  ]) forgesIn(`find ~ -name .claude -exec ${x}`);
+  allowedIn(`find ~ -name .claude -exec sh -c 'echo "$1"' _ {} \\;`);
+  allowedIn(`find ~ -name .claude -exec sh -c 'rm "$1"' _ {} \\;`);
+});
+
+test('#214 review 3: rmdir only takes an empty dir, so it never removes a state file', () => {
+  allowedIn(`find ~/.claude -type d -empty -exec rmdir {} +`);
+});
+
+test('#214 review 3: a shell -c payload of a runner is parsed in that shell', () => {
+  // PowerShell ends the statement at a bare `\;`, leaving a stray `\` in the payload, so there the `;` is quoted.
+  allowedIn(`find . -name x -exec pwsh -c 'find ~/.claude \\! -name foo -delete' \\;`, '/work', ['Bash', null]);
+  allowedIn(`find . -name x -exec pwsh -c 'find ~/.claude \\! -name foo -delete' ';'`);
+  forgesIn(`find . -name x -exec bash -c 'find ~/.claude \\! -name foo -delete' \\;`);
+});
+
+// --- #214 review 4 -----------------------------------------------------------
+
+test('#214 review 4: a find -exec shell script removes what it is handed when an rm/mv argument is not a fixed path', () => {
+  for (const x of [
+    `sh -c 'rm -rf "$0"' {} \\;`,
+    `sh -c 'for f; do rm -rf "$f"; done' sh {} +`,
+    `sh -c 'for f in "$@"; do rm -rf "$f"; done' sh {} +`,
+    `sh -c 'f=$1; rm -rf "$f"' _ {} \\;`,
+    `sh -c 'cd "$1" && rm -rf .' _ {} \\;`,
+    `bash -c 'cd "$1" && rm -rf *' _ {} \\;`,
+    `sh -c 'mv "\${1}" /tmp' _ {} \\;`,
+    `pwsh -Command 'Remove-Item -Recurse -Force $args[0]' {} \\;`,
+    `pwsh -Command 'Set-Location $args[0]; Remove-Item -Recurse .' {} \\;`,
+    `busybox rm -rf {} \\;`,
+  ]) forgesIn(`find ~ -name .claude -exec ${x}`);
+  // Not recursive: an rm of a matched dir fails.
+  allowedIn(`find ~ -name .claude -exec sh -c 'rm -f "$0"' {} \\;`);
+  // Non-removing scripts, a fixed path, and a cd to a fixed path stay allowed.
+  for (const x of [
+    `sh -c 'echo "$1"; cat "$1"' _ {} \\;`,
+    `sh -c 'wc -c "$1" > /dev/null' _ {} \\;`,
+    `sh -c 'for f; do du -sh "$f"; done' sh {} +`,
+    `sh -c 'cd "$1" && ls -la' _ {} \\;`,
+    `sh -c 'cd "$1" && rm -rf node_modules' _ {} \\;`,
+    `sh -c 'rm -rf /tmp/scratch' _ {} \\;`,
+    `sh -c 'cd /tmp && rm -rf .' _ {} \\;`,
+    `pwsh -Command 'Get-Item $args[0]' {} \\;`,
+    `busybox ls {} \\;`,
+  ]) allowedIn(`find ~ -name .claude -exec ${x}`);
+});
+
+// --- #214 review 6 -----------------------------------------------------------
+
+test('#214 review 6: -name/-iname/-path narrow a find removal only in a plain conjunction', () => {
+  // Joined by nothing, -a or -and, every predicate holds for what goes.
+  allowedIn(`find ~/.claude -name '*.tmp' -a -type f -and -mtime +7 -delete`);
+  allowedIn(`find ~/.claude -iname '*.tmp' -type f -exec rm {} +`);
+  forgesIn(`find ~/.claude -name push-gate-approvals.json -a -type f -delete`);
+});
+
+test('#214 review 6: a find expression holding -o, `,`, !/-not, a group or -prune is judged by its start dirs', () => {
+  const S = 'push-gate-approvals.json';
+  for (const c of [
+    // -prune -o: the predicate can name what stays.
+    `find ~/.claude -path '*/skills' -prune -o -delete`,
+    `find ~/.claude -path ~/.claude/skills -prune -o -type f -delete`,
+    `find ~/.claude -path '*/skills' -prune -o -exec rm {} +`,
+    `find ~/.claude -name keep -prune -o -delete`,
+    `find ~/.claude -name keep -type d -prune -o -delete`,
+    `find ~/.claude -name keep -a -prune -o -delete`,
+    `find ~/.claude -name keep -print -prune -o -delete`,
+    `find ~/.claude -iname keep -size +1k -prune -o -delete`,
+    `find ~/.claude -name keep -exec echo {} ';' -prune -o -delete`,
+    `find ~/.claude -name keep -prune -execdir echo {} + -o -exec rm {} +`,
+    `find ~/.claude -name ${S} -prune -o -name x -delete`,
+    // A prune term that can still be false spends no protection.
+    `find ~/.claude -name x -o -name ${S} -prune -false -o -delete`,
+    `find ~/.claude -name x -o -name ${S} -type d -prune -o -delete`,
+    `find ~/.claude -name x -o -name ${S} -prune ! -true -o -delete`,
+    `find ~/.claude -name x -o -name ${S} \\( -prune , -false \\) -o -delete`,
+    `find ~/.claude -name x -o -name ${S} \\( -prune -a -false \\) -o -delete`,
+    // `,` and groups.
+    `find ~/.claude -name keep -prune , -delete`,
+    `find ~/.claude -name keep -prune , -exec rm {} +`,
+    `find ~/.claude \\( -name ${S} -prune -o -name x \\) -delete`,
+    `find ~/.claude \\( -name ${S} -prune -o -name x \\) -print -delete`,
+    `find ~/.claude \\( -name ${S} -prune -o -name x \\) -exec rm {} +`,
+    `find ~/.claude \\( -name ${S} -prune -o -name x \\) , -delete`,
+    `find ~/.claude \\( -name ${S} -prune , -name x \\) -delete`,
+    `find ~/.claude '(' -name ${S} -prune -o -name x ')' -delete`,
+    `find ~/.claude \\( -name keep -prune \\) -o -delete`,
+    `find ~/.claude \\( -name keep -type d -prune \\) -o -delete`,
+    // A negated predicate names what stays.
+    `find ~/.claude ! -name '*.log' -delete`,
+    `find ~/.claude -not -name '*.log' -delete`,
+  ]) forgesIn(c);
+  // PowerShell ends the statement at a bare `\;`; under Bash it is find's `;`.
+  forgesIn(`find ~/.claude -name keep -exec echo {} \\; -prune -o -delete`, ['Bash', null]);
+  // The accepted cost: these take no state file, yet now block too.
+  for (const c of [
+    `find ~/.claude -name '*.tmp' -not -path '*/projects/*' -delete`,
+    `find ~/.claude -name '*.tmp' ! -path '*/projects/*' -delete`,
+    `find ~/.claude -path ./skills -prune -o -name '*.tmp' -delete`,
+    `find ~/.claude \\( -name '*.tmp' -o -name '*.bak' \\) -delete`,
+    `find ~ -path '*/node_modules' -prune -exec rm -rf {} +`,
+    `find ~ -type d -path '*/node_modules' -prune -exec rm -rf {} +`,
+    `find ~ -path '*/node_modules/*' -prune -o -name '*.log' -exec rm {} +`,
+  ]) forgesIn(c);
+});
+
+// --- #214 review 7 -----------------------------------------------------------
+
+test('#214 review 7: an escape or an expansion in a find expression can hide an operator, so it is not plain', () => {
+  forgesIn(`find ~/.claude -name x \\-o -delete`, ['Bash', null]);
+  forgesIn(`find ~/.claude -name x \\, -delete`, ['Bash', null]);
+  for (const c of ['find ~/.claude -name x `-o -delete', 'find ~/.claude `! -name x -delete', 'find ~/.claude -name x `, -delete']) {
+    forgesIn(c, ['PowerShell']);
+  }
+  forgesIn(`find ~/.claude -name x $(echo -o) -delete`);
+  forgesIn(`OP=-o; find ~/.claude -name x $OP -delete`, ['Bash', null]);
+  // A payload's own `$1` and `\\;` are the payload rule's, and a start dir may expand.
+  allowedIn(`find ~ -name node_modules -type d -exec sh -c 'rm -rf "$1"' _ {} \\;`);
+  allowedIn(`find $HOME/.claude -name '*.tmp' -delete`, '/work', ['Bash', null]);
+});
+
+test("#214 review 7: find's own options before the start dirs are skipped", () => {
+  for (const c of [
+    `find -L ~/.claude -delete`,
+    `find -P ~/.claude -delete`,
+    `find -O3 ~/.claude -delete`,
+    `find -D tree ~/.claude -delete`,
+    `find -- ~/.claude -delete`,
+    `find -L ~/.claude -name push-gate-approvals.json -delete`,
+    `find -H ~/.claude -name x -o -delete`,
+    `find -L ~ -name .claude -exec rm -rf {} +`,
+  ]) forgesIn(c);
+  allowedIn(`find -L ~/.claude -name '*.tmp' -delete`);
+});

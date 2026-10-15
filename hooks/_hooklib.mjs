@@ -218,18 +218,24 @@ export function isGateRecord(p, dirTarget = false, tree = false) {
 /** Does removing (or moving away) `p` (absolute) take a gate state file with
  *  it — the file, a dir holding one, or a glob that could match one? With
  *  `deep`, `p`'s last segment is a name matched at any depth below its dir
- *  (`find DIR -name X -delete`). Deleting push-gate-approvals.json forgets
- *  every single-use spend, so it counts as a write. A transcript doesn't:
- *  deleting one can only take an approval away (the gates fail closed on a
- *  missing transcript), never forge one. #190. */
-export function removesGateState(p, deep = false) {
+ *  (`find DIR -name X -delete`); with `tree` too, a matched dir goes with
+ *  everything under it, so the name may match any dir on a state file's way
+ *  down (`find DIR -name X -exec rm -rf {} +`, #214). Deleting
+ *  push-gate-approvals.json forgets every single-use spend, so it counts as a
+ *  write. A transcript doesn't: deleting one can only take an approval away
+ *  (the gates fail closed on a missing transcript), never forge one. #190. */
+export function removesGateState(p, deep = false, tree = false) {
   const states = gateStates();
   const n = normPath(p);
   const g = deep ? { dir: n.slice(0, n.lastIndexOf('/')) || '/', name: n.slice(n.lastIndexOf('/') + 1) } : globParts(n);
   if (!g) return states.some((f) => under(f, n));
   if (g.name.includes('/')) return states.some((f) => under(f, g.dir));
   const re = segmentRe(g.name);
-  return states.some((f) => (deep ? under(f, g.dir) && re.test(f.slice(f.lastIndexOf('/') + 1)) : globReaches(re, g.dir, f)));
+  if (!deep) return states.some((f) => globReaches(re, g.dir, f));
+  // The names whose match takes f: its own, and with `tree` each dir's from
+  // the start dir down (find tests the start dir too).
+  const onTheWay = (f) => (tree ? f.slice(g.dir.lastIndexOf('/') + 1).split('/') : [f.slice(f.lastIndexOf('/') + 1)]);
+  return states.some((f) => under(f, g.dir) && onTheWay(f).some((s) => re.test(s)));
 }
 
 /** Walk a transcript JSONL file backward for the most recent user record
