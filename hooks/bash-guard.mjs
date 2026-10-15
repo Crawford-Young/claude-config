@@ -612,12 +612,12 @@ const DOTNET_FILE = /\[(?:System\.)?IO\.(?:File|StreamWriter|FileStream)\]|New-O
 const RUNNER = /^(?:find|xargs|parallel)$/i;
 /** xargs' and parallel's options, as PREFIX tables (readOption); `optional`
  *  the short ones whose value is only ever attached (`-i{}`). */
-const XARGS = {
+export const XARGS = {
   value: 'adEILnPs',
   optional: 'eil',
   long: 'arg-file= delimiter= eof exit help! interactive max-args= max-chars= max-lines max-procs= no-run-if-empty null open-tty process-slot-var= replace show-limits verbose version!',
 };
-const PARALLEL = {
+export const PARALLEL = {
   value: 'aCdEIjJLnNPsS',
   optional: 'il',
   long: 'arg-file= arg-file-sep= arg-sep= bar basefile= bf= block= block-size= cat citation! colsep= compress compress-program= decompress-program= delay= delimiter= dry-run env= eof eta fifo files group halt= halt-on-error= header= help! id= joblog= jobs= keep-order line-buffer link load= max-args= max-chars= max-lines max-procs= max-replace-args= memfree= memsuspend= nice= no-run-if-empty nonall null onall pipe pipe-part plus profile= progress quote recend= recstart= regexp replace results= resume resume-failed retries= return= rpl= semaphore semaphorename= shebang shuf skip-first-line slf= ssh= sshdelay= sshlogin= sshloginfile= tag tagstring= tee termseq= timeout= tmpdir= transferfile= ungroup verbose version! wd= workdir= xapply xargs',
@@ -737,7 +737,7 @@ const SU = {
  *  too. With `permute` an option
  *  may follow an operand, as getopt reads su's. `sub` is a word to skip
  *  before the command (Windows `sudo run`). */
-const PREFIX = new Map(
+export const PREFIX = new Map(
   Object.entries({
     sudo: { ...SUDO, edit: /^(?:e|edit)$/, sub: 'run' },
     sudoedit: { ...SUDO, operands: 'files' },
@@ -826,9 +826,14 @@ function longOptions(spec, name) {
   return [...kinds.values()];
 }
 
+/** The PREFIX fields that give an option's name a role (`shell`, …). */
+export const OPTION_ROLES = Object.freeze(['split', 'shell', 'writes', 'edit', 'command', 'program']);
+/** xargs'/parallel's options whose value is the token their input replaces (`-I {}`). */
+export const REPLACE_TOKEN = /^(?:I|i|replace)$/;
+
 /** How a long option reads: whether it takes a value or stops, and which
  *  role its name has in `spec` (a shell line, a file written, …). */
-const optionKind = (spec, o) => [o.takes, o.stops, ...['split', 'shell', 'writes', 'edit', 'command', 'program'].map((r) => !!spec[r]?.test(o.name)), /^(?:I|i|replace)$/.test(o.name)].join();
+const optionKind = (spec, o) => [o.takes, o.stops, ...OPTION_ROLES.map((r) => !!spec[r]?.test(o.name)), REPLACE_TOKEN.test(o.name)].join();
 
 // How deep the readings of ambiguous options may fork, and how many forks
 // one walk may take: past either the command is blocked unread.
@@ -1329,7 +1334,7 @@ function runnerPayloads(cmd, args, inMatch = null, forks = 0) {
       return out;
     }
     k = o.k;
-    if (o.names.some((n) => /^(?:I|i|replace)$/.test(n))) token = o.value ?? '{}';
+    if (o.names.some((n) => REPLACE_TOKEN.test(n))) token = o.value ?? '{}';
   }
   let payload = args.slice(k);
   let out;
