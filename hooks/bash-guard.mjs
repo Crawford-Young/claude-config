@@ -66,7 +66,7 @@
 //      `{}`/`$1`) in a command naming one. Inline interpreter code (`node -e`,
 //      `python -c`, `node - <<EOF`, PowerShell [IO.File]) blocks on a write
 //      call whose literal path is one, or whose computed path sits in a call
-//      naming one; a runner's payload (`find -exec`, `xargs`, `env`) is
+//      naming one; a runner's payload (`find -exec`, `xargs`) is
 //      judged as a call, and a find whose payload rm/mv's `{}` (through
 //      wrappers, runners or a shell's -c script) removes like -delete: what
 //      its -name/-iname/-path names in a plain conjunction, else its start
@@ -101,7 +101,11 @@
 // bare or inside double quotes or an unquoted-delimiter heredoc (#92);
 // single-quoted text stays literal. A `{ … }` block body (PowerShell
 // if/foreach/ForEach-Object, a bash group) is parsed in place too (#159), and
-// so is an if/elseif/while condition, which PowerShell runs (#214).
+// so is an if/elseif/while condition, which PowerShell runs (#214). Every rule
+// matches a command by its name (commandName: the basename less a `.exe`, in
+// any case, so `C:/…/rm.exe` and `RM` are rm), read through the prefix
+// commands and their options (`sudo -u root`, `env -u X`, `timeout -s KILL 5`,
+// `nice -n 5`, `doas`, `setsid`) to the call they run (#239).
 
 // Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
 // errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
@@ -412,10 +416,10 @@ export function stripHeredocs(cmd) {
     out.push(line);
     const m = line.match(/<<(-?)\s*(["']?)([\w.-]+)\2/);
     if (!m) continue;
-    // The heredoc's consumer is the command word of the clause holding the `<<`
-    // (so `cat > run.sh <<EOF` is cat, not sh).
-    const consumer = (clauses(line.slice(0, m.index)).pop() || '').split(/\s+/)[0].split(/[/\\]/).pop();
-    if (/^(bash|sh|zsh|dash|pwsh|powershell|cmd)(\.exe)?$/i.test(consumer)) continue;
+    // The heredoc's consumer is the command of the clause holding the `<<`
+    // (so `cat > run.sh <<EOF` is cat, not sh; `sudo bash <<EOF` is bash).
+    const consumer = commandName(unwrapCommand(words(clauses(line.slice(0, m.index)).pop() || ''))[0] ?? '');
+    if (/^(bash|sh|zsh|dash|pwsh|powershell|cmd)$/i.test(consumer)) continue;
     const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
     if (end === -1) continue; // unterminated — leave it for the rules to read
     const subs = m[2] ? [] : substitutions(lines.slice(i + 1, end).join('\n'), true);
@@ -538,7 +542,7 @@ function namesGateRecord(text) {
 }
 /** Does `text` name a gate state file (what a removal is judged by)? */
 const namesGateState = (text) => /\.claude[\s'"`,+/\\]*(?:browser-gate-sessions|push-gate-approvals|fable-clearance)/i.test(text);
-const INTERPRETER = /^(?:node|nodejs|deno|bun|python[\d.]*|py|perl|ruby|php)(?:\.exe)?$/i;
+const INTERPRETER = /^(?:node|nodejs|deno|bun|python[\d.]*|py|perl|ruby|php)$/i;
 /** Flags that hand an interpreter its code inline: -e/--eval/-p (node, perl
  *  -ne/-pe/-pi -e), -c (python), -r (php). */
 const EVAL_FLAG = /^(?:-[a-zA-Z]*e|--eval(?:=.*)?|-p|--print|-c|-r)$/;
@@ -557,10 +561,11 @@ const CODE_REMOVE = /\b(?:(?:unlink|rm|rmdir)(?:Sync)?|os\.(?:remove|unlink)|shu
 const CODE_OPAQUE = /\.write_(?:text|bytes)\s*\(|\.open\s*\(\s*(?:mode\s*=\s*)?['"][rbt]*[wax+]|child_process|subprocess|\b(?:execSync|execFileSync|spawnSync|spawn|system|popen)\s*\(|StreamWriter|FileStream|\bopen\s*\(?\s*(?:my\s+)?[$\w]+\s*,\s*['"]\+?>/i;
 /** PowerShell's .NET file calls, which run as the command itself. */
 const DOTNET_FILE = /\[(?:System\.)?IO\.(?:File|StreamWriter|FileStream)\]|New-Object\s+(?:System\.)?IO\.(?:StreamWriter|FileStream)/i;
-/** Commands that run another command from their args (`env cp …`,
- *  `find -exec sh -c '… >> {}'`, `xargs`); their payload is judged as a call
- *  of its own (runnerPayloads). */
-const RUNNER = /^(?:find|xargs|env|timeout|nice|ionice|stdbuf|parallel|watch|script|unbuffer|busybox)$/i;
+/** Commands that run other commands from their args, maybe with their input
+ *  (`find -exec sh -c '… >> {}'`, `xargs cp`); each payload is judged as a
+ *  call of its own (runnerPayloads). One that runs the rest of its words as
+ *  they stand is a prefix (PREFIX), read through as the call it runs. */
+const RUNNER = /^(?:find|xargs|parallel|watch|script|busybox)$/i;
 const COPY = /^(?:cp|mv|install|ln|rsync|scp|copy|move|cpi|mi|copy-item|move-item)$/i;
 const MOVE = /^(?:mv|move|mi|move-item)$/i;
 const REMOVE = /^(?:rm|unlink|del|erase|ri|rmdir|rd|remove-item|shred)$/i;
@@ -571,7 +576,7 @@ const CONTENT = /^(?:set-content|add-content|clear-content|out-file|sc|ac|clc)$/
 const PS_ITEM = /^(?:copy-item|cpi|copy|move-item|mi|move|remove-item|ri|del|erase|rm|rename-item|rni|ren)$/i;
 /** Pipeline steps that pass the items they get on unchanged. */
 const PASS_THROUGH = /^(?:select-object|select|sort-object|sort|where-object|where|\?)$/i;
-const DOWNLOAD = /^(?:curl|wget)(?:\.exe)?$/i;
+const DOWNLOAD = /^(?:curl|wget)$/i;
 const TEE = /^(?:tee|tee-object)$/i;
 const IN_PLACE = /^(?:sed|perl)$/i;
 const NEW_ITEM = /^(?:new-item|ni|truncate)$/i;
@@ -633,16 +638,99 @@ function ownArgs(w) {
   return w.slice(1, end === -1 ? w.length : end);
 }
 
-/** A command word's name: its basename, less a `.exe`. */
+/** A command word's name, as every rule matches it: its basename, less a
+ *  `.exe` (`C:/…/find.exe` is find). Windows finds a command whatever its
+ *  case, in Git Bash as in PowerShell (`RM`, `Rm.EXE`), so the rules match
+ *  names case-insensitively; shell keywords and builtins keep their case. */
 const commandName = (word) => word.split(/[/\\]/).pop().replace(/\.exe$/i, '');
 
-/** A payload's real command words: past the wrappers (`sudo`, `nohup`, an env
- *  assignment) and the runners (`env`, `nice`, `timeout`, `xargs`) the guard
- *  reads through elsewhere. */
-function unwrapPayload(w) {
+/** Commands that run the rest of their words as a command (`sudo -u root rm
+ *  …`, `timeout 5 git push`), by name: the short options that take a value
+ *  (`value`) and those after which nothing runs (`stop`: `command -v`,
+ *  `sudo -l`); every long option (`long`), marked `=` when it takes a value
+ *  and `!` when nothing runs after it; the one whose value is itself a command
+ *  line (`split`: `env -S 'rm -rf x'`); and how many words come before the
+ *  command (timeout's duration). Any other option takes no value. */
+const PREFIX = new Map(
+  Object.entries({
+    sudo: {
+      value: 'aCcDgpRrTtUu',
+      stop: 'eKlVv',
+      long: 'askpass auth-type= background bell chdir= chroot= close-from= command-timeout= edit! group= help! host= login login-class= list! no-update non-interactive other-user= preserve-env preserve-groups prompt= remove-timestamp! reset-timestamp role= set-home shell stdin type= user= validate! version!',
+    },
+    doas: { value: 'u', stop: 'CL' },
+    setsid: { long: 'ctty fork wait help! version!' },
+    nohup: { long: 'help! version!' },
+    builtin: {},
+    command: { stop: 'vV' },
+    exec: { value: 'a' },
+    time: { value: 'fo', long: 'append format= help! output= portability quiet verbose version!' },
+    env: {
+      value: 'CPSu',
+      long: 'block-signal chdir= debug default-signal help! ignore-environment ignore-signal list-signal-handling null split-string= unset= version!',
+      split: /^(?:S|split-string)$/,
+    },
+    nice: { value: 'n', long: 'adjustment= help! version!' },
+    timeout: { value: 'ks', long: 'foreground help! kill-after= preserve-status signal= verbose version!', args: 1 },
+    ionice: { value: 'cn', stop: 'pPu', long: 'class= classdata= help! ignore pgid! pid! uid! version!' },
+    stdbuf: { value: 'eio', long: 'error= help! input= output= version!' },
+    unbuffer: {},
+  }),
+);
+
+/** A prefix's long option as getopt resolves `name`: the option named so,
+ *  else the one option it abbreviates (`--adj` is --adjustment), as
+ *  { name, takes, stops }; null when it abbreviates several (getopt fails,
+ *  so nothing runs); undefined when the table doesn't know it. */
+function longOption(spec, name) {
+  const all = (spec.long ?? '').split(' ').filter(Boolean).map((o) => ({ name: o.replace(/[=!]$/, ''), takes: o.endsWith('='), stops: o.endsWith('!') }));
+  const hits = all.filter((o) => o.name.startsWith(name));
+  return all.find((o) => o.name === name) ?? (hits.length > 1 ? null : hits[0]);
+}
+
+/** The words a prefix command runs (PREFIX), or null when `w` doesn't start
+ *  with one or its options run nothing. */
+function prefixed(w) {
+  const spec = PREFIX.get(commandName(w[0] ?? '').toLowerCase());
+  if (!spec) return null;
+  let k = 1;
+  for (; k < w.length && w[k].startsWith('-'); k++) {
+    const a = w[k];
+    if (a === '--') {
+      k++;
+      break;
+    }
+    // The option that takes a value, if this word holds one, and its value:
+    // attached (`-uroot`, `--user=root`) or the next word.
+    let opt = null;
+    let value;
+    if (a.startsWith('--')) {
+      const [name, attached] = a.slice(2).split(/=(.*)/s);
+      const o = longOption(spec, name);
+      if (o === null || o?.stops) return null;
+      if (o?.takes) [opt, value] = [o.name, attached ?? w[++k]];
+    } else {
+      // A cluster (`-nu root`): its first value option takes the rest of it.
+      for (let j = 1; j < a.length && !opt; j++) {
+        if (spec.stop?.includes(a[j])) return null;
+        if (spec.value?.includes(a[j])) [opt, value] = [a[j], j < a.length - 1 ? a.slice(j + 1) : w[++k]];
+      }
+    }
+    // In env -S's line `\_` separates like a space.
+    if (opt && spec.split?.test(opt)) return prefixed([w[0], ...words((value ?? '').replaceAll('\\_', ' ')), ...w.slice(k + 1)]);
+  }
+  return w.slice(k + (spec.args ?? 0));
+}
+
+/** A call's real command words: past the wrappers (an env assignment, a
+ *  subshell opener), the prefix commands (`sudo -u root`, `timeout 5`) and
+ *  the runners (`xargs`) the guard reads through elsewhere. */
+function unwrapCommand(w) {
   while (w.length) {
     const run = commandName(w[0]);
+    let inner;
     if (WRAPPER.test(w[0])) w = w.slice(1);
+    else if ((inner = prefixed(w))) w = inner;
     else if (RUNNER.test(run) && !/^find$/i.test(run)) w = runnerPayloads(run, w.slice(1))[0] ?? [];
     else break;
   }
@@ -658,7 +746,7 @@ function unwrapPayload(w) {
  *  `.` or `*` after a cd to such a path. rmdir takes only an empty dir, so
  *  never a state file. */
 function payloadRemoval(words, script = null) {
-  const w = unwrapPayload(words);
+  const w = unwrapCommand(words);
   if (!w.length) return null;
   const run = commandName(w[0]);
   const shell = shellTool(run);
@@ -742,7 +830,7 @@ function writeTargets({ cmd, words: w, text, upstream = [], spill, tool }) {
     for (const s of dest === undefined ? [] : fed(sources)) {
       add(`${dest}/${contents(s) ? '*' : (s.split(/[/\\]/).filter(Boolean).pop() ?? '')}`, { dirTarget: true, tree: true });
       if (MOVE.test(cmd)) add(s, { removes: true });
-      if (cmd === 'ln') add(s, { dirTarget: true });
+      if (/^ln$/i.test(cmd)) add(s, { dirTarget: true });
     }
   } else if (REMOVE.test(cmd)) {
     for (const p of fed([...positional, flagValue(PS_PATH)].filter(Boolean))) add(p, { removes: true });
@@ -798,7 +886,7 @@ function writeTargets({ cmd, words: w, text, upstream = [], spill, tool }) {
   } else if (TEE.test(cmd)) {
     for (const p of positional) add(p);
     add(flagValue(PS_PATH));
-  } else if (cmd === 'dd') {
+  } else if (/^dd$/i.test(cmd)) {
     for (const a of args) if (a.startsWith('of=')) add(a.slice(3));
   } else if (IN_PLACE.test(cmd) && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) {
     // The files, not the script: an -e/-f value, else sed's first positional.
@@ -907,8 +995,8 @@ function valueAt(s, i, statement) {
 
 /** A runner's payloads, as word lists: each `find -exec`/`-ok` command (to
  *  its `;`/`+`), or the command after the runner's own options (`xargs -n1
- *  cp …`, `timeout 5 cp …`, `env A=1 cp …`). xargs/parallel without -I append
- *  their input as a last word, here `{}`; an -I token reads as `{}`. */
+ *  cp …`, `watch -n 5 cp …`). xargs/parallel without -I append their input
+ *  as a last word, here `{}`; an -I token reads as `{}`. */
 function runnerPayloads(cmd, args) {
   if (/^find$/i.test(cmd)) {
     const out = [];
@@ -923,7 +1011,7 @@ function runnerPayloads(cmd, args) {
   const fed = /^(?:xargs|parallel)$/i.test(cmd);
   let token = null;
   let k = 0;
-  while (k < args.length && (args[k].startsWith('-') || isAssign(args[k]) || /^\d/.test(args[k]))) {
+  while (k < args.length && (args[k].startsWith('-') || /^\d/.test(args[k]))) {
     const flag = args[k++];
     if (fed && /^-I$|^--replace$/.test(flag)) token = args[k++];
     else if (fed && /^-I./.test(flag)) token = flag.slice(2);
@@ -1029,8 +1117,10 @@ function callForges(call, ctx, fed = false) {
   if (call.aside) return false;
   const args = ownArgs(call.words);
   if (RUNNER.test(call.cmd)) {
-    return runnerPayloads(call.cmd, args).some((w) => {
-      const cmd = w[0].split(/[/\\]/).pop();
+    return runnerPayloads(call.cmd, args).some((payload) => {
+      const w = unwrapCommand(payload);
+      if (!w.length) return false;
+      const cmd = commandName(w[0]);
       const c = SHELL_C.test(cmd) ? w.findIndex((a, i) => i > 0 && /^(?:-c|-Command)$/i.test(a)) : -1;
       if (c !== -1) return commands(w.slice(c + 1).join(' '), call.dir, false, false, newScope(call.dir, shellTool(cmd))).some((s) => callForges(s, ctx, true));
       // No redirect text: the outer shell already took any redirect as the runner's.
@@ -1063,7 +1153,7 @@ function callForges(call, ctx, fed = false) {
  *  truncate, curl -o, rm or PowerShell Copy-Item/Move-Item/New-Item/
  *  Tee-Object/Rename-Item/Remove-Item whose target resolves to one (or can't
  *  resolve and looks aimed at one, in a command naming one); a runner's
- *  payload (`find -exec`, `xargs`, `env`), judged as a call; or inline
+ *  payload (`find -exec`, `xargs`), judged as a call; or inline
  *  interpreter code (`node -e`, `python -c`, `node - <<EOF`, PowerShell
  *  [IO.File]) whose write call names one as a literal path, or writes a
  *  computed path while the command names one. Static, so best-effort: a
@@ -1099,12 +1189,12 @@ export function fileToolReason(tool, input, cwd, check = editToolReason) {
 }
 
 /** Words that only wrap the real command (subshell/group openers, env
- *  assignments, shell keywords). */
-const WRAPPER = /^(?:[({!]+|\w+\+?=.*|\$env:\w+=.*|sudo|command|builtin|time|exec|nohup|then|do|else|elif|if|while|until)$/i;
+ *  assignments, shell keywords); a prefix command is PREFIX's. */
+const WRAPPER = /^(?:[({!]+|\w+\+?=.*|\$env:\w+=.*|then|do|else|elif|if|while|until)$/i;
 const LOCATION = /^(?:cd|chdir|sl|set-location|pushd|push-location|popd|pop-location)$/i;
 const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
-const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)(?:\.exe)?$/i;
+const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
 // An if/elseif condition that runs no command: a var, a literal, `-not` one, or
 // two compared (`if ($x -eq 'b')`).
@@ -1258,7 +1348,7 @@ function moveLocation(scope, cmd, args) {
   } else stack.push(scope.dir);
 }
 
-const isCommitCall = (e) => /^git(?:\.exe)?$/i.test(e.cmd) && e.words.includes('commit');
+const isCommitCall = (e) => /^git$/i.test(e.cmd) && e.words.includes('commit');
 
 /** A copy of `scope` for a body that runs elsewhere or later (or a
  *  substitution's subshell): it reads the dir, stacks, vars and functions, but
@@ -1285,7 +1375,7 @@ const newScope = (cwd, tool = null) => ({
 });
 
 /** The shell a nested command string runs in (see newScope). */
-const shellTool = (cmd) => (/^(?:bash|sh|zsh|dash)(?:\.exe)?$/i.test(cmd) ? 'Bash' : /^(?:pwsh|powershell)(?:\.exe)?$/i.test(cmd) ? 'PowerShell' : null);
+const shellTool = (cmd) => (/^(?:bash|sh|zsh|dash)$/i.test(cmd) ? 'Bash' : /^(?:pwsh|powershell)$/i.test(cmd) ? 'PowerShell' : null);
 
 /** Record a function definition; one with the body it already has changes nothing. */
 const defineFunction = (funcs, name, body) => {
@@ -1592,7 +1682,15 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
           countOpens(lead);
           w[0] = w[0].slice(lead.length);
         }
-        if (!w.length || !WRAPPER.test(w[0])) break;
+        if (!w.length) break;
+        // A prefix command (`sudo -u root`, `timeout 5`) runs the call after it.
+        const inner = !WRAPPER.test(w[0]) && prefixed(w);
+        if (inner) {
+          wrappers.push(w[0]);
+          w.splice(0, w.length, ...inner);
+          continue;
+        }
+        if (!WRAPPER.test(w[0])) break;
         negated ||= /^[({!]+$/.test(w[0]) && w[0].includes('!');
         if (/^[({!]+$/.test(w[0])) countOpens(w[0]);
         const kw = w.shift();
@@ -1627,7 +1725,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
       // condition head of the clause (`} elseif (…) {`), as commands.
       const conditions = (blocks[seg] || []).filter(({ head }) => CONDITION_HEAD.test(head.trim()));
       if (conditions.length && conditions[0] === blocks[seg][0]) w.length = 0;
-      const cmd = w.length ? w[0].split(/[/\\]/).pop() : '';
+      const cmd = w.length ? commandName(w[0]) : '';
       const loop = inLoop || loops > 0;
       // eval/iex take the command as their words, iex maybe after -Command.
       const shellAt = !SHELL_C.test(cmd) ? -1 : EVAL.test(cmd) ? (/^-c/i.test(w[1] ?? '') ? 1 : 0) : w.findIndex((a, i) => i > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
@@ -1770,7 +1868,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
   return out;
 }
 
-const PKG_RUNNER = /^(?:pnpm|npm|yarn|bun|npx|pnpx|bunx)(?:\.cmd|\.exe)?$/i;
+const PKG_RUNNER = /^(?:pnpm|npm|yarn|bun|npx|pnpx|bunx)(?:\.cmd)?$/i;
 const PKG_FLAG_WITH_ARG = /^(?:--filter|-F|-C|--dir|--prefix|--workspace|-w)$/;
 const PKG_GATE = /^(?:test|lint|typecheck|e2e|vitest|tsc)$/;
 const JUST_GATE = /^(?:check|test|lint|typecheck|e2e|clippy)$/;
@@ -1779,7 +1877,7 @@ const firstArg = (args) => args.find((a) => !a.startsWith('-') && !a.startsWith(
 /** 3. Is this command a QA gate whose exit code matters? Read by command word
  *  and subcommand, so `npm view vitest` or `grep tsc` is not a gate (#98). */
 function isGate({ cmd, words: w }) {
-  const c = cmd.replace(/\.(?:cmd|exe)$/i, '').toLowerCase();
+  const c = cmd.replace(/\.cmd$/i, '').toLowerCase();
   const args = w.slice(1);
   if (PKG_RUNNER.test(cmd)) {
     // Skip flags (and their values) and the run/exec verbs to the script or bin.
@@ -1811,7 +1909,7 @@ function isGate({ cmd, words: w }) {
 export function gitCalls(raw, cwd, tool = null) {
   const out = [];
   for (const { cmd, words: w, dir, vars, viaOr, loop, arms = [] } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
-    if (!/^git(?:\.exe)?$/i.test(cmd)) continue;
+    if (!/^git$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
     for (; i < w.length && w[i].startsWith('-'); i++) {
@@ -1829,7 +1927,7 @@ export function gitCalls(raw, cwd, tool = null) {
 export function ghCalls(raw, cwd, tool = null) {
   const out = [];
   for (const { cmd, words: w } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
-    if (!/^gh(?:\.exe)?$/i.test(cmd)) continue;
+    if (!/^gh$/i.test(cmd)) continue;
     // `-R x` / `--repo x` take a value, before the subcommand or after it.
     const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
     out.push({ sub: nonFlag[0] || null, action: nonFlag[1] || null, args: w.slice(1) });
@@ -2096,7 +2194,7 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
   return null;
 }
 
-const PW_LAUNCHER = /^(?:npx|pnpx|bunx|pnpm|yarn|npm|bun)(?:\.cmd|\.exe)?$/i;
+const PW_LAUNCHER = /^(?:npx|pnpx|bunx|pnpm|yarn|npm|bun)(?:\.cmd)?$/i;
 const PW_VISIBLE_SUB = /^(?:codegen|show-report|show-trace|open)$/;
 const PW_VISIBLE_FLAG = /^--(?:headed|ui|debug)(?:=.*)?$/;
 
@@ -2108,7 +2206,7 @@ const PW_VISIBLE_FLAG = /^--(?:headed|ui|debug)(?:=.*)?$/;
 export function browserCommand(raw, cwd, tool = null) {
   for (const { cmd, words: w } of commands(scrub(raw), cwd, false, false, newScope(cwd, tool))) {
     let p = -1;
-    if (/^playwright(?:\.cmd|\.exe)?$/i.test(cmd)) p = 0;
+    if (/^playwright(?:\.cmd)?$/i.test(cmd)) p = 0;
     else if (PW_LAUNCHER.test(cmd)) {
       const i = w.findIndex((a, j) => j > 0 && !/^(?:-.*|exec|dlx|x|run)$/.test(a));
       if (i !== -1 && /^(?:@playwright\/test|playwright)$/.test(w[i])) p = i;

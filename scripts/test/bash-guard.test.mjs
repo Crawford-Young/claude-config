@@ -2744,3 +2744,158 @@ test("#214 review 7: find's own options before the start dirs are skipped", () =
   ]) forgesIn(c);
   allowedIn(`find -L ~/.claude -name '*.tmp' -delete`);
 });
+
+// --- #239 --------------------------------------------------------------------
+
+test('#239: an .exe or path spelling of a modelled command, in any case, is judged like the bare form', () => {
+  const S = '~/.claude/push-gate-approvals.json';
+  for (const c of [
+    `rm.exe -rf ~/.claude`,
+    `Rm.EXE ${S}`,
+    `/usr/bin/rm.exe ${S}`,
+    `mv.exe ${S} /tmp`,
+    `cp.exe /tmp/x ${S}`,
+    `LN -s ${S} /tmp/l`,
+    `ln.exe -s ${S} /tmp/l`,
+    `DD if=/tmp/x of=${S}`,
+    `sed.exe -i s/a/b/ ${S}`,
+    `find.exe ~/.claude -delete`,
+    `FIND ~/.claude -name push-gate-approvals.json -delete`,
+    `find.exe ~ -name .claude -exec rm.exe -rf {} +`,
+  ]) forgesIn(c);
+  // A quoted path runs under PowerShell only through the call operator.
+  forgesIn(`'C:/Program Files/Git/usr/bin/find.exe' ~/.claude -name push-gate-approvals.json -exec rm {} \\;`, ['Bash', null]);
+  forgesIn(`& 'C:/Program Files/Git/usr/bin/find.exe' ~/.claude -name push-gate-approvals.json -exec rm {} ';'`, ['PowerShell']);
+  forgesIn(`'C:/Program Files/Git/usr/bin/find.exe' ~ -name .claude -exec rm -rf {} \\;`, ['Bash', null]);
+  forgesIn(`& 'C:/Program Files/Git/usr/bin/rm.exe' ${S}`);
+  for (const tool of ['Bash', 'PowerShell', null]) {
+    for (const c of ['git.exe push', 'GIT.EXE push', `'C:/Program Files/Git/cmd/git.exe' push`]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
+    assert.deepEqual(gatedVerbs('gh.exe pr merge 5', '/work', tool), ['gh pr merge'], tool);
+  }
+  // Reads stay open.
+  allowedIn(`cat.exe ${S}`);
+  allowedIn(`find.exe ~/.claude -name '*.tmp' -delete`);
+});
+
+test('#239: a wrapper is read through its options to the command it runs', () => {
+  const prefixes = [
+    'sudo',
+    'sudo -u root',
+    'sudo -g wheel',
+    'sudo -C 3',
+    'sudo -nu root',
+    'sudo -uroot',
+    'sudo --user=root',
+    'sudo --user root',
+    'sudo.exe -u root',
+    'doas',
+    'doas -u root',
+    'setsid',
+    'setsid -w',
+    'nohup',
+    'env -u X',
+    'env -C /tmp',
+    'env -i A=1',
+    'env --unset X',
+    'nice -n 5',
+    'nice -n -5',
+    'nice --adjustment 5',
+    'nice -10',
+    'timeout 5',
+    'timeout 5s',
+    'timeout -s KILL 5',
+    'timeout --signal KILL -k 2 5',
+    'ionice -c 3',
+    'stdbuf -o L',
+    'exec -a x',
+    'sudo -u root env -u X timeout -s KILL 5',
+  ];
+  for (const p of prefixes) {
+    forgesIn(`${p} rm -rf ~/.claude`);
+    forgesIn(`${p} cp /tmp/x ~/.claude/push-gate-approvals.json`);
+    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
+    forgesIn(`find /tmp -name x -exec ${p} cp {} ~/.claude/push-gate-approvals.json +`);
+    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
+  }
+  // env -S splits its value into the command line.
+  forgesIn(`env -S 'rm -rf ~/.claude'`);
+  // A prefix with no command after it still has its redirect read.
+  for (const p of ['env', 'env -i', 'sudo', 'nohup', 'timeout 5']) forgesIn(`${p} > ~/.claude/push-gate-approvals.json`);
+  // Options after which nothing runs: a lookup, a listing.
+  for (const tool of ['Bash', 'PowerShell', null]) {
+    for (const c of ['command -v git push', 'sudo -l git push', 'doas -C /etc/doas.conf git push']) assert.deepEqual(gatedVerbs(c, '/work', tool), [], `${tool} ${c}`);
+  }
+  // Ordinary wrapped commands and reads stay open.
+  for (const c of [
+    'timeout 5 npm test',
+    'sudo -u x ls',
+    'env -u X node a.mjs',
+    'nice -n 5 make',
+    'sudo -u x cat ~/.claude/push-gate-approvals.json',
+    'timeout 5 ls ~/.claude',
+    'find ~/.claude -name x -exec sudo -u root cat {} +',
+  ]) allowedIn(c);
+});
+
+test('#239: a wrapped gate or shell is read as that command by the other rules', () => {
+  // Rule 3: a gate piped onward, under a timeout.
+  assert.ok(staticCheck('timeout 300 npm test | tail -5', '/work', 'Bash'));
+  assert.ok(staticCheck('env CI=1 pnpm test | tail', '/work', 'Bash'));
+  // A heredoc fed to a wrapped shell runs.
+  for (const tool of ['Bash', null]) assert.deepEqual(gatedVerbs('sudo -u root bash <<EOF\ngit push\nEOF', '/work', tool), ['git push'], tool);
+});
+
+// --- #239 review -------------------------------------------------------------
+
+test('#239 review: a long option is read by any unambiguous abbreviation, its value attached or next', () => {
+  const prefixes = [
+    // Blocked on main by the runner's digit skip: pinned against regressing.
+    'nice --adj 5',
+    'nice --adjustment=5',
+    'timeout --sig KILL 5',
+    'timeout --sig=KILL 5',
+    'timeout --kill 2 5',
+    'env --uns X',
+    'env --uns=X',
+    'env --ch /tmp',
+    'sudo --us root',
+    'sudo --us=root',
+    'sudo --auth-type x',
+    'sudo -a x',
+    'sudo -c default',
+    'sudo --login-class default',
+    'stdbuf --out L',
+  ];
+  for (const p of prefixes) {
+    forgesIn(`${p} rm -rf ~/.claude`);
+    forgesIn(`${p} cp /tmp/x ~/.claude/push-gate-approvals.json`);
+    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
+    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
+  }
+  // A stop option abbreviated still runs nothing.
+  for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs('sudo --li git push', '/work', tool), [], tool);
+  allowedIn('nice --adj 5 make');
+});
+
+test('#239 review 2: a long option resolves as getopt does: an exact name, else a prefix unique among all', () => {
+  // An exact no-value name wins over the value option it prefixes (sudo
+  // --login vs --login-class, ionice --class vs --classdata); an option the
+  // table doesn't know takes no value (Windows sudo's --inline).
+  for (const p of ['sudo --login', 'sudo --login-class x', 'sudo --login -u root', 'ionice --class 3', 'ionice --classdata 4', 'sudo --inline']) {
+    forgesIn(`${p} rm -rf ~/.claude`);
+    forgesIn(`${p} cp /tmp/x ~/.claude/push-gate-approvals.json`);
+    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
+    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
+  }
+  // An ambiguous prefix fails in getopt, and --help/--version run nothing.
+  for (const c of ['sudo --lo git push', 'ionice --clas 3 git push', 'env --=x git push', 'nice --help git push', 'timeout --vers git push']) {
+    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), [], `${tool} ${c}`);
+  }
+});
+
+test("#239 review: env -S splits its value at \\_ as at a space, and --split abbreviates -S", () => {
+  for (const c of [`env -S 'rm\\_-rf\\_~/.claude'`, `env --split 'rm -rf ~/.claude'`, `env --split='rm -rf ~/.claude'`]) forgesIn(c);
+  for (const tool of ['Bash', 'PowerShell', null]) {
+    for (const c of [`env -S 'git\\_push'`, `env --split 'git push'`]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
+  }
+});
