@@ -875,3 +875,10 @@ test('#243: a teammate dropped by a session exit does not suppress the continuat
   const afterResume = [...waiting, exited, sessionStart(30, 'resume'), human(29, 'where were we?'), say(28, finished)];
   assert.deepEqual(stopCodes(afterResume, [waiting.length, afterResume.length]), [0, 2]);
 });
+
+test('#249: a command the guard blocks unread is no merge, and the merges around it still count', () => {
+  const unread = "C=echo env -S '${C} x'";
+  assert.equal(isMerge(unread), false);
+  const tx = (...r) => r.map((x) => JSON.stringify(x)).join('\n');
+  assert.equal(lastMerge(tx(call('a', 'gh pr merge 2'), result('a'), call('u', unread), result('u'))), 'a');
+});

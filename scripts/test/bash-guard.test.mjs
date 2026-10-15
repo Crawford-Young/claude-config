@@ -508,7 +508,8 @@ test('#159: a block shares the cwd of the clauses around it; brace text that is 
   assert.deepEqual(args('git log HEAD@{1} -- {a,b}.ts'), [['HEAD@{1}', '--', '{a,b}.ts']]);
   assert.deepEqual(args('git rev-parse @{u} ${REF} {1..3}'), [['@{u}', '${REF}', '{1..3}']]);
   assert.deepEqual(args("git log --format='{ %h }'"), [['--format={ %h }']]);
-  assert.deepEqual(args('find . -exec git add {} \\;'), []);
+  // find's `{}` is an argument of its payload's git call (#249), not a block.
+  assert.deepEqual(args('find . -exec git add {} \\;'), [['{}']]);
   assert.deepEqual(clauses("if ($x) { git add a; git commit -m b }; echo c"), ['if ($x) { git add a; git commit -m b }', 'echo c']);
 });
 
@@ -2887,8 +2888,13 @@ test('#239 review 2: a long option resolves as getopt does: an exact name, else 
     forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
     for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
   }
-  // An ambiguous prefix fails in getopt, and --help/--version run nothing.
-  for (const c of ['sudo --lo git push', 'ionice --clas 3 git push', 'env --=x git push', 'nice --help git push', 'timeout --vers git push']) {
+  // An ambiguous prefix is read every way it could resolve, and the strictest
+  // reading counts (#249): sudo --lo as --login, ionice --clas and env --=x as
+  // a value option. --help, and timeout's duration, still run nothing.
+  for (const c of ['sudo --lo git push', 'ionice --clas 3 git push', 'env --=x git push']) {
+    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
+  }
+  for (const c of ['nice --help git push', 'timeout --vers git push']) {
     for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), [], `${tool} ${c}`);
   }
 });
@@ -2898,4 +2904,415 @@ test("#239 review: env -S splits its value at \\_ as at a space, and --split abb
   for (const tool of ['Bash', 'PowerShell', null]) {
     for (const c of [`env -S 'git\\_push'`, `env --split 'git push'`]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
   }
+});
+
+// --- #249 --------------------------------------------------------------------
+
+const TOOLS = ['Bash', 'PowerShell', null];
+const gated = (c, verbs) => {
+  for (const tool of TOOLS) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
+};
+
+test('#249: the push gate reads git/gh calls inside runner payloads', () => {
+  for (const c of [
+    'echo x | xargs git push',
+    'echo x | sudo xargs -n1 git push',
+    "find . -exec git push ';'",
+    "find . -name x -execdir git push origin {} ';'",
+    "find . -ok git push ';'",
+    "find . -exec sh -c 'git push' ';'",
+    "find . -exec xargs git push ';'",
+    'xargs sh -c "git push"',
+    'busybox xargs git push',
+    'parallel git push ::: a',
+    'watch git push',
+    "watch -n 5 'git push origin main'",
+    'watch -x git push',
+  ]) gated(c, ['git push']);
+  gated('echo 5 | xargs gh pr merge', ['gh pr merge']);
+  gated("find . -exec gh pr create --fill ';'", ['gh pr create']);
+  // A payload that runs no gated verb, or prints one, stays open.
+  for (const c of ['echo x | xargs git status', "find . -exec git log ';'", 'xargs echo git push', 'watch git status', 'watch -x echo git push']) gated(c, []);
+});
+
+test('#249: the git rules read a runner payload as a call that may repeat, in a dir -execdir leaves unknown', () => {
+  assert.match(staticCheck('echo a | xargs git add -A', '/work', 'Bash') ?? '', /git add -A/);
+  const [exec] = gitCalls("find . -exec git commit -m x ';'", '/work', 'Bash');
+  assert.deepEqual([exec.sub, exec.repo, exec.loop], ['commit', '/work', true]);
+  const [execdir] = gitCalls("find . -execdir git commit -m x ';'", '/work', 'Bash');
+  assert.deepEqual([execdir.sub, execdir.repo], ['commit', UNKNOWN_DIR]);
+  const h = tmpHome();
+  const born = join(h, 'born');
+  bornRepo(born);
+  const unborn = join(h, 'unborn');
+  mkdirSync(unborn);
+  execFileSync('git', ['init', '-q', '-b', 'main', unborn]);
+  for (const c of ["find . -exec git commit -m x ';'", 'echo a | xargs git commit -m x', "watch 'git commit -m x'", "su -c 'git commit -m x'"]) {
+    assert.match(branchRules(c, born, 'Bash') ?? '', /never commit to the default branch/, c);
+  }
+  // A payload may run once per input: no root-commit exemption.
+  for (const c of ['echo a | xargs git commit -m x', "watch 'git commit -m x'"]) assert.match(branchRules(c, unborn, 'Bash') ?? '', /never commit/, c);
+  assert.equal(branchRules("su -c 'git commit -m root'", unborn, 'Bash'), null);
+});
+
+test('#249: a pipe-fed xargs payload is judged with each path the pipeline names as its input', () => {
+  for (const c of [
+    'echo ~/.claude | xargs rm -rf',
+    'echo ~/.claude | sudo xargs rm -rf',
+    'echo ~/.claude | timeout 5 xargs rm -rf',
+    'echo ~/.claude | xargs sudo rm -rf',
+    'echo ~/.claude | xargs -n1 rm -rf',
+    'echo ~/.claude/push-gate-approvals.json | xargs rm',
+    'find ~/.claude -type f | xargs rm',
+    'find ~/.claude -type f | grep json | xargs rm -f',
+    'ls -d ~/.claude | xargs -I{} mv {} /tmp/c',
+    'echo ~/.claude | xargs mv -t /tmp',
+    "echo ~/.claude | xargs sh -c 'rm -rf \"$1\"' _",
+    'echo ~ | xargs -I{} rm -rf {}/.claude',
+    'echo ~/.claude | parallel rm -rf',
+  ]) forgesIn(c);
+  for (const c of [
+    'echo x | xargs ls',
+    'echo ~/.claude | xargs ls',
+    'echo /tmp/x | xargs rm -rf',
+    "find . -name '*.log' | xargs rm",
+    "find ~/.claude/projects -name '*.tmp' | xargs rm",
+    'git ls-files -z | xargs -0 rm',
+  ]) allowedIn(c);
+});
+
+test('#249: taskset, chrt, runuser, flock, strace, systemd-run and pkexec are read through to the call they run', () => {
+  const prefixes = [
+    'taskset 0x3',
+    'taskset -c 0-3',
+    'taskset --cpu-list 0',
+    'chrt 10',
+    'chrt -f 10',
+    'chrt --rr 5',
+    'chrt -d -T 1 -P 2 -D 2 0',
+    'runuser -u root',
+    'runuser --user=root',
+    'runuser -u root --',
+    'flock /tmp/l',
+    'flock -w 5 /tmp/l',
+    'flock -x -E 3 /tmp/l',
+    'strace',
+    'strace -f -o /tmp/s',
+    'strace -e trace=file',
+    'systemd-run',
+    'systemd-run --user -p X=1',
+    'systemd-run --scope',
+    'systemd-run -u name',
+    'pkexec',
+    'pkexec --user root',
+    'sudo run',
+    'sudo.exe run',
+    'sudo -D /tmp run',
+    'sudo run -D /tmp',
+    'env -a x',
+    'env --argv0 x',
+    'env --argv0=x',
+  ];
+  for (const p of prefixes) {
+    forgesIn(`${p} rm -rf ~/.claude`);
+    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
+    gated(`${p} git push`, ['git push']);
+    gated(`find . -exec ${p} git push ';'`, ['git push']);
+  }
+  // Options after which nothing runs: an attach to a pid, a listing.
+  for (const c of ['taskset -p 1234 git push', 'chrt -p 10 1234 git push', 'chrt -m git push', 'strace -p 1234 git push', 'pkexec --version git push']) gated(c, []);
+});
+
+test('#249: su -c, runuser -c, script -c, flock -c and watch run a shell line', () => {
+  const lines = [
+    (x) => `su -c '${x}'`,
+    (x) => `su root -c '${x}'`,
+    (x) => `su - root -c '${x}'`,
+    (x) => `su -lc '${x}' root`,
+    (x) => `su --command='${x}'`,
+    (x) => `runuser root -c '${x}'`,
+    (x) => `runuser -l root --command '${x}'`,
+    (x) => `script -qc '${x}' /dev/null`,
+    (x) => `script /dev/null -c '${x}'`,
+    (x) => `script --command '${x}'`,
+    (x) => `flock /tmp/l -c '${x}'`,
+    (x) => `flock -n /tmp/l --command '${x}'`,
+    (x) => `watch '${x}'`,
+    (x) => `watch -n 5 '${x}'`,
+  ];
+  for (const line of lines) {
+    forgesIn(line('rm -rf ~/.claude'));
+    forgesIn(line('cd /tmp && rm -rf ~/.claude'));
+    gated(line('git push'), ['git push']);
+    gated(line('cd /tmp; git push'), ['git push']);
+    gated(`find . -exec ${line('git push')} ';'`, ['git push']);
+  }
+  // With no -c, su and script start a shell that reads nothing the guard sees.
+  for (const c of ['su root', 'su - root', 'script out.log', "su -c 'ls ~/.claude'", "watch 'ls ~/.claude'"]) allowedIn(c);
+  for (const c of ["su -c 'git status'", 'su git push', "script -c 'echo git push'"]) gated(c, []);
+});
+
+test('#249: env -S stops at an unquoted \\c and blocks a ${VAR} command it would expand', () => {
+  forgesIn(`env -S 'rm -rf ~/.claude\\c'`);
+  forgesIn(`env -S 'rm -rf ~/.claude\\c x'`);
+  gated(`env -S 'git push\\c x'`, ['git push']);
+  // Past \c env reads nothing; inside quotes it is no stop.
+  allowedIn(`env -S 'echo\\c rm -rf ~/.claude'`);
+  forgesIn(`env -S "rm '\\c' ~/.claude"`, ['Bash', null]);
+  // A ${VAR} command is whatever env expands it to: blocked unread.
+  for (const c of [`C=rm env -S '\${C} -rf ~/.claude'`, `G=git env -S '\${G} push'`, `env -S 'A=1 \${G} push'`, `find . -exec env -S '\${G} push' ';'`]) {
+    for (const tool of TOOLS) {
+      for (const rule of [staticCheck, gatedVerbs]) assert.throws(() => rule(c, '/work', tool), /env -S .* can't read/, `${tool} ${rule.name} ${c}`);
+    }
+  }
+  const h = tmpHome();
+  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_input: { command: `G=git env -S '\${G} push'` }, cwd: h }), home: h });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /can't read/);
+  assert.doesNotMatch(r.stderr, /failed before/);
+  // A ${VAR} argument is read like any other var.
+  allowedIn(`env -S 'node \${X}'`);
+  forgesIn(`env -S 'rm -rf \${HOME}/.claude'`);
+});
+
+test('#249: time -o, strace -o, sudo -e, sudoedit and script write their files', () => {
+  const S = '~/.claude/push-gate-approvals.json';
+  for (const c of [
+    `time -o ${S} ls`,
+    `time -o ${S}`,
+    `time -a -o ${S} git status`,
+    `time --output=$HOME/.claude/push-gate-approvals.json ls`,
+    `time --out ${S} ls`,
+    `time -o ${S} bash -c 'ls'`,
+    `time -o ${T} ls`,
+    `strace -o ${S} ls`,
+    `sudo -e ${S}`,
+    `sudo --edit ${S}`,
+    `sudo -u root -e ${S}`,
+    `sudoedit ${S}`,
+    `sudoedit -u root /tmp/x ${S}`,
+    `script ${S}`,
+    `script -c ls ${S}`,
+    `script -O ${S} -c ls`,
+    `find . -exec time -o ${S} ls ';'`,
+    `find . -exec sudo -e ${S} ';'`,
+  ]) forgesIn(c);
+  for (const c of ['time -o /tmp/t ls', 'sudo -e /etc/hosts', 'sudoedit /tmp/x', 'time ls ~/.claude', 'script -c ls /tmp/log', 'strace -o /tmp/s ls ~/.claude']) allowedIn(c);
+  gated('sudo -e git push', []);
+});
+
+test('#249: the false blocks the #239 review checked stay allowed', () => {
+  for (const c of ['sudo --login ls', 'nice --adj 5 make', 'timeout --sig KILL 5 npm test', `env -S 'node a.mjs'`, 'echo x | xargs ls', 'find . -exec grep foo {} +', 'watch ls']) {
+    allowedIn(c);
+    gated(c, []);
+  }
+});
+
+// --- #249 review round 1 -----------------------------------------------------
+
+test('#249 review: su and runuser hand the words after the user to the shell', () => {
+  for (const c of [`su bob -- -c 'git push'`, `su - bob -- -c 'git push'`, `runuser bob -- -c 'git push'`, `su bob -- -lc 'git push'`]) gated(c, ['git push']);
+  // -s names the shell those words go to.
+  for (const c of ['su -s /usr/bin/git root -- push', 'runuser --shell=/usr/bin/git bob -- push', "flock /tmp/l --command='git push'"]) gated(c, ['git push']);
+  forgesIn(`su bob -- -c 'rm -rf ~/.claude'`);
+  forgesIn(`find ~ -name x -exec su bob -- -c 'rm -rf ~/.claude' ';'`);
+  for (const c of [`su bob -- -c 'git status'`, 'su bob -- script.sh', 'su bob']) gated(c, []);
+});
+
+test('#249 review: one shell-flag reader takes -c in a cluster and cmd /c, at top level and in payloads', () => {
+  for (const c of [
+    `bash -lc 'git push'`,
+    `bash -ec 'git push'`,
+    `sh -xc 'git push'`,
+    `bash -l -c 'git push'`,
+    'cmd /c git push',
+    'xargs cmd /c git push',
+    "find . -exec cmd /c git push ';'",
+    `xargs bash -lc 'git push'`,
+    `find . -exec sh -ec 'git push' ';'`,
+    `xargs eval 'git push'`,
+  ]) gated(c, ['git push']);
+  forgesIn(`bash -lc 'rm -rf ~/.claude'`);
+  forgesIn(`find ~ -name .claude -exec sh -ec 'rm -rf "$1"' _ {} ';'`);
+  // A PowerShell flag holding a c is no -c; a shell running a script file runs nothing the guard reads.
+  for (const c of [`pwsh -NonInteractive -Command 'git status'`, 'pwsh -NonInteractive -File x.ps1', 'bash -l script.sh']) gated(c, []);
+  gated(`pwsh -NonInteractive -Command 'git push'`, ['git push']);
+});
+
+test('#249 review: a pipeline feeds xargs and parallel for every rule, through groups, shells and busybox', () => {
+  gated('echo push | xargs git', ['git push']);
+  gated(`echo 'pr create' | xargs gh`, ['gh pr create']);
+  gated(`echo 'git push' | xargs -I{} sh -c '{}'`, ['git push']);
+  gated(`echo 'git push' | parallel`, ['git push']);
+  gated('echo push | busybox xargs git', ['git push']);
+  gated('echo x | xargs git push', ['git push']);
+  for (const c of ['echo push | { xargs git; }', `echo push | bash -c 'xargs git'`, '{ echo push; } | xargs git']) {
+    for (const tool of ['Bash', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
+  }
+  assert.match(staticCheck('echo . | xargs git add', '/work', 'Bash') ?? '', /git add \./);
+  forgesIn('echo ~/.claude | busybox xargs rm -rf');
+  for (const c of [
+    'echo ~/.claude | { xargs rm -rf; }',
+    `echo ~/.claude | bash -c 'xargs rm -rf'`,
+    '{ echo ~/.claude; } | xargs rm -rf',
+    'echo ~/.claude | ( xargs rm -rf )',
+    'xargs rm -rf <<< ~/.claude',
+    'xargs rm -rf <<<~/.claude',
+  ]) forgesIn(c, ['Bash', null]);
+  for (const c of ['echo ~/.claude | { xargs ls; }', 'xargs ls <<< ~/.claude', 'echo /tmp | { xargs rm -rf; }']) allowedIn(c, '/work', ['Bash', null]);
+});
+
+test('#249 review: xargs and parallel options resolve like a prefix table, and parallel runs its inputs when given no command', () => {
+  for (const c of [
+    'xargs --delimiter X git push',
+    'xargs --delim X git push',
+    'xargs --delimiter=X git push',
+    'xargs --arg-file list git push',
+    'xargs --process-slot-var V git push',
+    'xargs -0 -r -t git push',
+    'xargs --replace git push',
+    'xargs -i git push',
+    'xargs -n1 -P4 git push',
+    'parallel -S host git push ::: a',
+    'parallel --joblog f git push ::: a',
+    'parallel --jobs 4 git push ::: a',
+    'parallel -j4 --tag git push ::: a b',
+    `parallel ::: 'git push'`,
+    `parallel -j 2 ::: 'echo x' 'git push'`,
+  ]) gated(c, ['git push']);
+  forgesIn(`parallel ::: 'rm -rf ~/.claude'`);
+  forgesIn('xargs --delimiter X rm -rf ~/.claude');
+  for (const c of ['xargs --max-args 1 echo', 'parallel echo ::: git push', 'xargs -I % echo git push %']) gated(c, []);
+});
+
+test('#249 review: strace -o |cmd or !cmd pipes its output into a command line', () => {
+  for (const c of [`strace -o '|git push' ls`, `strace -o '!git push' ls`, `strace --output='|git push' ls`, `find . -exec strace -o '|git push' ls ';'`]) gated(c, ['git push']);
+  forgesIn(`strace -o '|rm -rf ~/.claude' ls`);
+  forgesIn(`strace -o '|tee ~/.claude/push-gate-approvals.json' ls`);
+  gated('strace -o /tmp/s ls', []);
+  allowedIn('strace -o /tmp/s ls');
+});
+
+test('#249 review: systemd-run -C and strace --quiet/--trace-fds read right; a wrapped gate piped onward is rule 3', () => {
+  for (const c of ['systemd-run -C cap git push', 'strace --quiet git push', 'strace --quiet=attach git push', 'strace --trace-fds 3 git push', 'strace --silent git push']) gated(c, ['git push']);
+  const piped = /pipe after a gate/;
+  for (const c of ['watch pnpm test | tail', `bash -c 'pnpm test' | tail`, '{ pnpm test; } | tail -5', `echo x | bash -c 'pnpm test | cat'`]) {
+    assert.match(staticCheck(c, '/work', 'Bash') ?? '', piped, c);
+  }
+  for (const c of ['watch pnpm test', `bash -c 'pnpm test'; echo x | tail`, `echo x | bash -c 'pnpm test'`]) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
+});
+
+test('#249 review: chrt reads its priority only when the word is a number', () => {
+  for (const c of ['chrt -o git push', 'chrt --other git push', 'chrt -b git push', 'chrt --idle git push', 'chrt -f 10 git push', 'chrt -o 0 git push']) gated(c, ['git push']);
+  forgesIn('chrt -o rm -rf ~/.claude');
+  gated("find . -exec chrt --batch git push ';'", ['git push']);
+});
+
+// --- #249 review round 2 -----------------------------------------------------
+
+test('#249 review 2: parallel with a command runs it on its ::: inputs, appended or as {}', () => {
+  for (const c of ['parallel rm -rf ::: ~/.claude', 'parallel rm -r {} ::: ~/.claude', 'parallel mv ::: ~/.claude /tmp/x', "find . -exec parallel rm -rf ::: ~/.claude ';'"]) forgesIn(c);
+  for (const c of ['parallel git ::: push', 'parallel git {} ::: push', 'parallel -j1 git ::: push', "find . -exec parallel git ::: push ';'"]) gated(c, ['git push']);
+  gated("parallel gh ::: 'pr create'", ['gh pr create']);
+  gated('parallel echo ::: git push', []);
+  allowedIn('parallel rm -rf ::: /tmp/x');
+});
+
+test('#249 review 2: a shell line after -- is the line', () => {
+  for (const c of ["bash -c -- 'git push'", "sh -ec -- 'git push'", "xargs bash -c -- 'git push'"]) gated(c, ['git push']);
+  forgesIn("bash -c -- 'rm -rf ~/.claude'");
+});
+
+test('#249 review 2: cmd /r and an attached /c run a line', () => {
+  for (const c of ['cmd /r git push', 'cmd /cgit push', 'cmd /d /c git push', "pwsh -nop -ExecutionPolicy Bypass -c 'git push'"]) gated(c, ['git push']);
+  for (const c of ['pwsh -File x.ps1 git push', 'powershell -ExecutionPolicy Bypass -File x.ps1', "pwsh -NonInteractive -Command 'git status'", 'cmd /c git status']) gated(c, []);
+});
+
+test('#249 review 2: strace reads under the MSYS and the Linux grammar alike', () => {
+  for (const c of ['strace -u git push', 'strace -e git push', 'strace -m all git push', 'strace --mask=all git push', 'strace -f -u git push', 'strace -u bob git push', 'strace -e trace=file git push', 'strace -b 4096 git push']) gated(c, ['git push']);
+  forgesIn('strace -u rm -rf ~/.claude');
+  forgesIn('strace -u bob rm -rf ~/.claude');
+  gated('strace -u bob ls', []);
+});
+
+// --- #249 review round 3 -----------------------------------------------------
+
+test('#249 review 3: an ambiguous long option is read every way it could resolve, and the strictest reading counts', () => {
+  for (const c of [
+    'strace --use git push',
+    'strace --u git push',
+    'strace --e git push',
+    'strace --c git push',
+    'strace --tr git push',
+    'strace --ti git push',
+    'strace --o x git push',
+    'strace --f 5 git push',
+    'xargs --max git push',
+    'echo x | xargs --max 1 git push',
+    "find . -exec strace --use git push ';'",
+  ]) gated(c, ['git push']);
+  for (const c of ['env --ign rm -rf ~/.claude', 'sudo --lo rm -rf ~/.claude', 'env --=x rm -rf ~/.claude', 'strace --use rm -rf ~/.claude', "find ~ -name .claude -exec env --ign rm -rf {} +"]) forgesIn(c);
+  // An ambiguous strace --o may be --output: its pipe runs.
+  gated(`strace --o '|git push' ls`, ['git push']);
+  // Readings that run nothing gated stay open.
+  for (const c of ['env --ign ls', 'strace --use ls', 'xargs --max 1 echo']) {
+    allowedIn(c);
+    gated(c, []);
+  }
+});
+
+test('#249 review 3: a command too ambiguous to read is blocked unread, in bounded time', () => {
+  const c = `strace ${'--=a '.repeat(12)}git push`;
+  for (const rule of [staticCheck, gatedVerbs]) assert.throws(() => rule(c, '/work', 'Bash'), /ambiguous/, rule.name);
+  const h = tmpHome();
+  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_input: { command: c }, cwd: h }), home: h });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /ambiguous/);
+});
+
+test("#249 review 3: PowerShell's -c, -Command and /c are read as on main, wherever they stand", () => {
+  for (const c of [
+    'powershell /c "git push"',
+    'powershell /noprofile /c "git push"',
+    'powershell -noprof -c "git push"',
+    'powershell -in text -c "git push"',
+    'powershell -i text -c "git push"',
+    'powershell -NonI -NoProf -c "git push"',
+    "pwsh -NonInteractive -Command 'git push'",
+  ]) gated(c, ['git push']);
+  for (const c of ['powershell /c "Remove-Item -Recurse -Force ~/.claude"', 'powershell -noprof -c "Remove-Item -Recurse -Force ~/.claude"']) forgesIn(c);
+  for (const c of ['pwsh -File x.ps1', "powershell -NoProfile -Command 'git status'"]) gated(c, []);
+});
+
+// --- #249 review round 4 -----------------------------------------------------
+
+test("#249 review 4: words the caller split, rejoined into a line, are read with the caller's variables", () => {
+  for (const c of [
+    'D=~/.claude; watch rm -rf $D',
+    'D=~/.claude; watch -n 5 rm -rf $D',
+    'D=~/.claude; strace -u x rm -rf $D',
+    'D=~/.claude; strace --us x rm -rf $D',
+    'D=~/.claude; strace --user x rm -rf $D',
+    "D=~/.claude; find . -exec watch rm -rf $D ';'",
+    "D=~/.claude; find . -exec strace -u x rm -rf $D ';'",
+    'D=~/.claude; echo x | xargs watch rm -rf $D',
+    'D=~/.claude; cmd /c rm -rf $D',
+  ]) forgesIn(c, ['Bash', null]);
+  for (const c of ['D=/tmp/x; watch rm -rf $D', 'D=/tmp/x; strace -u x rm -rf $D', "D=/tmp/x; find . -exec watch rm -rf $D ';'"]) allowedIn(c, '/work', ['Bash', null]);
+});
+
+// --- #249 review round 5 -----------------------------------------------------
+
+test("#249 review 5: a rejoined line reads the caller's vars, but its functions are its own", () => {
+  const S = 'push-gate-approvals.json';
+  // A function a rejoined line defines doesn't leak out to the caller.
+  for (const w of ['watch', 'watch -n 5', 'timeout 5 watch']) {
+    forgesIn(`cd ~/.claude; ${w} "f() { cd /tmp; }"; f; rm -f ${S}`, ['Bash', null]);
+    forgesIn(`D=~/.claude; ${w} "f() { D=/tmp/x; }"; f; rm -rf $D`, ['Bash', null]);
+  }
+  for (const def of ['cmd /c "f() { cd /tmp; }" x', 'powershell -c "function f { cd /tmp }" x']) {
+    forgesIn(`cd ~/.claude; ${def}; f; rm -f ${S}`, ['Bash', null]);
+  }
+  // Nor does a caller's function leak in.
+  forgesIn(`f() { cd /tmp; }; cd ~/.claude; powershell -c "f; Remove-Item ${S}" x`, ['Bash', null]);
 });
