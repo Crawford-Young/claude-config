@@ -63,9 +63,7 @@ Full TDD with 100% coverage applies to **pure logic**: state machines, damage/sc
 
 ## Playtest Gate (mandatory)
 
-Automated coverage, GUT, and a clean headless run do not catch what a human playing the game catches — missing HUD elements, copy bugs, and contrast regressions pass a fully green suite and surface only under an eyes-on playtest. Every games task ends with driving the actual running build. Playtest verdicts can be design rulings, not just bug reports — treat them as spec input.
-
-**A rework wave rides each reworked game when its step lands, not once at wave end** — a ruling can delete a game, and later steps built on it go with it (dog-eat-dog #18: the first ride came after all 11 steps; the cup grab and dinner walk were deleted after steps 9–11 had built on them).
+Coverage, GUT and a clean headless run do not catch what a human playing the game catches — missing HUD elements, copy bugs and contrast regressions pass a fully green suite. Every games task ends with driving the running build; a rework wave rides each game at its step, since a ride can delete what later steps built on (dog-eat-dog #18). Playtest verdicts can be design rulings, not just bug reports — treat them as spec input.
 
 **Known blind spot: the gate cannot see ABSENCE.** A player reads a missing element as unbuilt, not broken — it returns as a feature request rounds later or never. Anything whose failure mode is "isn't there" needs an assertion; the human gate is not the backstop for it.
 
