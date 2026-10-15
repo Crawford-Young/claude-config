@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { commitlintConfig, servePorts } from '../worktree.mjs';
+import { commitlintConfig, isHuskyRepo, servePorts } from '../worktree.mjs';
 
 function writeSession(sessionsDir, pid, name, nameSource) {
   mkdirSync(sessionsDir, { recursive: true });
@@ -546,4 +546,41 @@ test('remove --port rejects a value that is not a port', () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /--port needs a port number/);
   assert.ok(existsSync(wt), 'nothing removed');
+});
+
+test('isHuskyRepo detects the prepare script or a core.hooksPath under .husky/', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-husky-'));
+  const repo = makeRepoWithOrigin(root);
+  assert.equal(isHuskyRepo(repo), false, 'plain repo');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { prepare: 'husky' } }));
+  assert.equal(isHuskyRepo(repo), true, 'prepare: husky');
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { prepare: 'lefthook install' } }));
+  assert.equal(isHuskyRepo(repo), false, 'another hook manager');
+  sh(repo, 'git', ['config', 'core.hooksPath', '.husky/_']);
+  assert.equal(isHuskyRepo(repo), true, 'hooksPath under .husky/');
+});
+
+test('new copies the main checkout husky stubs so commit-msg runs, or warns loudly when it has none', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wt-husky-'));
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { prepare: 'husky' } }));
+  sh(repo, 'git', ['add', 'package.json']);
+  sh(repo, 'git', ['commit', '-m', 'add husky']);
+  sh(repo, 'git', ['push', 'origin', 'main']);
+
+  // main checkout never ran `husky`: nothing to copy, so the warning names the fix
+  const bare = execHarness(script, ['new', repo, 'nostubs'], { encoding: 'utf8', env });
+  assert.match(bare, /WARNING: husky repo.*pnpm install/);
+  assert.ok(!existsSync(join(root, '.worktrees', 'app-nostubs', '.husky', '_')));
+
+  mkdirSync(join(repo, '.husky', '_'), { recursive: true });
+  writeFileSync(join(repo, '.husky', '_', 'commit-msg'), '#!/usr/bin/env sh\n. "$(dirname "$0")/h"');
+  writeFileSync(join(repo, '.husky', '_', 'h'), '#!/usr/bin/env sh\n');
+  const out = execHarness(script, ['new', repo, 'stubs'], { encoding: 'utf8', env });
+  const wt = join(root, '.worktrees', 'app-stubs');
+  assert.ok(existsSync(join(wt, '.husky', '_', 'commit-msg')), 'commit-msg stub copied');
+  assert.ok(existsSync(join(wt, '.husky', '_', 'h')), 'h copied');
+  assert.match(out, /husky:\s+copied/);
+  assert.doesNotMatch(out, /WARNING: husky/);
 });

@@ -92,16 +92,45 @@ function cmdNew() {
     if (r.status !== 0) log('WARNING: pnpm install failed — run it manually before gates.');
   }
 
+  const husky = huskyStubs(repo, wtPath);
+
   log(`worktree: ${wtPath}`);
   log(`branch:   ${branch} (from origin/${base})`);
   log(`env:      ${copied.length ? copied.join(', ') : 'none found to copy'}`);
   if (!includeText && copied.length === 0 && existsSync(join(repo, 'package.json'))) {
     log('note:     no .worktreeinclude and no env files found — verify none are needed.');
   }
+  if (husky) log(`husky:    ${husky}`);
   log('note:     dev servers in a worktree need their own port; never reuse another session\'s.');
 
   log(`launch:   ${launchCommand(unit.name)}`);
   warnOnSessionName(unit);
+}
+
+/** True when the checkout uses husky: a `prepare` script running it, or core.hooksPath under .husky/. */
+export function isHuskyRepo(dir) {
+  try {
+    const prepare = JSON.parse(readIfExists(join(dir, 'package.json')) || '{}')?.scripts?.prepare;
+    if (typeof prepare === 'string' && /\bhusky\b/.test(prepare)) return true;
+  } catch {
+    // unparseable package.json: fall through to the git config
+  }
+  return /^(\.\/)?\.husky(\/|$)/.test(git(dir, ['config', 'core.hooksPath']).out.replace(/\\/g, '/'));
+}
+
+// A new worktree has no .husky/_/ (git-ignored, written by `husky` on install), so its
+// commit-msg hook silently never runs (#240). The stubs are static sh files, so copy the
+// main checkout's rather than need node_modules; with none to copy, say what fixes it.
+// The hooks still resolve commitlint from node_modules/.bin, hence the install note.
+function huskyStubs(repo, wtPath) {
+  if (!isHuskyRepo(repo) || existsSync(join(wtPath, '.husky', '_', 'h'))) return null; // --install already ran husky
+  const src = join(repo, '.husky', '_');
+  if (existsSync(join(src, 'h'))) {
+    cpSync(src, join(wtPath, '.husky', '_'), { recursive: true });
+    return 'copied .husky/_ stubs from the main checkout (hooks need node_modules: pass --install, or run pnpm install)';
+  }
+  log('WARNING: husky repo, but the main checkout has no .husky/_ stubs to copy — commit-msg (commitlint) will not run in this worktree until you run `pnpm install` (or `pnpm exec husky`) in it.');
+  return null;
 }
 
 /** Directory of session-registry JSON files: ~/.claude/sessions, CLAUDE_SESSIONS_DIR overrides. */

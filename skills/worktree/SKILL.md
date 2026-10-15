@@ -16,7 +16,7 @@ node ~/code/claude-config/scripts/worktree.mjs new <repo-path> <slug> [--branch 
 
 `<repo-path>` resolves against the cwd (`claude-config` from `~/code`), not a repo name.
 
-Cuts `feat/<slug>` from `origin/main` (warns if the cut isn't clean), copies env files per the repo's `.worktreeinclude` (default `.env` + `.env.local`), and optionally runs `pnpm install`.
+Cuts `feat/<slug>` from `origin/main` (warns if the cut isn't clean), copies env files per the repo's `.worktreeinclude` (default `.env` + `.env.local`), and optionally runs `pnpm install`. In a husky repo it copies the main checkout's git-ignored `.husky/_/` stubs so `commit-msg` runs (a warning names the fix when there are none to copy); the hooks still need `node_modules`, so pass `--install` for a worktree you will commit from.
 
 After creating:
 - Web repos need Playwright browsers before their first e2e — `pnpm exec playwright install chromium`.
