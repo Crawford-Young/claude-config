@@ -3316,3 +3316,100 @@ test("#249 review 5: a rejoined line reads the caller's vars, but its functions 
   // Nor does a caller's function leak in.
   forgesIn(`f() { cd /tmp; }; cd ~/.claude; powershell -c "f; Remove-Item ${S}" x`, ['Bash', null]);
 });
+
+// --- #258: a node eval script the caller's shell substitutes into ---------------
+
+/** Rule 12 blocks `c` in each shell. */
+const evalBlocked = (c, tools = ['Bash', 'PowerShell', null]) => {
+  for (const tool of tools) assert.match(staticCheck(c, '/work', tool) ?? '', /#258/, `${tool} ${c}`);
+};
+
+test('#258: a double-quoted node/bun/deno eval script holding a backtick blocks in bash', () => {
+  for (const c of [
+    'node -e "const t = `rm -f ${f}`; console.log(t)"',
+    'node --eval "console.log(`x`)"',
+    'node -p "`x`.length"',
+    'node --print "`x`"',
+    'node -pe "`x`"',
+    'node --eval="console.log(`x`)"',
+    'nodejs -e "`x`"',
+    '"C:/Program Files/nodejs/node.exe" -e "`x`"',
+    'node -r ts-node/register -e "`x`"',
+    'node --input-type module -e "`x`"',
+    'node -e "a"`x`"b"',
+    'node -e "\\\\`x`"',
+    'bun -e "`x`"',
+    'bun --print "`x`"',
+    'deno eval "console.log(`x`)"',
+    'deno eval -p "`x`"',
+    // Through wrappers, prefixes, groups and a shell line.
+    'timeout 5 node -e "`x`"',
+    'sudo -u root node -e "`x`"',
+    'FOO=1 node -e "`x`"',
+    'cd /tmp && node -e "`x`" | head -1',
+    '(node -e "`x`")',
+    '( node -e "`x`" )',
+    `bash -c 'node -e "\`x\`"'`,
+    'watch node -e "`x`"',
+  ]) evalBlocked(c, ['Bash', null]);
+});
+
+test('#258: a $( in a double-quoted eval script blocks in bash and PowerShell', () => {
+  for (const c of ['node -e "console.log($(whoami))"', 'node --eval "$(x)"', 'node -p "$(x)"', 'node --print "$(x)"', 'bun -e "$(x)"', 'deno eval "$(x)"', 'timeout 5 node -e "$(x)"']) {
+    evalBlocked(c);
+  }
+  // The guard-replay corpus shape: a path substituted into the script, not passed as an argument.
+  evalBlocked(`node -e "const j=JSON.parse(require('fs').readFileSync('$(cygpath -m $SC)/a.json','utf8'))"`);
+  allowedIn(`node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$(cygpath -m $SC)/a.json"`);
+  // A backslash escapes nothing in PowerShell, whose subexpression still runs.
+  evalBlocked('node -e "a \\$(x)"', ['PowerShell', null]);
+});
+
+test('#258: the reason names the single-quoted form, a value passed as an argument, and the Write tool', () => {
+  const reason = staticCheck('node -e "`x`"', '/work', 'Bash');
+  assert.match(reason, /node -e '…'/);
+  assert.match(reason, /process\.argv\[1\]/);
+  assert.match(reason, /Write tool/);
+});
+
+test('#258: single-quoted scripts, escaped substitutions and substitutions outside the script stay allowed', () => {
+  for (const c of [
+    "node -e 'console.log(`x`)'",
+    "node -e 'const t = `rm -f ${f}`; console.log($(x))'",
+    "node --eval='`x`'",
+    "deno eval 'console.log(`x`)'",
+    "bun -p '$(x)'",
+    'node -e "console.log(1)"',
+    'node -e "console.log(process.env.HOME)"',
+    // The script reads a substitution's output as an argument: intended.
+    'node -e "console.log(process.argv[1])" "$(git rev-parse HEAD)"',
+    'node -e "x" "`pwd`"',
+    // A script file's arguments are its own, -e among them.
+    'node scripts/x.mjs "$(git rev-parse HEAD)"',
+    'node scripts/x.mjs -e "`x`"',
+    'deno run x.ts "$(x)"',
+    'bun run build -e "$(x)"',
+    // env -S splits its line but substitutes nothing in it.
+    `env -S 'node -e "\`x\`"'`,
+    // Not an eval call.
+    'echo "`date`"',
+    'node --test "$(ls)"',
+  ]) allowedIn(c);
+  // bash escapes them; in PowerShell a backtick is the escape char, and runs nothing.
+  for (const c of ['node -e "console.log(\\`x\\`)"', 'node -e "a \\$(x)"']) allowedIn(c, '/work', ['Bash']);
+  for (const c of ['node -e "console.log(`x`)"', 'node -e "a `$(x)"', 'deno eval "`x`"']) allowedIn(c, '/work', ['PowerShell']);
+});
+
+test('#258 end-to-end through the real hook: Bash and PowerShell payloads', () => {
+  const run = (tool, command) => spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: tmpdir() }) });
+  for (const [tool, command, status] of [
+    ['Bash', 'node -e "console.log(`x`)"', 2],
+    ['Bash', "node -e 'console.log(`x`)'", 0],
+    ['PowerShell', 'node -e "$(x)"', 2],
+    ['PowerShell', 'node -e "console.log(`x`)"', 0],
+  ]) {
+    const r = run(tool, command);
+    assert.equal(r.status, status, `${tool} ${command}: ${r.stderr}`);
+    if (status === 2) assert.match(r.stderr, /#258/);
+  }
+});

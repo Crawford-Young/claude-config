@@ -89,6 +89,14 @@
 //      pathlib/stream write even to a literal path. Wired on
 //      Write|Edit|MultiEdit|NotebookEdit too (editToolReason), where it fails
 //      OPEN, so a broken guard never locks out the Edit tool that fixes it.
+//  12. A node/bun inline script (-e/--eval/-p/--print) or a deno eval script
+//      holding a substitution its shell runs before the runtime starts: in
+//      bash an unescaped backtick or `$(` outside single quotes, in PowerShell
+//      a `$(` (a backtick is its escape char and runs nothing). A JS template
+//      literal in a double-quoted `node -e` ran `cd ~/.claude` and `rm -f`
+//      during #249 (#258). Single quotes or a script file keep it literal.
+//      Read off parsed calls; a runner's payload (`xargs node -e "…"`) is out
+//      of its sight.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -401,15 +409,16 @@ const ENV_VAR_REASON =
 const pipelines = (cmd, seps = null, tool = null) => clauses(cmd, true, seps, null, tool);
 
 /** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
- *  word. Unbalanced quotes: plain whitespace split. */
-function words(clause) {
+ *  word. Unbalanced quotes: plain whitespace split. With `raw`, the same words
+ *  keep their quotes (rule 12 reads which text a quote holds). */
+function words(clause, raw = false) {
   const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s"']+)|(["'])/g;
   const out = [];
   let prev = -1;
   let m;
   while ((m = re.exec(clause)) !== null) {
     if (m[4]) return clause.split(/\s+/).filter(Boolean);
-    const w = m[1] ?? m[2] ?? m[3];
+    const w = raw ? m[0] : (m[1] ?? m[2] ?? m[3]);
     if (m.index === prev && out.length) out[out.length - 1] += w;
     else out.push(w);
     prev = re.lastIndex;
@@ -492,7 +501,7 @@ function expandHome(p) {
   return p;
 }
 
-/** The static rules (1-4, 10, 11) on one command. `tool` is the payload's
+/** The static rules (1-4, 10-12) on one command. `tool` is the payload's
  *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
  *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
  *  reads them as aliases. It is also the shell the command is parsed in (newScope). */
@@ -543,8 +552,9 @@ export function staticCheck(raw, cwd = null, tool = null) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
-  // 11. a write into a transcript or a gate state file (#190)
-  return forgeWrite(raw, cwd, tool);
+  // 11. a write into a transcript or a gate state file (#190); then 12. a node
+  //     eval script the caller's shell substitutes into (#258)
+  return forgeWrite(raw, cwd, tool) || evalSubstitution(cmds);
 }
 
 /** 7. The billed model a shell-launched `claude` would run on, or null. `claude`
@@ -1589,6 +1599,84 @@ export function fileToolReason(tool, input, cwd, check = editToolReason) {
     logError('bash-guard', err);
     return null;
   }
+}
+
+// ---- 12. an eval script the caller's shell substitutes into (#258) ---------
+
+/** Runtimes whose inline script rule 12 reads. */
+const EVAL_RUNTIME = /^(?:node|nodejs|bun|deno)$/i;
+/** node's and bun's options that hand over the script: as the next word, or attached. */
+const NODE_EVAL = /^(?:-[ep]|-pe|-ep|--eval|--print)$/;
+const NODE_EVAL_ATTACHED = /^--(?:eval|print)=/;
+/** Options that take the next word as their value, so it is no script file. */
+const NODE_VALUE = /^(?:-r|--require|--import|--loader|--experimental-loader|-C|--conditions|--input-type|--env-file|--title)$/;
+const DENO_VALUE = /^(?:-c|--config|--ext|--import-map|--location|--seed|--cert|--lock)$/;
+
+const EVAL_SUBSTITUTION_REASON =
+  "This node/bun/deno eval script holds a backtick or `$(` the shell substitutes before the runtime starts: a JS template literal runs as a shell command (#258). Single-quote the script (`node -e '…'`), passing any shell value as an argument (`node -e '…process.argv[1]…' \"$(…)\"`), or Write it to a file with the Write tool and run that.";
+
+/** Where a node/bun/deno call's inline script is among its words `w`, or -1:
+ *  the word after -e/--eval/-p/--print (`-pe` too), the flag word itself
+ *  when the script is attached (`--eval=…`), or deno eval's first operand.
+ *  node's and bun's options end at their first operand, a script file (or
+ *  bun's subcommand), whose arguments are its own. */
+function evalScriptAt(w) {
+  const deno = /^deno$/i.test(commandName(w[0]));
+  if (deno && w[1] !== 'eval') return -1;
+  for (let k = deno ? 2 : 1; k < w.length; k++) {
+    const a = w[k];
+    if (a === '--') return deno && k + 1 < w.length ? k + 1 : -1;
+    if (!a.startsWith('-')) return deno ? k : -1;
+    if (deno) {
+      if (DENO_VALUE.test(a)) k++;
+    } else if (NODE_EVAL_ATTACHED.test(a)) return k;
+    else if (NODE_EVAL.test(a)) return k + 1 < w.length ? k + 1 : -1;
+    else if (NODE_VALUE.test(a)) k++;
+  }
+  return -1;
+}
+
+/** Does `word` (a word as the shell reads it, quotes kept) run a command
+ *  substitution in `shell` before its command starts? bash runs a backtick or
+ *  `$(` outside single quotes that no backslash escapes; PowerShell runs a
+ *  `$(` subexpression outside single quotes that no backtick escapes (its
+ *  escape char: a backtick runs nothing there, and a backslash escapes
+ *  nothing). No shell (a replay) reads it both ways. */
+function runsSubstitution(word, shell) {
+  if (!shell) return runsSubstitution(word, 'Bash') || runsSubstitution(word, 'PowerShell');
+  const ps = shell === 'PowerShell';
+  let quote = null;
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+    } else if (ch === (ps ? '`' : '\\')) i++;
+    else if (ch === "'" && !quote) quote = ch;
+    else if (ch === '"') quote = quote ? null : ch;
+    else if (ch === '`' || (ch === '$' && word[i + 1] === '(')) return true;
+  }
+  return false;
+}
+
+/** 12. A node/bun/deno call whose inline script holds a substitution its
+ *  shell runs first (`node -e "x = `rm -f y`"`, `node -p "$(x)"`) — the
+ *  #249 probe incident: a JS template literal ran as shell commands. Read off
+ *  parsed calls, so through wrappers, prefixes, groups and a shell's -c line;
+ *  the script is found among the call's clause words with their quotes
+ *  (the call's words are the clause's last ones). A runner's payload (`xargs
+ *  node -e "…"`) is out of its sight; an `env -S` line substitutes nothing. */
+function evalSubstitution(calls) {
+  for (const call of calls) {
+    if (!EVAL_RUNTIME.test(call.cmd)) continue;
+    const j = evalScriptAt(call.words);
+    if (j === -1) continue;
+    const plain = words(call.text);
+    const raws = words(call.text, true);
+    // A group's closing `)` may stand as a last word of its own, cut off the call's.
+    const at = [0, 1].map((cut) => plain.length - cut - call.words.length).find((i) => i >= 0 && plain[i].replace(/^[({!]+/, '') === call.words[0]);
+    if (at !== undefined && runsSubstitution(raws[at + j], call.tool)) return EVAL_SUBSTITUTION_REASON;
+  }
+  return null;
 }
 
 /** Words that only wrap the real command (subshell/group openers, env
