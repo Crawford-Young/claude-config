@@ -521,14 +521,43 @@ const cpuMs = (fn) => {
   return (user + system) / 1000;
 };
 
+/** Scaling check for the scan tests: CPU time still inflates under CI contention (SMT, shared
+ *  cache, GC threads: #224 and #229 went red on absolute budgets), but it inflates the small
+ *  and large runs alike, so only their ratio gates. One run of `make(n * SCALE_K)` against
+ *  SCALE_K runs of `make(n)` is the same amount of work: a linear scan gives a ratio near 1,
+ *  a quadratic one near SCALE_K. The median of three pairs keeps one GC spike from deciding it.
+ *  Not a speed gate: a uniformly slow scan passes, a super-linear one fails. */
+const SCALE_K = 4;
+const MAX_RATIO = 2.5;
+const cpuRatio = (make, run, n) => {
+  const small = make(n);
+  const large = make(n * SCALE_K);
+  run(small); // warm-up
+  const ratios = [];
+  for (let i = 0; i < 3; i++) {
+    const s = cpuMs(() => {
+      for (let j = 0; j < SCALE_K; j++) run(small);
+    });
+    ratios.push(cpuMs(() => run(large)) / Math.max(s, 1));
+  }
+  return ratios.sort((a, b) => a - b)[1];
+};
+const assertLinear = (make, run, n, label = '') => {
+  const ratio = cpuRatio(make, run, n);
+  assert.ok(ratio < MAX_RATIO, `${label} scaled ${ratio.toFixed(2)}x for ${SCALE_K}x the input (linear ~1, quadratic ~${SCALE_K})`);
+};
+
 test('#159: unclosed braces cost one scan, not one per brace', () => {
-  const ms = cpuMs(() => {
-    for (const c of ['a { '.repeat(20000) + '}', 'bash <<EOF\n' + 'if [ -n "$x" ]; then echo { ; fi\n'.repeat(5000) + 'EOF']) {
-      staticCheck(c);
-      gatedVerbs(c, null);
-    }
-  });
-  assert.ok(ms < 2000, `${Math.round(ms)} ms`);
+  assertLinear(
+    (n) => ['a { '.repeat(4 * n) + '}', 'bash <<EOF\n' + 'if [ -n "$x" ]; then echo { ; fi\n'.repeat(n) + 'EOF'],
+    (cs) => {
+      for (const c of cs) {
+        staticCheck(c);
+        gatedVerbs(c, null);
+      }
+    },
+    1250,
+  );
 });
 
 test('#160: !(git …) resolves the git call', () => {
@@ -756,14 +785,13 @@ test('#163 review: the claude-config main checkout is matched case-insensitively
 });
 
 test('#163 review: many assignments next to many git calls, substitutions or blocks stay linear', () => {
-  const vars = Array.from({ length: 2000 }, (_, i) => `W${i}=/x`).join('; ');
-  const psVars = Array.from({ length: 2000 }, (_, i) => `$W${i} = 'x'`).join('; ');
-  for (const c of [`${vars}; ${'git status; '.repeat(2000)}`, `${vars}; ${'echo $(true); '.repeat(2000)}`, `${psVars}; ${'if ($x) { true }; '.repeat(2000)}`]) {
-    // 600 ms: these are 8-12k-char texts, and CI ran 229 ms where a local run
-    // takes ~76 (94 cold). The quadratic vars copy took ~1 s locally.
-    const ms = hookPathMs(c);
-    assert.ok(ms < 600, `${Math.round(ms)} ms: ${c.slice(-30)}`);
-  }
+  const assigns = (n, fmt) => Array.from({ length: n }, (_, i) => fmt(i)).join('; ');
+  const shapes = {
+    'git calls': (n) => `${assigns(n, (i) => `W${i}=/x`)}; ${'git status; '.repeat(n)}`,
+    substitutions: (n) => `${assigns(n, (i) => `W${i}=/x`)}; ${'echo $(true); '.repeat(n)}`,
+    blocks: (n) => `${assigns(n, (i) => `$W${i} = 'x'`)}; ${'if ($x) { true }; '.repeat(n)}`,
+  };
+  for (const [name, make] of Object.entries(shapes)) assertLinear(make, hookPathRun, 500, name);
 });
 
 test('#163: pushd/popd and Push-Location/Pop-Location stacks are modelled', () => {
@@ -918,11 +946,7 @@ test('#171 review: a function call is judged by its body when called, not when d
 });
 
 test('#171 review 2: function calls are memoized and budgeted, so call graphs stay fast', () => {
-  const timed = (cmd) => {
-    let repo;
-    const ms = cpuMs(() => (repo = repoOf(cmd, '/cwd', 'Bash')));
-    return { repo, ms };
-  };
+  const walk = (cmd) => repoOf(cmd, '/cwd', 'Bash');
   // Fan-out 2, depth 20: 2^20 call paths before the memo.
   const fan = Array.from({ length: 20 }, (_, i) => `f${i}() { f${i + 1}; f${i + 1}; cd /pf; }; `).join('') + 'f20() { true; }; f0; git commit -m x';
   // 50 functions that each call all 50.
@@ -932,13 +956,20 @@ test('#171 review 2: function calls are memoized and budgeted, so call graphs st
     [mesh(''), '/cwd'],
     [mesh(' true;').replace('f49() {', 'f49() { cd /pf;'), UNKNOWN_DIR],
     ['f() { cd /pa; W=1; cd /pb; }; ' + 'f; '.repeat(2000) + 'git commit -m x', UNKNOWN_DIR],
-    ['f() { ' + 'true; X=1; '.repeat(200) + '}; ' + 'f; '.repeat(500) + 'git commit -m x', '/cwd'],
   ];
+  // An exponential shape hangs rather than scaling, so a ratio can't catch it in time: these keep
+  // one generous CPU ceiling (a hang guard, not a speed gate). Unmemoized, the fan-out runs for minutes.
+  const HANG_MS = 10000;
   for (const [cmd, want] of cases) {
-    const { repo, ms } = timed(cmd);
+    let repo;
+    const ms = cpuMs(() => (repo = walk(cmd)));
     assert.equal(repo, want, cmd.slice(0, 60));
-    assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms: ${cmd.slice(0, 60)}`);
+    assert.ok(ms < HANG_MS, `${Math.round(ms)} ms: ${cmd.slice(0, 60)}`);
   }
+  // Repeated calls to a long body scale linearly in the call count.
+  const longBody = (n) => 'f() { ' + 'true; X=1; '.repeat(500) + '}; ' + 'f; '.repeat(n) + 'git commit -m x';
+  assert.equal(walk(longBody(500)), '/cwd');
+  assertLinear(longBody, walk, 16000);
   // Past the walk budget a call fails closed: the dir is unknown.
   assert.equal(repoOf(`f() { ${'true; '.repeat(40000)}}; f; git commit -m x`, '/cwd', 'Bash'), UNKNOWN_DIR);
 });
@@ -1090,34 +1121,26 @@ test('#160: || ( … ) carries viaOr to the first commit inside the group', () =
 });
 
 // The hook's whole per-command path, with no cwd so no git process runs.
-const hookPathMs = (c) =>
-  cpuMs(() => {
-    staticCheck(c);
-    branchRules(c, null);
-    browserCommand(c, null);
-    gatedVerbs(c, null);
-    billedLaunch(c);
-  });
+const hookPathRun = (c) => {
+  staticCheck(c);
+  branchRules(c, null);
+  browserCommand(c, null);
+  gatedVerbs(c, null);
+  billedLaunch(c);
+};
 
-// The three shapes below take 40-77 ms cold locally and ran 202-229 ms on CI
-// against a 200 ms bound (#181). With closeGroup's memo off (the quadratic
-// scan #163 fixed) they take 21 s, 10 s and 2.6 s, so 500 ms still catches it. Since #139
-// the budget is CPU time (cpuMs): 79-219 ms locally, above wall because GC threads count.
-const LINEAR_MS = 500;
-
+// With closeGroup's memo off (the quadratic scan #163 fixed) these three take 21 s, 10 s and
+// 2.6 s at 10000/10000/5000 units, against 40-220 ms linear (#181, #226).
 test('#163: a long line of unclosed { ${x} pairs scans in linear time', () => {
-  const ms = hookPathMs('a { ${x} '.repeat(10000));
-  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
+  assertLinear((n) => 'a { ${x} '.repeat(n), hookPathRun, 2500);
 });
 
 test('#163: deeply nested braces that close into words scan in linear time', () => {
-  const ms = hookPathMs('{ '.repeat(10000) + '}x'.repeat(10000));
-  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
+  assertLinear((n) => '{ '.repeat(n) + '}x'.repeat(n), hookPathRun, 2500);
 });
 
 test('#163: a 5000-line bash heredoc of echo { "${HOME}" scans in linear time', () => {
-  const ms = hookPathMs('bash <<EOF\n' + 'echo { "${HOME}"\n'.repeat(5000) + 'EOF');
-  assert.ok(ms < LINEAR_MS, `${Math.round(ms)} ms`);
+  assertLinear((n) => 'bash <<EOF\n' + 'echo { "${HOME}"\n'.repeat(n) + 'EOF', hookPathRun, 1250);
 });
 
 test('|| carries into $(...) and bash -c bodies, for the first commit of the alternative only', () => {
@@ -2380,13 +2403,10 @@ test('#167: nesting past the depth the guard reads blocks with its own reason, i
   };
   for (const [name, shape] of Object.entries(shapes)) {
     assert.deepEqual(gatedVerbs(shape(20), null), ['git push'], `${name} 20`);
-    for (const n of [1500, 5000]) {
-      const c = shape(n);
-      const ms = cpuMs(() => {
-        for (const rule of [staticCheck, gatedVerbs, branchRules, forgeWrite]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${n} ${rule.name}`);
-      });
-      assert.ok(ms < LINEAR_MS, `${name} ${n}: ${Math.round(ms)} ms`);
-    }
+    const blocked = (c) => {
+      for (const rule of [staticCheck, gatedVerbs, branchRules, forgeWrite]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${rule.name}`);
+    };
+    assertLinear(shape, blocked, 1250, name);
   }
   // The hook names the depth, not a guard crash.
   const h = tmpHome();
