@@ -42,7 +42,8 @@
 // so "I'll pick up when the implementer reports" is a wait, not a finished reflect. A named
 // teammate spawned in that window, or an agent or teammate sent a SendMessage there, is a wait
 // too until it reports (a teammate message, hand-back or notification) after the spawn or
-// send, or is stopped (#227). This reads the transcript's structure, not the wait phrasing.
+// send, or is stopped (#227). A session exit, resume or fork ends every wait from before
+// it (#243). This reads the transcript's structure, not the wait phrasing.
 // Anything else counts as finished and spends the block.
 
 import { readFileSync } from 'node:fs';
@@ -184,16 +185,36 @@ export function asksUser(message) {
 
 const BG_TOOLS = new Set(['Agent', 'Bash', 'PowerShell']);
 const WAIT_TOOLS = new Set([...BG_TOOLS, 'SendMessage', 'TaskStop']);
-const WAIT_RECORD = /run_in_background|TaskStop|tool_result|"name":"(?:Agent|SendMessage)"|task-notification|teammate-message|agent-message|stopped by the user/;
+const WAIT_RECORD = /run_in_background|TaskStop|tool_result|"name":"(?:Agent|SendMessage)"|task-notification|teammate-message|agent-message|stopped by the user|"type":"cost-state"|SessionStart:(?:resume|fork)/;
 // A notification runs to its closing tag, or to the line's end when a record truncates it.
 const NOTIFICATION = /<task-notification>[\s\S]*?(?:<\/task-notification>|$)/g;
 const NOTIFIED_ID = /<(?:task-id|tool-use-id)>([^<]+)</g;
 const STOPPED_AGENT = /Agent ([\w-]+) was stopped by the user/g;
-// Matched on the raw line, where the description's quotes arrive JSON-escaped; descKey escapes a launch's the same way.
-const STOPPED_DESCRIPTION = /Background agent \\"(.*?)\\" was stopped by the user/g;
+// The harness's user-stop text names one description, or several (48ca871b:165, 71d9f934:6).
+const STOPPED_ONE = /^Background agent "([\s\S]*)" was stopped by the user\./;
+const STOPPED_MANY = /^\d+ background agents were stopped by the user: "([\s\S]*)"\./;
+const PROCESS_START = /^SessionStart:(?:resume|fork)$/;
 const MESSAGE_FROM = /<(?:teammate-message teammate_id|agent-message from)="([^"]+)"/g;
 const LAUNCHED_ID = /running in background with ID: (\w+)/;
-const descKey = (d) => (typeof d === 'string' ? `desc:${JSON.stringify(d).slice(1, -1)}` : null);
+const descKey = (d) => (typeof d === 'string' ? `desc:${d}` : null);
+
+/** Descriptions a harness user-stop record names: the prompt of a task-notification queued_command attachment. A
+ *  queue-operation enqueue can hold user-typed text, and the same words quoted anywhere else (a brief, a message, a
+ *  tool result) name none. */
+function stoppedDescriptions(o) {
+  const a = o?.attachment;
+  const text = o?.type === 'attachment' && a?.type === 'queued_command' && a.commandMode === 'task-notification' ? a.prompt : null;
+  if (typeof text !== 'string') return [];
+  const one = STOPPED_ONE.exec(text);
+  return one ? [one[1]] : (STOPPED_MANY.exec(text)?.[1].split('", "') ?? []);
+}
+
+/** Does this record mark a process boundary? Claude Code writes an untimed cost-state record at exit or /clear
+ *  (scripts/audit-lib.mjs); a /clear opens a new transcript, so here it marks an exit. A resumed or forked process
+ *  starts with a SessionStart hook record (a fork's copied history holds no cost-state). Claude Code records
+ *  hook_success only for hooks that exist, so resume and fork detection relies on a SessionStart hook being configured;
+ *  session-start.mjs runs here with no matcher. */
+const isProcessBoundary = (o) => o?.type === 'cost-state' || (o?.type === 'attachment' && PROCESS_START.test(o.attachment?.hookName ?? ''));
 
 /** Is the director waiting on a background task or a teammate it started or resumed at or after `after` (epoch ms)?
  *  (#206, #227.) A wait is a non-error tool_result for:
@@ -209,10 +230,12 @@ const descKey = (d) => (typeof d === 'string' ? `desc:${JSON.stringify(d).slice(
  *  turn and a resumed agent's first-pass notice is already in the transcript. Resolving records: a <task-notification>
  *  naming the tool-use id or task id, a <teammate-message teammate_id> or <agent-message from> user record (an idle
  *  notification or a plain message: a teammate may report with no idle after it, 98122171:392), a successful
- *  TaskStop of its task id, name or agentId, "Agent <id> was stopped by the user", or the harness's "Background agent
- *  "<description>" was stopped by the user" (matched on the launch's description). A queue-operation remove carries
- *  its dequeue time, so it and untimed records resolve background launches only. Waits before `after` are outside
- *  the gate window. Agents sharing a description resolve together on a description stop. */
+ *  TaskStop of its task id, name or agentId, "Agent <id> was stopped by the user", or a harness user-stop record naming
+ *  its description (stoppedDescriptions) timestamped at or after the launch, since descriptions repeat (#243): agents
+ *  sharing a description resolve together on a stop made after both launches. A queue-operation remove carries its
+ *  dequeue time, so it and untimed records resolve background launches by id only.
+ *  A process boundary (isProcessBoundary) ends every wait before it: an exit or resume drops tasks and teammates with
+ *  no record of it (#243). Waits before `after` are outside the gate window. */
 export function hasPendingBackground(text, after = 0) {
   const calls = new Map();
   const agents = new Map(); // any key of a launched agent -> all its keys
@@ -225,11 +248,13 @@ export function hasPendingBackground(text, after = 0) {
     try {
       o = JSON.parse(l);
     } catch {} // an unparsable line's notification and stop text still count, untimed
+    // The process that ran every earlier task and teammate is gone, and a dropped teammate leaves no record (#243).
+    if (isProcessBoundary(o)) waits.length = 0;
     const t = Date.parse(o?.timestamp);
     const at = Number.isNaN(t) || o.operation === 'remove' ? -Infinity : t;
     for (const [n] of l.matchAll(NOTIFICATION)) for (const [, id] of n.matchAll(NOTIFIED_ID)) hear(id, at);
     for (const [, id] of l.matchAll(STOPPED_AGENT)) hear(id, at);
-    for (const [, d] of l.matchAll(STOPPED_DESCRIPTION)) hear(`desc:${d}`, at);
+    for (const d of stoppedDescriptions(o)) hear(descKey(d), at);
     if (o?.type === 'user') for (const [, from] of (textOf(o.message?.content) ?? '').matchAll(MESSAGE_FROM)) hear(from, at);
     for (const c of Array.isArray(o?.message?.content) ? o.message.content : []) {
       if (c?.type === 'tool_use' && WAIT_TOOLS.has(c.name)) calls.set(c.id, c);
@@ -252,10 +277,11 @@ export function hasPendingBackground(text, after = 0) {
       if (!keys) continue;
       keys = [...new Set(keys.filter((k) => typeof k === 'string' && k))];
       for (const k of keys) agents.set(k, keys);
-      if (!Number.isNaN(t) && t >= after) waits.push({ keys, since });
+      if (!Number.isNaN(t) && t >= after) waits.push({ keys, since, t });
     }
   }
-  return waits.some(({ keys, since }) => !keys.some((k) => heard.has(k) && heard.get(k) >= since));
+  // A description is no id: another launch may share it, so its stop must come at or after this launch (#243).
+  return waits.some(({ keys, since, t }) => !keys.some((k) => heard.has(k) && heard.get(k) >= (k.startsWith('desc:') ? t : since)));
 }
 
 /** Epoch ms of the newest reflect SKILL.md Read, shell read (cat / Get-Content), reflect Skill call, or user-typed /reflect, else null. */

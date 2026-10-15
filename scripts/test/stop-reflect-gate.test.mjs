@@ -686,13 +686,17 @@ const inbox = (to) => ({ success: true, message: `Message sent to ${to}'s inbox`
 const resumed = (to) => ({ success: true, message: `Resuming agent ${to.slice(0, 7)}`, resumedAgentId: to, pin: { id: to, name: to, ref: '0e901b' } });
 const queued = (to) => ({ success: true, message: `Message queued for delivery to ${to} at its next tool round.`, pin: { id: to, name: to, ref: 'b6791c' } });
 const peer = { success: true, message: '"Ack review" → uds:\\\\.\\pipe\\LOCAL\\cc-msg-0cd7; in that session\'s inbox, not yet read by its Claude', msg_id: 'm2', display: 'Ack review' };
-// The harness's own record of a user-stopped background agent names only its description:
-// queue-operation enqueue and remove (48ca871b:165/:175) and the queued_command attachment (48ca871b:176).
-const stoppedByDescription = (min, description, form) => {
-  const text = `Background agent "${description}" was stopped by the user.`;
+// The harness's own record of a user-stopped background agent names only its description, as a queued_command
+// attachment with commandMode task-notification (48ca871b:176). Its queue-operation enqueue (48ca871b:165) can also hold
+// user-typed text, so the 'enqueue' form here is that typed paste, which resolves nothing.
+// Stopping several at once names them all in one record (71d9f934-085d-472e-be01-3dc63da72917.jsonl:6/:23/:24).
+const userStop = (min, text, form) => {
   if (form === 'attachment') return { type: 'attachment', timestamp: ago(min), attachment: { type: 'queued_command', prompt: text, commandMode: 'task-notification', timestamp: ago(min) } };
   return { type: 'queue-operation', operation: form, timestamp: ago(min), content: text };
 };
+const stoppedByDescription = (min, description, form) => userStop(min, `Background agent "${description}" was stopped by the user.`, form);
+const stoppedMany = (min, descriptions, form) =>
+  userStop(min, `${descriptions.length} background agents were stopped by the user: ${descriptions.map((d) => `"${d}"`).join(', ')}.`, form);
 // Verbatim turn-ending waits: a director waiting on teammates (98122171:404) and on a warm redo (369ac623:973).
 const waitTeammates = 'Three reviewers are now running: review-206, review-202 and review-216-217. Still working: #214, #220 and recon-219.\n\n## Action items\nNone yet.';
 const waitRedo = "That completion notice is from the agent's first pass, which I've already read. The warm redo is running now, and I'll verify its result when it reports.\n\n### Your action items\n- None right now.";
@@ -783,19 +787,17 @@ test('#227: a stopped teammate resolves its wait (TaskStop by name or agent id, 
   assert.equal(hasPendingBackground(lines(...unit, taskStop(5, 'x1', 'aunit-1-524330177fe8a865'), taskStopped(5, 'x1', 'aunit-1-524330177fe8a865'))), false, 'TaskStop by agent id');
   assert.equal(hasPendingBackground(lines(...unit, taskStop(5, 'x1', 'unit-1'), taskStopped(5, 'x1', 'unit-1', true))), true, 'a failed TaskStop');
   assert.equal(hasPendingBackground(lines(...unit, agentStoppedByUser(5, 'm1', 'unit-1'))), false, 'stopped by the user, by name');
-  assert.equal(hasPendingBackground(lines(...unit, stoppedByDescription(5, 'Unit unit-1', 'enqueue'))), false, 'stopped by the user, by description');
+  assert.equal(hasPendingBackground(lines(...unit, stoppedByDescription(5, 'Unit unit-1', 'attachment'))), false, 'stopped by the user, by description');
   const resent = [...unit, idle(8, 'unit-1'), send(7, 's1', 'unit-1'), sent(7, 's1', inbox('unit-1'))];
-  assert.equal(hasPendingBackground(lines(...resent, stoppedByDescription(5, 'Unit unit-1', 'enqueue'))), false, 'stopped after a resume');
+  assert.equal(hasPendingBackground(lines(...resent, stoppedByDescription(5, 'Unit unit-1', 'attachment'))), false, 'stopped after a resume');
 });
 
 test('#227 comment: a user-stopped background agent resolves by its launch description (48ca871b:165/:175/:176, 26ff1fb8:231)', () => {
   const agent = [bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1', 'Implement strate#17 app shell')];
-  for (const form of ['enqueue', 'remove', 'attachment']) {
-    assert.equal(hasPendingBackground(lines(...agent, stoppedByDescription(5, 'Implement strate#17 app shell', form))), false, form);
-  }
-  assert.equal(hasPendingBackground(lines(...agent, stoppedByDescription(5, 'Implement strate#18 canvas', 'enqueue'))), true, 'another description');
+  assert.equal(hasPendingBackground(lines(...agent, stoppedByDescription(5, 'Implement strate#17 app shell', 'attachment'))), false);
+  assert.equal(hasPendingBackground(lines(...agent, stoppedByDescription(5, 'Implement strate#18 canvas', 'attachment'))), true, 'another description');
   const quoted = [bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1', 'Fix "quoted" \\ names')];
-  assert.equal(hasPendingBackground(lines(...quoted, stoppedByDescription(5, 'Fix "quoted" \\ names', 'enqueue'))), false, 'quotes and backslashes');
+  assert.equal(hasPendingBackground(lines(...quoted, stoppedByDescription(5, 'Fix "quoted" \\ names', 'attachment'))), false, 'quotes and backslashes');
 });
 
 test('#227: a teammate or warm-redo wait after reflect does not spend the continuation block; the turn end after it reports does', () => {
@@ -806,4 +808,70 @@ test('#227: a teammate or warm-redo wait after reflect does not spend the contin
   assert.deepEqual(stopCodes(back, [back.length]), [2], 'teammate reported');
   const redo = [...base, bgAgent(46, 'a1'), bgAgentLaunched(46, 'a1', 'ag1'), notified(44, 'a1', 'ag1'), send(43, 's1', 'ag1'), sent(43, 's1', resumed('ag1')), say(42, waitRedo)];
   assert.deepEqual(stopCodes(redo, [redo.length]), [0], 'warm redo running (369ac623:973)');
+});
+
+// ---- description stops and process exits (#243) ----
+test('#243: a description stop resolves only a launch or spawn made at or before it', () => {
+  const agent = (min) => [bgAgent(min, 'a1'), bgAgentLaunched(min, 'a1', 'ag1', 'Review #243 diff')];
+  assert.equal(hasPendingBackground(lines(stoppedByDescription(9, 'Review #243 diff', 'attachment'), ...agent(5))), true, 'an earlier agent with the same description');
+  assert.equal(hasPendingBackground(lines(...agent(9), stoppedByDescription(5, 'Review #243 diff', 'attachment'))), false, 'stopped after the launch');
+  const unit = (min) => [spawn(min, 't1', 'unit-1'), spawned(min, 't1', 'unit-1')];
+  assert.equal(hasPendingBackground(lines(stoppedByDescription(9, 'Unit unit-1', 'attachment'), ...unit(5))), true, 'an earlier teammate with the same description');
+});
+
+test('#243: a user-typed queue-operation enqueue of the stop text does not resolve; the real attachment does', () => {
+  const agent = [bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1', 'Review #243 diff')];
+  assert.equal(hasPendingBackground(lines(...agent, stoppedByDescription(5, 'Review #243 diff', 'enqueue'))), true, 'typed enqueue');
+  assert.equal(hasPendingBackground(lines(...agent, stoppedByDescription(5, 'Review #243 diff', 'attachment'))), false, 'attachment');
+  assert.equal(hasPendingBackground(lines(...agent, stoppedMany(5, ['Review #243 diff'], 'enqueue'))), true, 'typed multi-stop enqueue');
+});
+
+test('#243: stop text quoted in a brief, a message or a tool result does not resolve a description key', () => {
+  const quote = 'Background agent "Implement strate#17 app shell" was stopped by the user.';
+  const agent = [bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1', 'Implement strate#17 app shell')];
+  const quoted = [
+    ['typed brief', human(5, `Prior context: the log reads ${quote}`)],
+    ['teammate message', fromTeammate(5, 'review-1', `Finding: ${quote}`)],
+    ['tool result', { type: 'user', timestamp: ago(5), message: { content: [{ type: 'tool_result', tool_use_id: 'g1', content: `48ca871b:165 ${quote}` }] } }],
+    ['SendMessage call', { ...send(5, 's1', 'review-1'), message: { content: [{ type: 'tool_use', id: 's1', name: 'SendMessage', input: { to: 'review-1', message: quote } }] } }],
+  ];
+  for (const [name, rec] of quoted) assert.equal(hasPendingBackground(lines(...agent, rec)), true, name);
+});
+
+test('#243: the harness record of several user stops resolves every description it names (71d9f934:6/:24)', () => {
+  const units = [spawn(9, 't1', 'unit-199', 'Implement #199 reflect later pause'), spawned(9, 't1', 'unit-199'), spawn(9, 't2', 'unit-190', 'Fix #190 review findings'), spawned(9, 't2', 'unit-190')];
+  assert.equal(hasPendingBackground(lines(...units, stoppedMany(5, ['Implement #199 reflect later pause', 'Fix #190 review findings'], 'attachment'))), false);
+  assert.equal(hasPendingBackground(lines(...units, stoppedMany(5, ['Implement #199 reflect later pause', 'Review #171 diff'], 'attachment'))), true, 'one teammate not named');
+});
+
+// Claude Code writes an untimed cost-state record at exit or /clear (79e0cf9f-58cd-4c54-8e0a-1b17daefbd5d.jsonl:730); a
+// /clear opens a new transcript, so in the one the gate reads it marks an exit, which kills its tasks and teammates.
+// A resumed or forked process starts with a SessionStart hook record (79e0cf9f:734 resume;
+// dd0f76cc-fb28-44b2-aab7-3a1427bcc1ce.jsonl:142 fork, whose copied history holds no cost-state).
+const exited = { type: 'cost-state', sessionId: 's1', totalCostUSD: 15.37, totalDuration: 2953144 };
+const sessionStart = (min, source) => ({
+  type: 'attachment',
+  timestamp: ago(min),
+  attachment: { type: 'hook_success', hookName: `SessionStart:${source}`, hookEvent: 'SessionStart', content: 'Skills: Read the path.', exitCode: 0 },
+});
+
+test('#243: a process exit, or a resumed or forked start, ends every wait from before it', () => {
+  const unit = [spawn(9, 't1', 'unit-1'), spawned(9, 't1', 'unit-1')];
+  assert.equal(hasPendingBackground(lines(...unit, exited)), false, 'exit');
+  assert.equal(hasPendingBackground(lines(...unit, sessionStart(5, 'resume'))), false, 'resume with no exit record');
+  assert.equal(hasPendingBackground(lines(...unit, sessionStart(5, 'fork'))), false, 'fork');
+  assert.equal(hasPendingBackground(lines(...unit, sessionStart(5, 'compact'))), true, 'a compaction keeps the process');
+  const resent = [...unit, idle(8, 'unit-1'), send(7, 's1', 'unit-1'), sent(7, 's1', inbox('unit-1'))];
+  assert.equal(hasPendingBackground(lines(...resent, exited)), false, 'a SendMessage wait');
+  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1'), exited)), false, 'a background agent');
+  assert.equal(hasPendingBackground(lines(...unit, exited, sessionStart(5, 'resume'), spawn(4, 't2', 'unit-2'), spawned(4, 't2', 'unit-2'))), true, 'a spawn after the resume');
+  const quoted = { type: 'user', timestamp: ago(5), message: { content: [{ type: 'tool_result', tool_use_id: 'g1', content: '{"type":"cost-state"} SessionStart:resume' }] } };
+  assert.equal(hasPendingBackground(lines(...unit, quoted)), true, 'the record names quoted in a tool result');
+});
+
+test('#243: a teammate dropped by a session exit does not suppress the continuation block for the rest of the session', () => {
+  const base = [...mergeAt('w1', 60), reflectRead('r', 50), say(49, pauseCall), human(48, 'go ahead')];
+  const waiting = [...base, spawn(46, 't1', 'review-206'), spawned(46, 't1', 'review-206'), say(45, waitTeammates)];
+  const afterResume = [...waiting, exited, sessionStart(30, 'resume'), human(29, 'where were we?'), say(28, finished)];
+  assert.deepEqual(stopCodes(afterResume, [waiting.length, afterResume.length]), [0, 2]);
 });
