@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 - Branch per feature/fix (`feat/` `fix/` `chore/` `refactor/`), always in a worktree.
 - Rebase-only history — `git pull --rebase`, never merge commits; PRs merge via "Rebase and merge", never squash.
-- No commit or push without user approval. Conventional Commits (commitlint enforces).
+- Conventional Commits (commitlint enforces).
 - Explicit paths always — `git add <paths>` then `git commit --only <paths>` in shared repos (the bash-guard hook blocks `add -A` and env files).
 - Docs repo (`~/code/docs`) commits directly to `master`.
 - Board: PR open → Review, merge → Done, by itself. A `prod`-topic merge runs `node ~/code/claude-config/scripts/board.mjs set <repo>#N qa`, a QA pass `set … done`.

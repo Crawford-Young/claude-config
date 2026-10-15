@@ -105,3 +105,73 @@ test('no hook, script or statusline module uses the symlink-blind pathToFileURL(
     .filter((p) => (readText(p) ?? '').includes('pathToFileURL(process.argv[1])'));
   assert.deepEqual(offenders, [], 'use isMain(import.meta.url) from scripts/lib.mjs');
 });
+
+// ---- no harness script pushes or opens/merges a PR itself (#193) ------------
+// bash-guard's push gate reads Bash command text only; a script that ran these
+// internally would bypass the user-approval gate unseen. A remote branch delete is fine.
+
+/** `git push` that deletes a remote branch (`--delete`, `-d`, `:branch` refspec) or only rehearses (`--dry-run`). */
+const isSafePush = (argText) => /['"`\s](?:--delete|-d|--dry-run)['"`\s]|['"`\s]:[\w./-]+/.test(` ${argText} `);
+
+/** Line numbers where `text` spawns `git push` or `gh pr create|merge`: argv arrays (`['push', ...]`,
+ *  `git(dir, ['-C', x, 'push'])`) and shell strings handed to exec/spawn (`execSync(`git push`)`). */
+function gatedSpawns(text) {
+  const hits = [];
+  const add = (index, what) => hits.push(`${text.slice(0, index).split('\n').length}:${what}`);
+  for (const m of text.matchAll(/\[[^[\]]*\]/g)) {
+    const els = [...m[0].matchAll(/(['"`])([^'"`]*)\1/g)].map((e) => e[2]);
+    if (els.includes('push') && !isSafePush(m[0])) add(m.index, 'git push');
+    const pr = els.indexOf('pr');
+    if (pr >= 0 && ['create', 'merge'].includes(els[pr + 1])) add(m.index, `gh pr ${els[pr + 1]}`);
+  }
+  const shell = /\b(?:execSync|exec|spawnSync|spawn|execFileSync|execFile)\(\s*([`'"])((?:(?!\1).)*)\1/g;
+  for (const m of text.matchAll(shell)) {
+    const cmd = m[2];
+    if (/\bgit\s+(?:\S+\s+)*?push\b/.test(cmd) && !isSafePush(cmd)) add(m.index, 'git push');
+    const pr = cmd.match(/\bgh\s+(?:\S+\s+)*?pr\s+(create|merge)\b/);
+    if (pr) add(m.index, `gh pr ${pr[1]}`);
+  }
+  return hits;
+}
+
+test('gatedSpawns flags git push and gh pr create/merge in every spawn shape the harness uses', () => {
+  const bad = [
+    "spawnSync('git', ['push', 'origin', 'x'])",
+    "git(cfg, ['push', '-u', 'origin', branch])",
+    "spawnSync('git', ['-C', dir, 'push'])",
+    'execSync(`git push origin ${b}`)',
+    "execSync('git -C repo push --force')",
+    "spawnSync('gh', ['pr', 'create', '--fill'])",
+    "gh(['pr', 'merge', n, '--rebase'])",
+    'execSync(`gh -R o/r pr merge 5`)',
+    "execFileSync('gh', ['pr', 'create'])",
+  ];
+  for (const s of bad) assert.equal(gatedSpawns(s).length, 1, s);
+  assert.match(gatedSpawns('a\nb\nspawnSync("git", ["push"])')[0], /^3:git push$/);
+});
+
+test('gatedSpawns allows remote branch deletes, dry runs, prose and non-gated calls', () => {
+  const ok = [
+    "git(cfg, ['push', 'origin', '--delete', branch])",
+    "git(cfg, ['push', '-d', 'origin', branch])",
+    "git(cfg, ['push', 'origin', ':old-branch'])",
+    "spawnSync('git', ['push', '--dry-run'])",
+    "log('next: git push -u origin x and open the PR')",
+    "lines.push('x'); out.push(a, b)",
+    "spawnSync('gh', ['pr', 'view', branch])",
+    "spawnSync('git', ['status'])",
+    'execSync(`git push origin --delete ${b}`)',
+  ];
+  for (const s of ok) assert.deepEqual(gatedSpawns(s), [], s);
+});
+
+test('no tracked hook, script or statusline module spawns git push or gh pr create/merge (#193)', () => {
+  const offenders = [];
+  for (const f of listed().filter((p) => /^(hooks|scripts|statusline)\/.*\.mjs$/.test(p) && !p.startsWith('scripts/test/'))) {
+    for (const hit of gatedSpawns(readText(f) ?? '')) {
+      const [line, what] = hit.split(':');
+      offenders.push(`${f}:${line} spawns ${what} - the user-approval gate reads Bash text only; print the command for the user instead`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
