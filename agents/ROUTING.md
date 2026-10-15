@@ -5,7 +5,7 @@ Distilled 2026-08-21 from the retired per-type profiles (full text in
 `docs/harness-evolution/archive/`). Append one-liners with dates when a
 dispatch surprises; keep this file short.
 
-Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `reviewer` (read-only review), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it (#74).
+Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the same at opus and high, #233), `reviewer` (read-only review), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it (#74).
 
 | Situation | Model | Effort | Evidence: n runs, $/run (31 days to 2026-10-13) |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `revie
 | Scoped implementation with a clear brief; verbatim/mechanical batches (even many files); bundled QA fix rounds | **sonnet** | medium | implementer · sonnet-5-5 · medium: n=54, $0.31 (sonnet-5: n=11, $2.09) |
 | Verbatim transcription where the brief carries complete byte-for-byte code | **sonnet** (orchestrator diff-verifies) | low | unmeasured: no implementer run at low |
 | Review with enumerated probes / adjudication-style brief; byte-compare reviews | **sonnet** | high | reviewer · sonnet-5-5 · high: n=3, $0.15 (sonnet-5: n=4, $0.43); thin |
-| Review the orchestrator cannot pre-frame; 3+ file integration; novel pattern with nothing in-repo to copy; high-stakes code (auth, payments, migrations, and anything that deletes refs, branches or data — the is-it-safe-to-delete check is the part a scoped task gets wrong, and it cannot be undone) | **opus** | high (implementer: pass `effort: high` on an unnamed Agent call, #219; reviewer: its frontmatter) | implementer · opus-5-5 · medium (frontmatter, no override; n=53, $2.44) is the pre-#195 baseline; reviewer · opus-5-5 · high (frontmatter): n=31, $1.07 |
+| Review the orchestrator cannot pre-frame; 3+ file integration; novel pattern with nothing in-repo to copy; high-stakes code (auth, payments, migrations, and anything that deletes refs, branches or data — the is-it-safe-to-delete check is the part a scoped task gets wrong, and it cannot be undone) | **opus** | high (implementer: dispatch `implementer-opus`, named, #233; reviewer: its frontmatter) | implementer · opus-5-5 · medium (frontmatter, no override; n=53, $2.44) is the pre-#195 baseline; reviewer · opus-5-5 · high (frontmatter): n=31, $1.07 |
 | Doc/MD restructure with verbatim-preserve constraints | **sonnet** | default | unmeasured: runs carry no task kind to tell it from implementation |
 | Long-horizon sessions; multistep research; finished-artifact analysis; or Opus at `xhigh`/`max` still falling short | **fable** — per-run user clearance (`FABLE OK`), hook-enforced | default | unmeasured: one fable run, a recon at low ($0.18) |
 
@@ -22,7 +22,7 @@ Levels: `low` / `medium` / `high` / `xhigh` / `max`; the unset default is the *m
 
 Rules that survived the profile system:
 
-- Overriding `implementer` to opus at high: pass `effort: high` on the Agent call and omit `name:` (#219, 2026-10-14). The call's effort beats the frontmatter's `medium` only on an unnamed dispatch; a named in-process teammate drops it and runs at medium, contrary to the docs (named: unit-214 45/45 and unit-216-217 63/63 requests medium; an unnamed probe recorded high 2/2; CLI 2.1.300). Warm-redo an unnamed unit by its agent id via SendMessage. `reviewer` is opus at `high` by frontmatter and needs nothing.
+- Opus implementer at high: dispatch `implementer-opus`, named from `session-name.mjs ticket <repo> <N> [role]` (#233). A named call drops its own `effort` param and runs at the frontmatter's `medium` (#219, 2026-10-14; named: unit-214 45/45 and unit-216-217 63/63 requests medium; CLI 2.1.300), so the def carries `effort: high` itself. 2026-10-14: a named reviewer (review-214b) ran 24/24 requests at high from its frontmatter, so only a call's `effort` param is dropped. Keep `implementer-opus.md`'s body identical to `implementer.md`'s. Warm-redo a unit by its agent id via SendMessage.
 - Set `model:` explicitly when sonnet isn't the pick for a type without a frontmatter default. An omitted one gets sonnet filled in (hook-enforced), or is blocked on a billed or unknown session, because a child that didn't get the fill would inherit the session model.
 - Raise effort before switching models — escalating within a model is cheaper than escalating across one; the exception is the Escalation rule's integration/architecture signals, which go straight to opus.
 - Subagent model precedence (since v2.1.251): dispatch parameter → agent frontmatter `model:` (`inherit` = the session's model) → `CLAUDE_CODE_SUBAGENT_MODEL` → session default. We do not use `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` — it pins every subagent to one model, overriding per-dispatch model selection, which is the entire mechanism this file describes.

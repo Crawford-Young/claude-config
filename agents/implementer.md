@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Executes ONE scoped task — code via strict TDD, or docs/prose edits. Dispatch with Goal/Scope/Prior-context/Output-format block. Default sonnet; spawner overrides to opus for 3+ file integration, novel patterns, or high-stakes work (auth/payments/migrations), plus effort high on an unnamed call (#219).
+description: Executes ONE scoped task — code via strict TDD, or docs/prose edits. Dispatch with Goal/Scope/Prior-context/Output-format block. Sonnet; 3+ file integration, novel or high-stakes work goes to implementer-opus.
 tools: Read, Grep, Glob, Write, Edit, Bash, Agent
 model: sonnet
 effort: medium

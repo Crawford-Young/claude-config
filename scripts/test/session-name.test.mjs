@@ -98,7 +98,7 @@ test('sessionName throws on bad input instead of building an unparseable name', 
   assert.throws(() => sessionName('ticket', 'repo', 'x7'), /issue/);
   assert.throws(() => sessionName('ticket', 'repo', 0), /issue/);
   assert.throws(() => sessionName('epic', 'My_Repo', 7), /repo/);
-  assert.throws(() => sessionName('ticket', 'repo', 7, 'extra'), /arguments/);
+  assert.throws(() => sessionName('ticket', 'repo', 7, 'review', 'extra'), /arguments/);
 });
 
 test('issueNumber normalizes leading zeros and rejects 0, and sessionName agrees', () => {
@@ -147,6 +147,43 @@ test('CLI dies with usage and a nonzero exit on bad input', () => {
     const r = spawnHarness(cli, args);
     assert.notEqual(r.status, 0, args.join(' '));
     assert.equal(r.stdout, '', args.join(' '));
+    assert.match(r.stderr, /usage: session-name\.mjs/, args.join(' '));
+  }
+});
+
+test('ticket and epic names take an optional review|recon role; the bare form stays the implementer', () => {
+  assert.equal(sessionName('ticket', 'claude-config', 233, 'review'), 'ticket-claude-config-233-review');
+  assert.equal(sessionName('epic', 'strate', '012', 'recon'), 'epic-strate-12-recon');
+  assert.equal(sessionName('ticket', 'claude-config', 233), 'ticket-claude-config-233');
+  assert.throws(() => sessionName('ticket', 'repo', 5, 'implementer'), /role/);
+  assert.throws(() => sessionName('ticket', 'repo', 5, 'Review'), /role/);
+  assert.throws(() => sessionName('director', 'harness', 'review'), /arguments/);
+  assert.throws(() => sessionName('ticket', 'repo', 5, 'review', 'x'), /arguments/);
+});
+
+test('parseSessionName returns the role and keys a role-suffixed name to its ticket', () => {
+  assert.deepEqual(parseSessionName('ticket-claude-config-233-review'), { type: 'ticket', repo: 'claude-config', issue: 233, legacy: false, role: 'review', name: 'ticket-claude-config-233', raw: 'ticket-claude-config-233-review' });
+  assert.deepEqual(parseSessionName('Epic-dog-eat-dog-40-RECON'), { type: 'epic', repo: 'dog-eat-dog', issue: 40, legacy: false, role: 'recon', name: 'epic-dog-eat-dog-40', raw: 'Epic-dog-eat-dog-40-RECON' });
+  assert.equal(sessionKey('ticket-repo-5-review'), sessionKey('ticket-repo-5'));
+  assert.equal(sessionKey('ticket-repo-5-review'), sessionKey('repo-5'), 'a legacy window of the ticket joins too');
+  assert.notEqual(sessionKey('epic-repo-5-review'), sessionKey('ticket-repo-5'));
+  assert.equal(parseSessionName('ticket-repo-5').role, undefined);
+});
+
+test('a role-suffixed name never parses as a legacy ticket of another repo, and unknown roles stay unparsed', () => {
+  assert.equal(parseSessionName('ticket-repo-5-review-3').repo, 'repo-5-review', 'the trailing number is still the issue');
+  for (const raw of ['ticket-repo-5-implementer', 'ticket-repo-5-review-', 'ticket-repo-review', 'repo-5-review', 'review-214b', 'unit-226-review']) {
+    assert.equal(parseSessionName(raw).name, null, raw);
+  }
+  assert.equal(parseSessionName('unit-226').repo, 'unit', 'legacy reading unchanged');
+});
+
+test('CLI takes the role as an optional extra argument', () => {
+  assert.equal(spawnHarness(cli, ['ticket', 'claude-config', '233', 'review']).stdout, 'claude -n ticket-claude-config-233-review\n');
+  assert.equal(spawnHarness(cli, ['epic', 'strate', '9', 'recon']).stdout, 'claude -n epic-strate-9-recon\n');
+  for (const args of [['ticket', 'repo', '5', 'bogus'], ['ticket', 'repo', '5', 'review', 'x']]) {
+    const r = spawnHarness(cli, args);
+    assert.notEqual(r.status, 0, args.join(' '));
     assert.match(r.stderr, /usage: session-name\.mjs/, args.join(' '));
   }
 });

@@ -2,8 +2,8 @@
 // session-name.mjs — the launch line for a unit's session (#175).
 //
 //   node session-name.mjs director <scope words…>  (slugified)
-//   node session-name.mjs epic <repo> <N>          (repo slugified, as worktree.mjs does)
-//   node session-name.mjs ticket <repo> <N>
+//   node session-name.mjs epic <repo> <N> [role]   (repo slugified, as worktree.mjs does)
+//   node session-name.mjs ticket <repo> <N> [role] (role: review | recon, an in-session subagent)
 //   node session-name.mjs general <topic words…>   (slugified, first 4 words)
 //
 // Prints exactly one line, `claude -n <name>`; the name is built by lib's
@@ -11,7 +11,7 @@
 
 import { die, generalSessionName, isMain, log, parseArgs, sessionName, slugify } from './lib.mjs';
 
-const USAGE = 'usage: session-name.mjs director <scope> | epic <repo> <N> | ticket <repo> <N> | general <topic words…>';
+const USAGE = 'usage: session-name.mjs director <scope> | epic <repo> <N> [role] | ticket <repo> <N> [role] | general <topic words…>';
 
 /** The command that starts a session under `name`. */
 export function launchCommand(name) {

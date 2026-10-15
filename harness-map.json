@@ -431,6 +431,16 @@
    ]
   },
   {
+   "id": "agent:implementer-opus",
+   "kind": "agent",
+   "label": "implementer-opus",
+   "file": "agents/implementer-opus.md",
+   "summary": "The implementer at opus, effort high by frontmatter; dispatched named.",
+   "rules": [
+    "Body mirrors implementer.md"
+   ]
+  },
+  {
    "id": "agent:reviewer",
    "kind": "agent",
    "label": "reviewer",
@@ -914,6 +924,11 @@
   },
   {
    "from": "skill:agent-factory",
+   "to": "agent:implementer-opus",
+   "kind": "dispatches"
+  },
+  {
+   "from": "skill:agent-factory",
    "to": "agent:reviewer",
    "kind": "dispatches"
   },
@@ -957,6 +972,12 @@
    "to": "model:opus",
    "kind": "routes-to",
    "label": "override for 3+ files"
+  },
+  {
+   "from": "agent:implementer-opus",
+   "to": "model:opus",
+   "kind": "routes-to",
+   "label": "frontmatter, high"
   },
   {
    "from": "agent:reviewer",
