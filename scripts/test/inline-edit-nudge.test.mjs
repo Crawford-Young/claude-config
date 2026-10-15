@@ -6,6 +6,19 @@ import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CLAIM_LEASE_MS } from '../../hooks/_hooklib.mjs';
+
+const LEASE_MARGIN_MS = 750;
+/** ms until the clock is at least LEASE_MARGIN_MS clear of both edges of a claim lease; 0 when it already is. */
+const leaseWaitMs = (now = Date.now()) => {
+  const phase = now % CLAIM_LEASE_MS;
+  if (phase < LEASE_MARGIN_MS) return LEASE_MARGIN_MS - phase;
+  return phase > CLAIM_LEASE_MS - LEASE_MARGIN_MS ? CLAIM_LEASE_MS - phase + LEASE_MARGIN_MS : 0;
+};
+const settleLease = () => {
+  const ms = leaseWaitMs();
+  if (ms) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'inline-edit-nudge.mjs');
 
@@ -23,9 +36,18 @@ function setup(lines) {
 
 function fire(ctx, extra = {}, file = 'cur.ts') {
   const payload = { session_id: 's1', transcript_path: ctx.transcript, tool_input: { file_path: file }, ...extra };
+  settleLease();
   const stdout = execHarness(hook, [], { input: JSON.stringify(payload), home: ctx.h });
   return stdout ? JSON.parse(stdout) : null;
 }
+
+// withClaim backs off when the lease epoch rolls over mid-claim, so a call straddling a boundary is silent by
+// design (#250). Calls that must fire wait for the middle of a lease first.
+test('leaseWaitMs waits out the first and last 750 ms of a lease, not the middle', () => {
+  assert.equal(leaseWaitMs(CLAIM_LEASE_MS * 7 + 2000), 0);
+  assert.equal(leaseWaitMs(CLAIM_LEASE_MS * 7 + 100), 650);
+  assert.equal(leaseWaitMs(CLAIM_LEASE_MS * 7 + CLAIM_LEASE_MS - 100), 850);
+});
 
 const five = ['a', 'b', 'c', 'd', 'e'].map((f) => edit(`${f}.ts`));
 
@@ -136,7 +158,7 @@ test('subagent transcripts are separate files: an isSidechain flag does not hide
 
 test('a claim held by a concurrent hook suppresses the second nudge; a crash-left one does not', async () => {
   const { nudge } = await import('../../hooks/inline-edit-nudge.mjs');
-  const { claimFile, CLAIM_LEASE_MS } = await import('../../hooks/_hooklib.mjs');
+  const { claimFile } = await import('../../hooks/_hooklib.mjs');
   const ctx = setup(five);
   const state = join(ctx.h, 'state.json');
   const payload = { session_id: 's9', transcript_path: ctx.transcript, tool_input: { file_path: 'cur.ts' } };
@@ -145,6 +167,7 @@ test('a claim held by a concurrent hook suppresses the second nudge; a crash-lef
   assert.equal(nudge(payload, state), null, 'claim held by a parallel hook');
   rmSync(claimFile(state, epoch));
   writeFileSync(claimFile(state, epoch - 5), '');
+  settleLease();
   assert.ok(nudge(payload, state), 'a crash-left claim from earlier leases does not silence it');
   assert.deepEqual(readdirSync(ctx.h).filter((f) => f.includes('.lock')), [], 'claim released, crash-left one swept');
   assert.equal(nudge(payload, state), null, 'run recorded');
@@ -178,6 +201,7 @@ test('a pre-#139 <state>.lock (file or directory, any age) never silences the nu
   writeFileSync(`${state}.lock`, '');
   const future = new Date(Date.now() + 3_600_000);
   utimesSync(`${state}.lock`, future, future);
+  settleLease();
   assert.ok(nudge(payload, state), 'future-dated legacy lock file');
   const state2 = join(ctx.h, 'state2.json');
   mkdirSync(`${state2}.lock`);
