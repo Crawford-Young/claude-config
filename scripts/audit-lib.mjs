@@ -116,18 +116,27 @@ function usageOfModel(u, share1h) {
   };
 }
 
+/** prices with the model's `longPrompt` rates as its only rates. */
+function longRatesOnly(model, prices) {
+  const { over, ...longRates } = priceFor(model, prices).longPrompt || {};
+  return { ...prices, models: { [model]: { ...priceFor(model, prices), ...longRates } } };
+}
+
 /** Relative miss of cost-state's $ for one model against prices.json. modelUsage splits
  *  no cache-write tier, so the split comes from `share1h`, the 1h share of the model's
  *  writes in the same file's transcript: a point estimate, miss = cost / priced - 1.
  *  Without it (null) cost-state's $ is only known to lie between every write priced 5m
  *  and every write priced 1h: a band, miss 0 inside it. null when the model has no price
- *  or no $. */
+ *  or no $. A model with a `longPrompt` tier is always a band: the sum carries no
+ *  per-request prompt length, so its $ lies between every request at the base rates and
+ *  every one at the long-prompt rates (#223). */
 function priceMiss(u, model, prices, share1h) {
   if (!u.costUSD) return null;
   const lo = priceUsage(usageOfModel(u, share1h ?? 0), model, prices, { aggregate: true }).usd;
   if (lo === null) return null;
-  if (share1h !== null) return u.costUSD / lo - 1;
-  const hi = priceUsage(usageOfModel(u, 1), model, prices, { aggregate: true }).usd;
+  const tiered = Boolean(priceFor(model, prices).longPrompt);
+  if (share1h !== null && !tiered) return u.costUSD / lo - 1;
+  const hi = priceUsage(usageOfModel(u, share1h ?? 1), model, longRatesOnly(model, prices), { aggregate: true }).usd;
   return u.costUSD < lo ? u.costUSD / lo - 1 : u.costUSD > hi ? u.costUSD / hi - 1 : 0;
 }
 
@@ -137,14 +146,15 @@ function priceMiss(u, model, prices, share1h) {
 function checkModelUsage(u, model, prices, share1h, tolerance) {
   const miss = priceMiss(u, model, prices, share1h);
   if (miss === null) return null;
-  const band = share1h === null;
-  if (Math.abs(miss) <= tolerance) return { status: 'ok', band };
+  const longPrompt = Boolean(priceFor(model, prices).longPrompt);
+  const band = share1h === null || longPrompt;
+  if (Math.abs(miss) <= tolerance) return { status: 'ok', band, longPrompt };
   const p = priceFor(model, prices);
   if (p.exception) {
     const withException = { ...prices, models: { [model]: { ...p, ...p.exception.price } } };
-    if (Math.abs(priceMiss(u, model, withException, share1h)) <= tolerance) return { status: 'excepted', band };
+    if (Math.abs(priceMiss(u, model, withException, share1h)) <= tolerance) return { status: 'excepted', band, longPrompt };
   }
-  return { status: 'drift', miss, band };
+  return { status: 'drift', miss, band, longPrompt };
 }
 
 const depthOf = (u) => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -527,6 +537,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         const m = (priceCheck.models[model] ||= { files: 0, excepted: 0, band: 0, drift: [] });
         m.files++;
         if (res.band) m.band++;
+        if (res.longPrompt) m.longPrompt = (m.longPrompt || 0) + 1;
         if (res.status === 'excepted') {
           m.excepted++;
           const { price, since, waitsOn } = priceFor(model, prices).exception;
@@ -1031,8 +1042,9 @@ function priceCheckLines({ models, exceptions }) {
   const clean = Object.values(models).filter((m) => !m.drift.length).length;
   const rows = Object.values(models).reduce((a, m) => a + m.files, 0);
   const band = Object.values(models).reduce((a, m) => a + m.band, 0);
+  const tiered = Object.values(models).reduce((a, m) => a + (m.longPrompt || 0), 0);
   if (clean) {
-    lines.push(`price check: ${clean} model${clean === 1 ? '' : 's'} within ${+(PRICE_TOLERANCE * 100).toFixed(3)}% of cost-state on its own tokens (${band} of ${rows} model-files band-checked: no cache writes in the transcript to split 5m/1h, so only the 5m-1h range is tested)`);
+    lines.push(`price check: ${clean} model${clean === 1 ? '' : 's'} within ${+(PRICE_TOLERANCE * 100).toFixed(3)}% of cost-state on its own tokens (${band} of ${rows} model-files band-checked: no cache writes in the transcript to split 5m/1h, so only the 5m-1h range is tested${tiered ? `; ${tiered} long-prompt: summed tokens carry no prompt length, so only the base-to-long-prompt price range is tested` : ''})`);
   }
   return lines;
 }

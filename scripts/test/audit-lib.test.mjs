@@ -1060,5 +1060,26 @@ test('the shipped Haiku 5.5 carries the 100k tier from the pricing page (#202)',
 test('priceCheck: summed tiered-model cost-state tokens price at base rates, not as one long request (#202)', () => {
   // 1M input + 1M output across many short requests: $1 + $5 at the base rates
   const pc = checkOf(TIERED, costStateOf({ 'claude-tiered': mu({ costUSD: 6 }) }));
-  assert.deepEqual(pc.models['claude-tiered'], { files: 1, excepted: 0, band: 1, drift: [] });
+  assert.deepEqual(pc.models['claude-tiered'], { files: 1, excepted: 0, band: 1, longPrompt: 1, drift: [] });
+});
+
+test('priceCheck: a tiered model whose cost-state $ includes long-prompt requests is no false drift, a flat model at that $ is real drift (#223)', () => {
+  // summed 1M in + 1M out: $6 if every request is short, $30 if every one is long; $20 is a mix
+  const day = { type: 'cost-state', sessionId: 's1', totalCostUSD: 1, modelUsage: { 'claude-tiered': mu({ costUSD: 20 }), 'claude-flat': mu({ costUSD: 20 }) } };
+  const pc = checkOf(TIERED, day);
+  assert.deepEqual(pc.models['claude-tiered'], { files: 1, excepted: 0, band: 1, longPrompt: 1, drift: [] });
+  assert.equal(pc.models['claude-flat'].drift.length, 1);
+  assert.ok(Math.abs(pc.models['claude-flat'].drift[0] - (20 / 6 - 1) * 100) < 0.01);
+});
+
+test('priceCheck: a tiered model above even the all-long price is still drift (#223)', () => {
+  const pc = checkOf(TIERED, costStateOf({ 'claude-tiered': mu({ costUSD: 33 }) })); // all-long is $30
+  assert.equal(pc.models['claude-tiered'].drift.length, 1);
+});
+
+test('priceCheck: the render says a tiered model is range-checked against its long-prompt price (#223)', () => {
+  const c = createCollector({ prices: TIERED });
+  c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
+  c.add(costStateOf({ 'claude-tiered': mu({ costUSD: 20 }) }), MAIN);
+  assert.match(renderMarkdown(c.report()), /1 of 1 model-files .*long-prompt/);
 });
