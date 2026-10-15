@@ -98,7 +98,7 @@ test('sessionName throws on bad input instead of building an unparseable name', 
   assert.throws(() => sessionName('ticket', 'repo', 'x7'), /issue/);
   assert.throws(() => sessionName('ticket', 'repo', 0), /issue/);
   assert.throws(() => sessionName('epic', 'My_Repo', 7), /repo/);
-  assert.throws(() => sessionName('ticket', 'repo', 7, 'review', 'extra'), /arguments/);
+  assert.throws(() => sessionName('ticket', 'repo', 7, 'review', 2, 'extra'), /arguments/);
 });
 
 test('issueNumber normalizes leading zeros and rejects 0, and sessionName agrees', () => {
@@ -158,7 +158,7 @@ test('ticket and epic names take an optional review|recon role; the bare form st
   assert.throws(() => sessionName('ticket', 'repo', 5, 'implementer'), /role/);
   assert.throws(() => sessionName('ticket', 'repo', 5, 'Review'), /role/);
   assert.throws(() => sessionName('director', 'harness', 'review'), /arguments/);
-  assert.throws(() => sessionName('ticket', 'repo', 5, 'review', 'x'), /arguments/);
+  assert.throws(() => sessionName('ticket', 'repo', 5, 'review', 2, 'x'), /arguments/);
 });
 
 test('parseSessionName returns the role and keys a role-suffixed name to its ticket', () => {
@@ -171,7 +171,7 @@ test('parseSessionName returns the role and keys a role-suffixed name to its tic
 });
 
 test('a role-suffixed name never parses as a legacy ticket of another repo, and unknown roles stay unparsed', () => {
-  assert.equal(parseSessionName('ticket-repo-5-review-3').repo, 'repo-5-review', 'the trailing number is still the issue');
+  assert.equal(parseSessionName('ticket-repo-5-review-3').repo, 'repo', 'the trailing number is the harness dedupe, not an issue');
   for (const raw of ['ticket-repo-5-implementer', 'ticket-repo-5-review-', 'ticket-repo-review', 'repo-5-review', 'review-214b', 'unit-226-review']) {
     assert.equal(parseSessionName(raw).name, null, raw);
   }
@@ -186,4 +186,47 @@ test('CLI takes the role as an optional extra argument', () => {
     assert.notEqual(r.status, 0, args.join(' '));
     assert.match(r.stderr, /usage: session-name\.mjs/, args.join(' '));
   }
+});
+
+test('a fresh dispatch on a named ticket/role takes a -r<K> round (K >= 2) after the role', () => {
+  assert.equal(sessionName('ticket', 'claude-config', 233, undefined, 2), 'ticket-claude-config-233-r2');
+  assert.equal(sessionName('ticket', 'claude-config', 233, 'review', 3), 'ticket-claude-config-233-review-r3');
+  assert.equal(sessionName('epic', 'strate', 9, 'recon', 12), 'epic-strate-9-recon-r12');
+  for (const bad of [1, 0, -2, 1.5, 'x']) assert.throws(() => sessionName('ticket', 'repo', 5, undefined, bad), /round/, String(bad));
+  assert.throws(() => sessionName('ticket', 'repo', 5, 'review', 2, 'x'), /arguments/);
+});
+
+test('parseSessionName joins a round name to its ticket and keeps the role and round', () => {
+  assert.deepEqual(parseSessionName('ticket-claude-config-233-r2'), { type: 'ticket', repo: 'claude-config', issue: 233, legacy: false, round: 2, name: 'ticket-claude-config-233', raw: 'ticket-claude-config-233-r2' });
+  const p = parseSessionName('Ticket-Claude-Config-233-REVIEW-R3');
+  assert.deepEqual([p.repo, p.issue, p.role, p.round, p.name], ['claude-config', 233, 'review', 3, 'ticket-claude-config-233']);
+  assert.equal(sessionKey('ticket-repo-5-recon-r2'), sessionKey('repo-5'));
+  for (const raw of ['ticket-repo-5-r1', 'ticket-repo-5-r0', 'ticket-repo-5-r', 'ticket-repo-5-r2-review']) assert.equal(parseSessionName(raw).name, null, raw);
+});
+
+test("the harness's own -N dedupe suffix parses back to the same ticket, never another repo and issue", () => {
+  const p = parseSessionName('ticket-claude-config-233-2');
+  assert.deepEqual([p.type, p.repo, p.issue, p.dedupe, p.name], ['ticket', 'claude-config', 233, 2, 'ticket-claude-config-233']);
+  assert.equal(sessionKey('ticket-claude-config-233-review-2'), 'ticket-claude-config-233');
+  assert.equal(parseSessionName('ticket-claude-config-233-review-2').role, 'review');
+  assert.equal(parseSessionName('ticket-claude-config-233-r2-2').round, 2);
+  assert.equal(parseSessionName('epic-strate-9-14').repo, 'strate');
+  assert.equal(parseSessionName('ticket-repo-5').dedupe, undefined);
+  assert.equal(parseSessionName('ticket-repo-5-1').repo, 'repo-5', 'the harness starts dedupe at 2, so -1 is an issue number');
+});
+
+test('CLI emits a round with --round', () => {
+  assert.equal(spawnHarness(cli, ['ticket', 'claude-config', '235', '--round', '2']).stdout, 'claude -n ticket-claude-config-235-r2\n');
+  assert.equal(spawnHarness(cli, ['ticket', 'claude-config', '235', 'review', '--round', '3']).stdout, 'claude -n ticket-claude-config-235-review-r3\n');
+  for (const args of [['ticket', 'repo', '5', '--round', '1'], ['ticket', 'repo', '5', '--round'], ['ticket', 'repo', '5', '--bogus', '2'], ['director', 'x', '--round', '2']]) {
+    const r = spawnHarness(cli, args);
+    assert.notEqual(r.status, 0, args.join(' '));
+    assert.match(r.stderr, /usage: session-name\.mjs/, args.join(' '));
+  }
+});
+
+test('a harness-deduped role name (seen live: ticket-claude-config-214-review-2) keeps its repo, issue and role', () => {
+  const p = parseSessionName('ticket-claude-config-214-review-2');
+  assert.deepEqual([p.type, p.repo, p.issue, p.role, p.dedupe, p.name], ['ticket', 'claude-config', 214, 'review', 2, 'ticket-claude-config-214']);
+  assert.equal(sessionKey('ticket-claude-config-214-review-2'), sessionKey('ticket-claude-config-214-review'));
 });

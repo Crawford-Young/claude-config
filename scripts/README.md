@@ -7,7 +7,7 @@ with `node --test scripts/test/*.test.mjs`.
 | Script | Purpose |
 | --- | --- |
 | `worktree.mjs` | Create/remove/list feature worktrees — branch from `origin/main`, env copy per `.worktreeinclude`, Windows-safe removal that first stops the serve-port listener; `prepush` runs commitlint over `origin/<base>..HEAD`; `new` prints the session launch line and warns on a mismatched session name |
-| `session-name.mjs` | Prints the `claude -n <name>` launch line for a session: `director <scope>`, `epic <repo> <N>`, `ticket <repo> <N>`, or `general <topic words…>`. Spend and reflect join on the parsed name |
+| `session-name.mjs` | Prints the `claude -n <name>` launch line for a session: `director <scope>`, `epic <repo> <N>`, `ticket <repo> <N> [role] [--round K]`, or `general <topic words…>`. Spend and reflect join on the parsed name |
 | `qa.mjs` | Run the repo's own gates (justfile, package.json, or marker files like `scripts/test/*.test.mjs`) foreground + unpiped; full logs to `~/.claude/qa-logs/`, compact honest summary to the console |
 | `land.mjs` | The claude-config commit lane — ephemeral worktree from `origin/main`, path-scoped diff, post-merge sync |
 | `cleanup.mjs` | End-of-wave sweep — dirty repos, worktrees, board drift (via `board.mjs sweep`); `--kill-port`, `--remove-worktree` |

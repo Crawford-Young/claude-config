@@ -172,8 +172,12 @@ export function parseArgs(argv) {
 const SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*';
 const ISSUE = '[1-9]\\d*';
 const SLUG_RE = new RegExp(`^${SLUG}$`);
+const COUNT = '[2-9]|[1-9]\\d+'; // a round or dedupe number: 2 and up
+const LAZY_SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*?';
 const ROLES = ['review', 'recon'];
-const TYPED_RE = new RegExp(`^(?:(director|general)-(${SLUG})|(epic|ticket)-(${SLUG})-(${ISSUE})(?:-(${ROLES.join('|')}))?)$`);
+// A lazy repo slug, so `ticket-repo-5-2` reads as the harness's dedupe (-2) of ticket 5, not issue 2 of repo `repo-5`.
+// Suffix order: role, then a -r<K> round, then the harness's -<K> dedupe (K >= 2 for both).
+const TYPED_RE = new RegExp(`^(?:(director|general)-(${SLUG})|(epic|ticket)-(${LAZY_SLUG})-(${ISSUE})(?:-(${ROLES.join('|')}))?(?:-r(${COUNT}))?(?:-(${COUNT}))?)$`);
 const LEGACY_RE = new RegExp(`^(${SLUG})-(${ISSUE})$`);
 
 /** Lowercase kebab slug of free text, cut to its first `maxWords` words. */
@@ -201,8 +205,9 @@ function slugArg(what, v) {
   return v;
 }
 
-/** A unit's session name: ('director', scope) | ('epic'|'ticket', repo, N[, role]) | ('general', topic).
+/** A unit's session name: ('director', scope) | ('epic'|'ticket', repo, N[, role[, round]]) | ('general', topic).
  *  A role (review | recon) marks an in-session subagent of the unit; bare is the implementer.
+ *  A round (2+) marks a fresh dispatch on a name already used in the session (`-r2`).
  *  Throws on anything that would not parse back to the same type. */
 const ARITY = new Map([['director', 1], ['general', 1], ['epic', 2], ['ticket', 2]]);
 const ROLE_TYPES = new Set(['epic', 'ticket']);
@@ -210,19 +215,21 @@ const ROLE_TYPES = new Set(['epic', 'ticket']);
 export function sessionName(type, ...args) {
   const want = ARITY.get(type);
   if (!want) throw new Error(`unknown session type ${JSON.stringify(type)}: director | epic | ticket | general`);
-  if (args.length > want + (ROLE_TYPES.has(type) ? 1 : 0)) throw new Error(`too many arguments for a ${type} session name`);
+  if (args.length > want + (ROLE_TYPES.has(type) ? 2 : 0)) throw new Error(`too many arguments for a ${type} session name`);
   if (want === 1) return `${type}-${slugArg(type === 'director' ? 'scope' : 'topic', args[0])}`;
   const repo = slugArg('repo', args[0]);
   const n = issueNumber(args[1]);
   if (!n) throw new Error(`session name issue must be a positive issue number, got ${JSON.stringify(args[1])}`);
   const role = args[2];
   if (role !== undefined && !ROLES.includes(role)) throw new Error(`session name role must be ${ROLES.join(' | ')}, got ${JSON.stringify(role)}`);
-  return `${type}-${repo}-${n}${role ? `-${role}` : ''}`;
+  const round = args[3];
+  if (round !== undefined && !(Number.isInteger(round) && round >= 2)) throw new Error(`session name round must be a whole number >= 2, got ${JSON.stringify(round)}`);
+  return `${type}-${repo}-${n}${role ? `-${role}` : ''}${round ? `-r${round}` : ''}`;
 }
 
 /** Parsed identity of a session name, case-folded. name is the canonical typed form
  *  (the join key, role dropped: every agent of a ticket joins to it) and raw the input as given.
- *  A role-suffixed name adds `role`; the bare form has none. A legacy `<slug>-<N>` is a ticket
+ *  A role-suffixed name adds `role`, a -r<K> round `round`, the harness's -<K> dedupe `dedupe`; the bare form has none. A legacy `<slug>-<N>` is a ticket
  *  (legacy: true). Missing, empty or unparseable → { type: 'general', topic: null, name: null }. */
 export function parseSessionName(input) {
   const raw = typeof input === 'string' ? input : '';
@@ -232,7 +239,7 @@ export function parseSessionName(input) {
   if (m?.[1] === 'general') return { type: 'general', topic: m[2], name: s, raw };
   if (m) {
     const name = `${m[3]}-${m[4]}-${m[5]}`;
-    return { type: m[3], repo: m[4], issue: Number(m[5]), legacy: false, ...(m[6] && { role: m[6] }), name, raw };
+    return { type: m[3], repo: m[4], issue: Number(m[5]), legacy: false, ...(m[6] && { role: m[6] }), ...(m[7] && { round: Number(m[7]) }), ...(m[8] && { dedupe: Number(m[8]) }), name, raw };
   }
   const l = LEGACY_RE.exec(s);
   if (l) return { type: 'ticket', repo: l[1], issue: Number(l[2]), legacy: true, name: `ticket-${l[1]}-${l[2]}`, raw };
