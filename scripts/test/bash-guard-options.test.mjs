@@ -214,7 +214,6 @@ const BIN = gitBashBin();
 /** Where a table rightly differs from a tool's --help, with the evidence. */
 const HELP_DIFFERS = {
   xargs: { 'max-lines': 'its --help shows =MAX-LINES, but findutils reads it as optional: `xargs --max-lines echo hi < /dev/null` prints hi' },
-  strace: { pid: 'a stop though it takes a value: MSYS strace runs no command with -p (`strace -p 999999 echo x`: "cannot provide both a command line and a process id")' },
 };
 
 for (const [tool, spec] of TABLES) {

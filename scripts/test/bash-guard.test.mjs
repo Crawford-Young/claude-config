@@ -3020,7 +3020,7 @@ test('#249: taskset, chrt, runuser, flock, strace, systemd-run and pkexec are re
     gated(`find . -exec ${p} git push ';'`, ['git push']);
   }
   // Options after which nothing runs: an attach to a pid, a listing.
-  for (const c of ['taskset -p 1234 git push', 'chrt -p 10 1234 git push', 'chrt -m git push', 'strace -p 1234 git push', 'pkexec --version git push']) gated(c, []);
+  for (const c of ['taskset -p 1234 git push', 'chrt -p 10 1234 git push', 'chrt -m git push', 'pkexec --version git push']) gated(c, []);
 });
 
 test('#249: su -c, runuser -c, script -c, flock -c and watch run a shell line', () => {
@@ -3606,4 +3606,189 @@ test('#256 review 2: a literal stage wrapped in @( ), ( ), $( ) or led by a comm
   gated(`pwsh -c "@('push') | xargs git"`, ['git push']);
   forgesIn('@("$HOME/.claude") | xargs rm -rf', ['PowerShell', null]);
   allowedIn('@("/tmp/x") | xargs rm -rf', '/work', ['PowerShell', null]);
+});
+
+// --- #264: runner and prefix false allows ------------------------------------
+
+test('#264: wsl runs its words as a line in the default shell, or past -e/--exec as the command', () => {
+  for (const c of [
+    'wsl git push',
+    'wsl.exe git push',
+    "wsl 'git push'",
+    'wsl -- git push',
+    'wsl -e git push',
+    'wsl --exec git push',
+    'wsl -d Ubuntu -u root git push',
+    'wsl --distribution Ubuntu --user=root git push',
+    'wsl --cd /tmp git push',
+    'wsl --shell-type login git push',
+    "find . -exec wsl git push ';'",
+    'echo x | xargs wsl -e git push',
+  ]) gated(c, ['git push']);
+  for (const c of ['wsl rm -rf ~/.claude', 'wsl -e rm -rf ~/.claude', 'find ~ -name .claude -exec wsl rm -rf {} +']) forgesIn(c);
+  forgesIn('D=~/.claude; wsl rm -rf $D', ['Bash', null]);
+  // Managing WSL runs no command; a line that runs nothing gated stays open.
+  for (const c of ['wsl --list git push', 'wsl -l -v git push', 'wsl --shutdown git push', 'wsl -e echo git push', 'wsl ls']) gated(c, []);
+  for (const c of ['wsl ls ~/.claude', 'wsl -e ls ~/.claude']) allowedIn(c);
+});
+
+test('#264: an o or O in a shell flag cluster takes the next word, the -c cluster too', () => {
+  for (const c of [
+    `bash -co pipefail 'git push'`,
+    `bash -oc pipefail 'git push'`,
+    `sh -eco errexit 'git push'`,
+    `bash -cO extglob 'git push'`,
+    `bash -co pipefail -o nounset 'git push'`,
+    `bash -co pipefail -- 'git push'`,
+    `xargs bash -co pipefail 'git push'`,
+    `find . -exec sh -co pipefail 'git push' ';'`,
+  ]) gated(c, ['git push']);
+  forgesIn(`bash -co pipefail 'rm -rf ~/.claude'`);
+  forgesIn(`find ~ -name .claude -exec bash -co pipefail 'rm -rf "$1"' _ {} ';'`);
+  gated(`bash -co pipefail 'git status'`, []);
+});
+
+test('#264: busybox ash and hush, and either alone, are shells that run a -c line or a heredoc', () => {
+  for (const c of [
+    `busybox ash -c 'git push'`,
+    `busybox hush -c 'git push'`,
+    `ash -c 'git push'`,
+    `hush -lc 'git push'`,
+    `busybox ash -co pipefail 'git push'`,
+    `xargs busybox ash -c 'git push'`,
+    `find . -exec busybox hush -c 'git push' ';'`,
+    'busybox ash <<EOF\ngit push\nEOF',
+  ]) gated(c, ['git push']);
+  forgesIn(`busybox ash -c 'rm -rf ~/.claude'`);
+  forgesIn(`find ~ -name .claude -exec busybox hush -c 'rm -rf "$1"' _ {} ';'`);
+  gated(`busybox ash -c 'git status'`, []);
+  allowedIn(`busybox ash -c 'ls ~/.claude'`);
+});
+
+test("#264: parallel's value options GNU parallel documents take their value, so the command follows it", () => {
+  // parallel isn't installed here: the table follows GNU parallel's man page (#264).
+  const options = [
+    'trc', 'limit', 'filter', 'basenamereplace', 'bnr', 'basenameextensionreplace', 'bner', 'dirnamereplace', 'dnr', 'extensionreplace', 'er',
+    'seqreplace', 'slotreplace', 'res', 'tempdir', 'tf', 'block-timeout', 'bt', 'group-by', 'bin', 'shard', 'share-dir', 'trim', 'ctagstring',
+    'semaphoretimeout', 'st', 'sqlmaster', 'sqlworker', 'sqlandworker', 'minversion', 'shell-completion',
+  ];
+  for (const o of options) {
+    gated(`parallel --${o} x git push ::: a`, ['git push']);
+    gated(`parallel --${o}=x git push ::: a`, ['git push']);
+  }
+  for (const c of ["find . -exec parallel --trc f git push ::: a ';'", 'echo a | parallel --limit x git push']) gated(c, ['git push']);
+  for (const c of ['parallel --trc f rm -rf ::: ~/.claude', 'echo ~/.claude | parallel --filter x rm -rf']) forgesIn(c);
+  gated('parallel --filter x echo ::: git push', []);
+});
+
+test('#264: strace -p/--pid/--attach take a pid and still run the command, as Linux strace does', () => {
+  for (const c of [
+    'strace -p 1 git push',
+    'strace -p1 git push',
+    'strace -fp 1 git push',
+    'strace --pid=1 git push',
+    'strace --pid 1 git push',
+    'strace --attach=1 git push',
+    "find . -exec strace -p 1 git push ';'",
+    'echo x | xargs strace --pid=1 git push',
+  ]) gated(c, ['git push']);
+  forgesIn('strace -p 1 rm -rf ~/.claude');
+  forgesIn('find ~ -name .claude -exec strace --attach=1 rm -rf {} +');
+  for (const c of ['strace -p 1', 'strace -p 1 ls']) gated(c, []);
+});
+
+test("#264: find -exec takes away what it finds through a cmd or PowerShell line, and through every reading of a prefix", () => {
+  const S = 'push-gate-approvals.json';
+  for (const c of [
+    'find ~/.claude -exec powershell -c Remove-Item -Recurse {} +',
+    'find ~/.claude -exec pwsh -c Remove-Item -Recurse {} +',
+    'find ~/.claude -exec cmd /c rm -rf {} +',
+    'find ~/.claude -exec strace --us x rm -rf {} +',
+    `find ~ -name ${S} -exec cmd /c rm {} ';'`,
+    `find ~ -name ${S} -exec powershell -c Remove-Item {} ';'`,
+    `find ~ -name ${S} -exec strace --us x rm {} ';'`,
+    `find ~ -name ${S} -exec strace -o '|rm {}' ls ';'`,
+  ]) forgesIn(c);
+  for (const c of ['find /tmp/x -exec cmd /c rm -rf {} +', 'find ~/.claude -exec cmd /c type {} +', 'find ~/.claude -exec strace --us x ls {} +']) allowedIn(c);
+});
+
+test('#264: a function the caller defined is no function in a watch line, which runs in a shell of its own', () => {
+  const S = 'push-gate-approvals.json';
+  for (const c of [
+    `f() { cd /tmp; }; cd ~/.claude; watch "f; rm -f ${S}"`,
+    `f() { cd /tmp; }; cd ~/.claude; watch -n 5 "f && rm -f ${S}"`,
+    `f() { cd /tmp; }; cd ~/.claude; find . -exec watch "f; rm -f ${S}" ';'`,
+    `f() { cd /tmp; }; cd ~/.claude; echo x | xargs watch "f; rm -f ${S}"`,
+  ]) forgesIn(c);
+});
+
+// --- #264 review -------------------------------------------------------------
+
+test('#264 review: an o in a shell flag cluster is read both ways, taking the next word (bash, dash) and the rest of the cluster (zsh)', () => {
+  for (const c of [
+    `zsh -coerrexit 'git push'`,
+    `zsh -onoclobber -c 'git push'`,
+    `zsh -c -onoclobber 'git push'`,
+    `busybox hush -coerrexit 'git push'`,
+    `xargs zsh -coerrexit 'git push'`,
+    `find . -exec zsh -coerrexit 'git push' ';'`,
+    // Each reading names a different line; both are read.
+    `zsh -coerrexit 'git status' 'git push'`,
+    `zsh -coerrexit 'git push' 'git status'`,
+  ]) gated(c, ['git push']);
+  forgesIn(`zsh -coerrexit 'rm -rf ~/.claude'`);
+  forgesIn(`find ~ -name .claude -exec zsh -coerrexit 'rm -rf "$1"' _ {} ';'`);
+  // Where the readings agree, the line is read once.
+  gated(`bash -co pipefail 'git push'`, ['git push']);
+  gated(`zsh -eco errexit 'git push'`, ['git push']);
+});
+
+test('#264 review: wsl ~ starts in the home dir and runs the words after it', () => {
+  for (const c of ['wsl ~ git push', 'wsl ~ -e git push', 'wsl -d Ubuntu ~ git push', "find . -exec wsl ~ git push ';'", 'echo x | xargs wsl ~ git push']) gated(c, ['git push']);
+  forgesIn('wsl ~ rm -rf ~/.claude');
+  gated('wsl ~', []);
+  gated('wsl ls ~ git push', []);
+});
+
+test("#264 review: rmdir in a cmd or PowerShell line is judged by that shell's rules", () => {
+  const S = 'push-gate-approvals.json';
+  for (const c of [
+    'find ~/.claude -exec cmd /c rmdir /s /q {} +',
+    'find ~ -name .claude -exec cmd /c rmdir /S/Q {} +',
+    'find ~ -name .claude -exec cmd /c rd /s /q {} +',
+    'find ~ -name .claude -exec cmd /c del /s /q {} +',
+    'find ~/.claude -exec powershell -c rmdir -Recurse {} +',
+    'find ~ -name .claude -exec pwsh -c rmdir -Recurse {} +',
+    'find ~ -name .claude -exec powershell -c rd -Recurse {} +',
+    `find ~ -name ${S} -exec pwsh -c rmdir {} ';'`,
+  ]) forgesIn(c);
+  // cmd's rd without /s, like POSIX rmdir, takes only an empty dir, never a file.
+  for (const c of [
+    `find ~ -name ${S} -exec cmd /c rmdir {} ';'`,
+    `find ~ -name ${S} -exec cmd /c rd /q {} ';'`,
+    `find ~ -name ${S} -exec rmdir {} ';'`,
+    `find ~ -name ${S} -exec sh -c 'rmdir "$1"' _ {} ';'`,
+  ]) allowedIn(c);
+});
+
+test("#264 review: parallel's value options are read off GNU parallel's man page", () => {
+  const options = [
+    'total-jobs', 'total', 'process-slot-var', 'parens', 'template', 'tmpl', 'combineexec', 'combine-executable', 'jl', 'match', 'milestone',
+    '_parset', 'rsync-opts', 'semaphore-name', 'semaphore-timeout', 'sql', 'sql-master', 'sql-and-worker', 'sql-worker', 'ssh-delay', 'term-seq',
+  ];
+  for (const o of options) {
+    gated(`parallel --${o} x git push ::: a`, ['git push']);
+    gated(`parallel --${o}=x git push ::: a`, ['git push']);
+  }
+  // -e takes an end-of-file string only attached, so the rest of its cluster is that string.
+  gated('parallel -eS git push ::: a', ['git push']);
+});
+
+test("#264 review 2: cmd's del or erase of a matched dir deletes every file in it, /s or not", () => {
+  for (const c of [
+    "find ~ -name .claude -exec cmd /c del /q {} ';'",
+    "find ~ -name .claude -exec cmd /c erase /q {} ';'",
+    "find ~ -name .claude -exec cmd /c del {} ';'",
+    "find ~ -name .claude -exec cmd /c del /f /q {} +",
+  ]) forgesIn(c);
 });
