@@ -3413,3 +3413,197 @@ test('#258 end-to-end through the real hook: Bash and PowerShell payloads', () =
     if (status === 2) assert.match(r.stderr, /#258/);
   }
 });
+
+// --- #256: a PowerShell command line, as powershell.exe 5.1 and pwsh 7 read it ---
+
+/** `text` as -EncodedCommand takes it: base64 of its UTF-16LE bytes. */
+const encoded = (text) => Buffer.from(text, 'utf16le').toString('base64');
+
+test('#256: -EncodedCommand is decoded and read as the line it runs, at top level and in payloads', () => {
+  const push = encoded('git push');
+  for (const c of [
+    `powershell -EncodedCommand ${push}`,
+    `powershell -enc ${push}`,
+    `powershell -e ${push}`,
+    `powershell -ec ${push}`,
+    `powershell /enc ${push}`,
+    `powershell -enc ${push} -NoLogo`,
+    `pwsh -NoProfile -EncodedCommand ${push}`,
+    `pwsh --enc ${push}`,
+    `xargs powershell -enc ${push}`,
+    `find . -exec pwsh -e ${push} ';'`,
+  ]) gated(c, ['git push']);
+  forgesIn(`powershell -enc ${encoded('Remove-Item -Recurse -Force ~/.claude')}`);
+  forgesIn(`find . -exec powershell -enc ${encoded('Remove-Item -Recurse -Force ~/.claude')} ';'`);
+  // The words after it are the script's: a second command is refused, and pwsh reads a word as a file.
+  for (const c of [`powershell -enc ${encoded('git status')}`, `powershell -enc ${encoded('git status')} git push`, `pwsh -enc ${encoded('git status')} -c 'git push'`]) gated(c, []);
+  allowedIn(`powershell -enc ${encoded('Get-ChildItem ~/.claude')}`);
+});
+
+test('#256: an -EncodedCommand the guard cannot decode is blocked unread', () => {
+  for (const c of ['powershell -enc $b', 'pwsh -EncodedCommand "$(cat x)"', 'powershell -e not-base64!', 'xargs powershell -enc $b']) {
+    for (const tool of TOOLS) {
+      for (const rule of [staticCheck, gatedVerbs]) assert.throws(() => rule(c, '/work', tool), /-EncodedCommand/, `${rule.name} ${tool} ${c}`);
+    }
+  }
+  const h = tmpHome();
+  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: 'powershell -enc $b' }, cwd: h }), home: h });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /-EncodedCommand/);
+});
+
+test("#256: powershell.exe 5.1's default parameter is Command, and an unknown parameter starts it", () => {
+  for (const c of [
+    'powershell git push',
+    'powershell -NoProfile "git push"',
+    'powershell -NoProfile -NonInteractive git push',
+    'powershell.exe -nop -ex Bypass git push',
+    'powershell -i text git push',
+    // The launcher reads -Version only as the first word; later it starts the line.
+    'powershell -Version 5.1 git push',
+    'powershell -NoProfile -Version 5.1 "; git push"',
+    // 5.1 has no -SSHServerMode: the line starts at it, and runs on past the error.
+    'powershell -sshs "; git push"',
+    'xargs powershell git push',
+    "find . -exec powershell -NoProfile git push ';'",
+  ]) gated(c, ['git push']);
+  forgesIn('powershell -NoProfile Remove-Item -Recurse -Force ~/.claude');
+  forgesIn("find ~ -name x -exec powershell Remove-Item -Recurse -Force ~/.claude ';'");
+  // An unknown first word is the line's command, its other words that command's arguments.
+  gated('powershell -NoProfile -Version 5.1 git push', []);
+  // pwsh 7's default is -File: these run a script file named git (or "git push").
+  for (const c of ['pwsh git push', 'pwsh -NoProfile "git push"', 'pwsh -sshs "; git push"', 'xargs pwsh git push']) gated(c, []);
+});
+
+test('#256: abbreviated parameters resolve as each host matches them', () => {
+  for (const c of [
+    'powershell -comm "git push"',
+    'powershell -Com "git push"',
+    'powershell -co "git push"',
+    'powershell -COMMAND "git push"',
+    'powershell -nop -nol -noni -w Hidden -o Text -in Text -ep Bypass -wo /tmp -st -c "git push"',
+    'powershell -imp -c "git push"',
+    'pwsh -comm "git push"',
+    'pwsh -Com "git push"',
+    'pwsh -st -c "git push"',
+    'pwsh -co "git push"',
+    'pwsh --command "git push"',
+    'pwsh -nop -noni -ex Bypass -wd /tmp -inp Text -settings s.json -c "git push"',
+    `xargs pwsh -co 'git push'`,
+    `find . -exec powershell -Com 'git push' ';'`,
+  ]) gated(c, ['git push']);
+  forgesIn('powershell -comm "Remove-Item -Recurse -Force ~/.claude"');
+  // Too short to name one, or not that host's: 5.1 runs the word as a command, pwsh as a script file.
+  for (const c of ['powershell -con "git push"', 'powershell -commandx "git push"', 'powershell --command "git push"', 'pwsh -con "git push"']) gated(c, []);
+});
+
+test('#256: /-style parameters read like -', () => {
+  for (const c of [
+    'powershell /c "git push"',
+    'powershell /Command "git push"',
+    'powershell /co "git push"',
+    'powershell /nop /ex Bypass /c "git push"',
+    'powershell /noprofile "git push"',
+    `powershell /enc ${encoded('git push')}`,
+    'pwsh /c "git push"',
+    'pwsh /nop /c "git push"',
+    'xargs powershell /c "git push"',
+    "find . -exec pwsh /co 'git push' ';'",
+  ]) gated(c, ['git push']);
+  forgesIn('powershell /noprofile /c "Remove-Item -Recurse -Force ~/.claude"');
+  gated('pwsh /f x.ps1 /c "git push"', []);
+});
+
+test("#256: pwsh 7 reads its own table, and the words after -File are the script's", () => {
+  for (const c of [
+    "pwsh -noprofileloadtime -c 'git push'",
+    "pwsh -interactive -c 'git push'",
+    "pwsh -i -c 'git push'",
+    "pwsh -sshs -c 'git push'",
+    "pwsh -l -c 'git push'",
+    "pwsh -cwa 'git push' x",
+    "xargs pwsh -noprofileloadtime -c 'git push'",
+    "find . -exec pwsh -i -c 'git push' ';'",
+  ]) gated(c, ['git push']);
+  forgesIn("pwsh -noprofileloadtime -c 'Remove-Item -Recurse -Force ~/.claude'");
+  // 5.1 has none of those: the unknown parameter starts its line, as a command.
+  for (const c of ["powershell -noprofileloadtime -c 'git push'", "powershell -interactive -c 'git push'", "powershell -cwa 'git push'", "powershell -l -c 'git push'"]) gated(c, []);
+  for (const c of [
+    "pwsh -File x.ps1 -c 'git push'",
+    "pwsh -f x.ps1 -Command 'git push'",
+    "pwsh x.ps1 -c 'git push'",
+    "powershell -File x.ps1 -c 'git push'",
+    "pwsh -cwa 'git status' 'git push'",
+    "pwsh -i text -c 'git push'",
+    "find . -exec pwsh -File x.ps1 -c 'git push' ';'",
+  ]) gated(c, []);
+});
+
+test('#256: a literal pipeline stage under PowerShell feeds xargs its words', () => {
+  for (const [c, verbs] of [
+    ["'push' | xargs git", ['git push']],
+    ['"push" | xargs git', ['git push']],
+    ["'pr create' | xargs gh", ['gh pr create']],
+    ["'push', '-f' | xargs git", ['git push']],
+  ]) {
+    for (const tool of ['PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
+  }
+  // In bash the stage is a command named push, whose output is out of sight.
+  assert.deepEqual(gatedVerbs("'push' | xargs git", '/work', 'Bash'), []);
+  gated(`pwsh -c "'push' | xargs git"`, ['git push']);
+  gated(`find . -exec pwsh -c "'push' | xargs git" ';'`, ['git push']);
+  forgesIn('"$HOME/.claude" | xargs rm -rf', ['PowerShell', null]);
+  allowedIn("'/tmp/x' | xargs rm -rf", '/work', ['PowerShell', null]);
+});
+
+// --- #256 review 2 -----------------------------------------------------------
+
+test("#256 review 2: 5.1's first-word -Version and -PSConsoleFile take any dash, not a /", () => {
+  for (const c of [
+    'powershell –version 5.1 git push',
+    'powershell –v 5.1 "git push"',
+    'powershell —Version 5.1 git push',
+    'powershell ―psconsolefile x.psc1 git push',
+  ]) gated(c, ['git push']);
+  // The launcher doesn't know /version: the line starts at it, as a command.
+  gated('powershell /version 5.1 git push', []);
+});
+
+test('#256 review 2: a parameter word is trimmed as the host trims it, Unicode whitespace too', () => {
+  for (const host of ['powershell', 'pwsh']) {
+    for (const c of [
+      `${host} " -c" "git push"`,
+      `${host} "-c " "git push"`,
+      `${host} "-c " "git push"`,
+      `${host} " -Command" "git push"`,
+      `${host} "-c\u0085" "git push"`,
+      `${host} " " -c "git push"`,
+      `${host} " -nop " -c "git push"`,
+    ]) gated(c, ['git push']);
+  }
+});
+
+test("#256 review 2: pwsh drops a second dash of any kind, after a dash or a /", () => {
+  for (const c of ['pwsh –-c "git push"', 'pwsh -–c "git push"', 'pwsh –—c "git push"', 'pwsh /-c "git push"', 'pwsh /–command "git push"']) gated(c, ['git push']);
+  // 5.1 drops none: the line starts at the doubled word, as a command.
+  for (const c of ['powershell –-c "git push"', 'powershell /-c "git push"']) gated(c, []);
+});
+
+test('#256 review 2: a literal stage wrapped in @( ), ( ), $( ) or led by a comma feeds xargs', () => {
+  for (const [c, verbs] of [
+    ['@("push") | xargs git', ['git push']],
+    ['("push") | xargs git', ['git push']],
+    [',"push" | xargs git', ['git push']],
+    ['$("push") | xargs git', ['git push']],
+    ["@( 'push' ) | xargs git", ['git push']],
+    ['@("pr","create") | xargs gh', ['gh pr create']],
+    ["@('pr', 'create') | xargs gh", ['gh pr create']],
+  ]) {
+    for (const tool of ['PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
+  }
+  // In bash the group runs a command named push, whose output is out of sight.
+  assert.deepEqual(gatedVerbs('("push") | xargs git', '/work', 'Bash'), []);
+  gated(`pwsh -c "@('push') | xargs git"`, ['git push']);
+  forgesIn('@("$HOME/.claude") | xargs rm -rf', ['PowerShell', null]);
+  allowedIn('@("/tmp/x") | xargs rm -rf', '/work', ['PowerShell', null]);
+});

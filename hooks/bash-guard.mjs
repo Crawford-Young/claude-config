@@ -124,17 +124,21 @@
 // call they run (#239), a shell line they hand a shell (`su -c`, `script -c`,
 // `flock f -c`, `watch`, `strace -o '|cmd'`) parsed as one, and a runner's
 // payloads (`xargs`, `find -exec`, `parallel ::: 'cmd'`) read as calls of
-// their own, fed what their pipeline names (#249). A shell's command line is
-// found past -c in any flag cluster and a `--` (`bash -lc`), PowerShell's
-// -c, -Command or /c, or cmd's /c, /k or /r (shellLine), and a call inside a
-// group, shell line or payload belongs to the pipeline stage it runs in
-// (inStage), so rule 3 sees `watch pnpm test | tail`. A line rebuilt from
-// words the caller's shell already split and expanded (watch's, cmd's,
-// another reading's) is read with the caller's variables; a quoted `sh -c`
-// line keeps its own (#212). A long option that abbreviates several is read each way it could
-// resolve, and the strictest reading counts (longOptions; a command too
-// ambiguous to read is blocked unread). An env -S line whose command is a
-// ${VAR} env expands itself is blocked unread (UnreadableError).
+// their own, fed what their pipeline names (#249; a PowerShell literal
+// stage's strings too, #256). A shell's command line is found past -c in any
+// flag cluster and a `--` (`bash -lc`), in PowerShell as powershell.exe 5.1
+// or pwsh 7 reads its own parameters, abbreviated, `/`-style or
+// whitespace-padded, an -EncodedCommand decoded (#256), or in cmd past /c,
+// /k or /r (shellLine), and a call inside a group, shell line or payload
+// belongs to the pipeline stage it runs in (inStage), so rule 3 sees
+// `watch pnpm test | tail`. A line rebuilt from words the caller's shell
+// already split and expanded (watch's, cmd's, another reading's) is read
+// with the caller's variables; a quoted `sh -c` line keeps its own (#212). A
+// long option that abbreviates several is read each way it could resolve,
+// and the strictest reading counts (longOptions; a command too ambiguous to
+// read is blocked unread). An env -S line whose command is a ${VAR} env
+// expands itself is blocked unread (UnreadableError), and so is an
+// -EncodedCommand the guard can't decode.
 
 // Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
 // errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
@@ -1428,13 +1432,28 @@ function parallelInputs(call) {
   return sep === -1 ? null : args.slice(sep + 1).filter((a) => !/^::::?\+?$/.test(a));
 }
 
+// A PowerShell literal stage: a string, maybe in an array (`,'x'`, `'a', 'b'`)
+// or an @( ), $( ) or ( ) around it (#256).
+const PS_LITERAL = /^(?:[@$]?\(\s*)*,?\s*['"]/;
+// What wraps a literal stage's word: those openers, a comma, a closing paren.
+const PS_LITERAL_WRAP = /^(?:[@$]?\(|,)+|\)+$/g;
+
+/** The words a pipeline stage's call `c` may output: its arguments, or under
+ *  PowerShell a literal stage's strings (`'push' |`, `@('a', 'b') |`), which
+ *  run no command (#256). */
+function stageWords(c) {
+  if (c.tool === 'Bash' || !PS_LITERAL.test(c.text)) return ownArgs(c.words).filter((a) => !a.startsWith('-'));
+  return c.words.flatMap((a) => a.replace(PS_LITERAL_WRAP, '').split(',')).filter(Boolean);
+}
+
 /** What a pipeline feeds an xargs/parallel `call` to run its payload on
  *  (parallel's own `:::` inputs instead, when it names them):
- *  a here-string's word, and the arguments of every call in the stages
- *  before its own, each a path or word that may come out (`echo ~/.claude`,
- *  `find ~/.claude -type f | grep x`). A first stage reads what its group's
- *  or shell line's stage is fed. A heredoc, a file (`xargs -a`, `< list`)
- *  or a command's computed output is out of the guard's sight. */
+ *  a here-string's word, and the words of every call in the stages
+ *  before its own, each a path or word that may come out
+ *  (`echo ~/.claude`, `find ~/.claude -type f | grep x`, stageWords).
+ *  A first stage reads what its group's or shell line's stage is fed.
+ *  A heredoc, a file (`xargs -a`, `< list`) or a command's computed
+ *  output is out of the guard's sight. */
 function pipeFeed(calls, call) {
   if (!/^(?:xargs|parallel)$/i.test(call.cmd)) return [];
   const inputs = parallelInputs(call);
@@ -1444,7 +1463,7 @@ function pipeFeed(calls, call) {
   let at = call;
   while (at.seg === 0 && at.outer) at = at.outer;
   const before = calls.filter((c) => stagesOf(c).some((s) => s.pipe === at.pipe && s.seg < at.seg));
-  return [...own, ...before.flatMap((c) => ownArgs(c.words).filter((a) => !a.startsWith('-')))];
+  return [...own, ...before.flatMap(stageWords)];
 }
 
 /** Does the command set a var to a gate-record path? */
@@ -1693,11 +1712,94 @@ const POP_LOCATION = /^(?:popd|pop-location)$/i;
 const SHELL_C = /^(?:bash|sh|zsh|dash|pwsh|powershell|cmd|eval|iex|invoke-expression)$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
 
+/** A PowerShell host's parameter table: `min[rest]` per parameter, `=` when
+ *  it takes the next word, read into { name, min, takes }. */
+const psParams = (table) =>
+  table
+    .split(' ')
+    .filter(Boolean)
+    .map((p) => {
+      const [, min, rest = '', takes] = /^([^[=]+)(?:\[([^\]]*)\])?(=?)$/.exec(p);
+      return { name: min + rest, min, takes: !!takes };
+    });
+
+/** The parameters of powershell.exe 5.1 and pwsh 7, in the order each host
+ *  tries them (#256). A parameter word names the first one it begins
+ *  (case-insensitive) that it spells at least as far as the `[`: `-co` is
+ *  c[ommand], once trimmed of whitespace (psTrim). `first` holds 5.1's
+ *  launcher parameters, read only as its first word and after a dash of
+ *  any kind (`–version`), never a `/`. pwsh drops a second dash of any kind
+ *  after the first character (`--command`, `–-c`, `/-c`: `doubled`), and its
+ *  default is -File, not 5.1's -Command (`defaultFile`). 5.1's come from
+ *  `powershell.exe -?` and harmless probes of what it runs (verified:
+ *  2026-10, 5.1.26100); pwsh 7's from ParseHelper in PowerShell's
+ *  CommandLineParameterParser.cs and about_Pwsh (verified: 2026-10, 7.5). */
+const PS_HOSTS = {
+  powershell: {
+    params: psParams(
+      'h[elp] ? noe[xit] nop[rofile] nol[ogo] noni[nteractive] so[cketservermode] s[ervermode] nam[edpipeservermode] imp[ortsystemmodules] config[urationname]= c[ommand] w[indowstyle]= f[ile] o[utputformat]= o[f]= i[nputformat]= if= ex[ecutionpolicy]= ep= e[ncodedcommand] e[c] encodeda[rguments]= ea= s[ta] mta wo[rkingdirectory]= wd=',
+    ),
+    first: psParams('v[ersion]= p[sconsolefile]='),
+  },
+  pwsh: {
+    params: psParams(
+      'v[ersion] h[elp] ? l[ogin] noe[xit] nop[rofile] nol[ogo] noni[nteractive] so[cketservermode] v2so[cketservermode] s[ervermode] nam[edpipeservermode] sshs[ervermode] noprofileloadtime i[nteractive] configurationfile= config[urationname]= cus[tompipename]= commandwithargs cwa c[ommand] w[indowstyle]= f[ile] o[utputformat]= o[f]= inp[utformat]= if= ex[ecutionpolicy]= ep= e[ncodedcommand] e[c] encodeda[rguments]= ea= settings[file]= st[a] mta wo[rkingdirectory]= wd= removeworkingdirectorytrailingcharacter to[ken]= utc[timestamp]=',
+    ),
+    first: [],
+    doubled: true,
+    defaultFile: true,
+  },
+};
+// A dash as the host reads one: an en or em dash or a bar too.
+const PS_DASH = /^[-–—―]/;
+// A PowerShell parameter word starts with a dash or a `/`.
+const PS_PARAM = /^[-/–—―]/;
+// The host trims each word (.NET Trim: Unicode whitespace, NBSP and NEL too).
+// JS's \s lacks NEL and U+180E and adds the BOM: the union, so no host-trimmed
+// word is missed (#256).
+const psTrim = (a) => a.replace(/^[\s\u0085\u180e]+|[\s\u0085\u180e]+$/g, '');
+
+const ENCODED_REASON =
+  'This command runs a PowerShell -EncodedCommand whose value the guard cannot decode (a variable, a substitution, or not plain base64), so it is blocked unread (#256). Run the command as plain text.';
+
+/** An -EncodedCommand value as the line it runs: base64 of UTF-16LE text.
+ *  One the guard can't decode is blocked unread. */
+function decodePowerShell(value) {
+  const b64 = value.replace(/\s+/g, '');
+  if (!b64 || b64.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw new UnreadableError(ENCODED_REASON);
+  return Buffer.from(b64, 'base64').toString('utf16le');
+}
+
+/** The words of the line a PowerShell host (PS_HOSTS) runs, or null (#256):
+ *  after -Command (all the words after it), -CommandWithArgs (the next
+ *  one; the rest are its arguments) or -EncodedCommand (decoded), else in
+ *  5.1 from its first word that is no parameter of its own (its default is
+ *  -Command, and an unknown parameter starts the line). Null for -File,
+ *  pwsh's default: the words after it are the script's path and arguments. */
+function powershellLine(cmd, w) {
+  const host = PS_HOSTS[cmd.toLowerCase()];
+  for (let k = 1; k < w.length; k++) {
+    const a = psTrim(w[k]);
+    if (!a) continue;
+    let key = a.slice(1).toLowerCase();
+    if (host.doubled && PS_DASH.test(key)) key = key.slice(1);
+    const match = (ps) => ps.find((p) => key.length >= p.min.length && p.name.startsWith(key));
+    const p = PS_PARAM.test(a) ? ((k === 1 && a[0] !== '/' && match(host.first)) || match(host.params)) : null;
+    if (!p) return host.defaultFile ? null : w.slice(k);
+    if (p.name === 'command') return w.slice(k + 1);
+    if (/^(?:commandwithargs|cwa)$/.test(p.name)) return w.slice(k + 1, k + 2);
+    if (/^(?:encodedcommand|ec)$/.test(p.name)) return k + 1 < w.length ? [decodePowerShell(w[k + 1])] : null;
+    if (p.name === 'file') return null;
+    if (p.takes) k++;
+  }
+  return null;
+}
+
 /** The words of the command line a shell call runs, or null (#249): a POSIX
  *  shell's after -c, in any short-flag cluster (`bash -lc`, `sh -ec`), and
  *  past the options and `--` after it (the first word the line, the rest
- *  its $0 and args); PowerShell's after a -c, -Command or /c wherever it
- *  stands, as on main; cmd's after /c, /k or /r, the line maybe attached
+ *  its $0 and args); PowerShell's as its host reads its parameters
+ *  (powershellLine); cmd's after /c, /k or /r, the line maybe attached
  *  (`/cgit push`); eval/iex's words, iex maybe after -Command. The one
  *  reader for top-level calls and runner payloads. */
 function shellLine(cmd, w) {
@@ -1705,10 +1807,8 @@ function shellLine(cmd, w) {
   let line;
   const tool = shellTool(cmd);
   if (EVAL.test(cmd)) line = w.slice(/^-c/i.test(w[1] ?? '') ? 2 : 1);
-  else if (tool === 'PowerShell') {
-    const at = w.findIndex((a, j) => j > 0 && /^(?:-c|-Command|\/c)$/i.test(a));
-    line = at === -1 ? null : w.slice(at + 1);
-  } else if (tool === null) {
+  else if (tool === 'PowerShell') line = powershellLine(cmd, w);
+  else if (tool === null) {
     const at = w.findIndex((a, j) => j > 0 && /^\/[ckr]/i.test(a));
     line = at === -1 ? null : [w[at].slice(2), ...w.slice(at + 1)].filter(Boolean);
   } else {
