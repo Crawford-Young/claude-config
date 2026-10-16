@@ -149,6 +149,9 @@ test('parseUnit / namesIssue: a ticket or epic name (typed or legacy) gives the 
   assert.deepEqual(parseUnit('claude-config-137'), { prefix: 'claude-config', issue: '137' });
   assert.deepEqual(parseUnit('ticket-claude-config-137'), { prefix: 'claude-config', issue: '137' });
   assert.deepEqual(parseUnit('epic-dog-eat-dog-4'), { prefix: 'dog-eat-dog', issue: '4' });
+  assert.deepEqual(parseUnit('harness_claude-config_e176_t137_review-r2'), { prefix: 'claude-config', issue: '137' }, 'a tree name gives its ticket');
+  assert.deepEqual(parseUnit('harness_dog-eat-dog_e4'), { prefix: 'dog-eat-dog', issue: '4' });
+  assert.equal(parseUnit('harness_claude-config_impl'), null, 'a repo lead names no issue');
   assert.equal(parseUnit('scratch'), null);
   assert.equal(parseUnit('director-strate-5'), null, 'a director scope ending in a number names no issue');
   assert.equal(parseUnit('general-fix-12'), null);

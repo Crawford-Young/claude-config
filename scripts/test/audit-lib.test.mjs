@@ -565,6 +565,43 @@ test('walkTranscripts finds main sessions and subagents with their meta agentTyp
   }
 });
 
+test('walkTranscripts carries a subagent\'s meta.json name, never one read off its agent id (#272)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'audit-'));
+  try {
+    const sub = join(root, 'C--proj', 'sess-1', 'subagents');
+    mkdirSync(sub, { recursive: true });
+    for (const id of ['a01d4ca6', 'aticket-repo-5-77ab']) writeFileSync(join(sub, `agent-${id}.jsonl`), `${JSON.stringify(asst('w', usage()))}\n`);
+    writeFileSync(join(sub, 'agent-a01d4ca6.meta.json'), JSON.stringify({ agentType: 'implementer', model: 'opus', name: 'harness_repo_t5_impl' }));
+    writeFileSync(join(sub, 'agent-aticket-repo-5-77ab.meta.json'), JSON.stringify({ agentType: 'reviewer' }));
+    const agents = [];
+    for await (const f of walkTranscripts(root)) agents.push(f.ctx.agent);
+    assert.deepEqual(agents.sort((a, b) => a.id.localeCompare(b.id)), [
+      { id: 'a01d4ca6', type: 'implementer', model: 'opus', name: 'harness_repo_t5_impl' },
+      { id: 'aticket-repo-5-77ab', type: 'reviewer', model: undefined },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a named subagent\'s spend moves out of its window\'s name row into its own; the rows sum to the window (#272)', () => {
+  const c = createCollector({ prices: PRICES });
+  const win = { sessionId: 'w1', agent: null, window: 'w1', name: 'director-harness' };
+  const sub = (id, name) => ({ sessionId: 'w1', window: 'w1', name: 'director-harness', agent: { id, type: 'implementer', ...(name && { name }) } });
+  c.add({ type: 'custom-title', sessionId: 'w1', customTitle: 'director-harness' }, win);
+  c.add(asst('m1', usage({ input_tokens: 1e6 })), win); // $5
+  c.add(asst('u1', usage({ input_tokens: 1e6 })), sub('u')); // $5, unnamed: stays with the window
+  c.add(asst('t1', usage({ input_tokens: 2e6 })), sub('t', 'harness_repo_e9_t5_impl')); // $10
+  c.add(asst('t2', usage({ input_tokens: 1e6 })), sub('r', 'harness_repo_t5_review-r2')); // $5
+  c.add(asst('s1', usage({ input_tokens: 1e6 })), sub('s', 'director-harness')); // $5, named as its window: no move
+  const r = c.report();
+  assert.deepEqual(r.names.map((g) => [g.name, g.windows, g.requests, g.usd, g.subagentUsd]), [['director-harness', 1, 3, 15, 10], ['ticket-repo-5', 1, 2, 15, 15]]);
+  const [w] = r.sessions;
+  assert.deepEqual([w.usd, w.subagentUsd], [30, 25], 'the window row itself keeps its whole spend');
+  assert.equal(r.names.reduce((a, g) => a + g.usd, 0), w.usd, 'the window\'s name row plus its named-subagent rows is the old window total');
+  assert.deepEqual(r.time.names.map((g) => [g.name, g.usd]).sort(), [['director-harness', 15], ['ticket-repo-5', 15]]);
+});
+
 test('renderMarkdown prints every section header', () => {
   const c = createCollector({ prices: PRICES });
   c.add(asst('r1', usage({ input_tokens: 1 })), MAIN);
@@ -799,6 +836,27 @@ test('time: windows tile their file; a subagent outliving its window keeps the p
   assert.equal(sec(t.totals.wallMs), 95, 'the windows tile the file: no overlap, no gap');
   assert.deepEqual(t.names.map((g) => [g.name, sec(g.wallMs)]).sort(), [['one', 10], ['two', 85]]);
   assert.deepEqual(t.agentRuns.map((a) => [a.id, a.sessionId]), [['p1', 's1']]);
+});
+
+test('time: a named subagent gets its own per-name row, timed from its own records (#272)', () => {
+  const c = createCollector({ prices: PRICES });
+  const win = { sessionId: 'w1', agent: null, window: 'w1', name: 'director-harness' };
+  const sub = { sessionId: 'w1', window: 'w1', name: 'director-harness', agent: { id: 'x1', type: 'implementer', name: 'harness_repo_t5_impl' } };
+  feed(c, win, title('director-harness'), human(0), say(1, 'r1', [use('g1', 'Agent')]), say(100, 'r2', [], 'end_turn'));
+  feed(c, sub, say(10, 'p1', [use('b1', 'Bash')]), result(20, 'b1'), say(25, 'p2', [], 'end_turn'));
+  const t = c.report().time;
+  const rows = Object.fromEntries(t.names.map((g) => [g.name, [g.windows, sec(g.wallMs), sec(g.activeMs), sec(g.modelMs), sec(g.toolsMs)]]));
+  assert.deepEqual(rows['ticket-repo-5'], [1, 15, 15, 5, 10]);
+  assert.deepEqual(rows['director-harness'].slice(0, 2), [1, 100], 'the window keeps its own wall time');
+});
+
+test('time: a named run\'s wait on a prompt in its own transcript counts as other, not user time (#272)', () => {
+  const c = createCollector({ prices: PRICES });
+  const sub = { sessionId: 'w1', window: 'w1', name: 'director-harness', agent: { id: 'x1', type: 'implementer', name: 'harness_repo_t5_impl' } };
+  feed(c, { sessionId: 'w1', agent: null, window: 'w1', name: 'director-harness' }, title('director-harness'), human(0), say(1, 'r1', [], 'end_turn'));
+  feed(c, sub, say(10, 'p1', [], 'end_turn'), human(20), say(25, 'p2', [], 'end_turn'));
+  const row = c.report().time.names.find((g) => g.name === 'ticket-repo-5');
+  assert.deepEqual([row.wallMs, row.modelMs, row.userMs, row.otherMs].map(sec), [15, 5, 0, 10]);
 });
 
 test('time: a timeOnly window feeds its file\'s idle detection but reports nothing', () => {

@@ -4,8 +4,9 @@
 // transcripts Claude Code keeps on disk, grouped by session name (#73; the parsed
 // identity, #175), plus time (#97): wall vs active, the model/tools/user/other split,
 // agent and tool latency, retry cost. --session keeps only the windows named <name>,
-// legacy and typed forms alike: a file splits at each custom title (#115), and its
-// subagents follow the window they ran in.
+// legacy, typed and tree forms alike: a file splits at each custom title (#115), and its
+// subagents follow the window they ran in, except a named one, which goes by its own
+// meta.json name (#272).
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
 // Agent spend is also split per type × model × effort (#113). --stamps reads no
 // transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, workspace/docs/,
@@ -65,7 +66,7 @@ const c = createCollector({
 let files = 0;
 const live = new Set(); // sessionIds with a kept window
 for await (const { windows, records } of transcriptWindows(o.root)) {
-  const kept = o.session ? windows.filter((w) => w.name && sessionKey(w.name) === wanted) : windows;
+  const kept = o.session ? windows.filter((w) => wanted && (sessionKey(w.agent?.name) ?? sessionKey(w.name)) === wanted) : windows;
   const { sessionId, agent } = windows[0];
   if (kept.length) {
     files++;

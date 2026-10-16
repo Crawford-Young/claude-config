@@ -48,7 +48,7 @@
    "kind": "config",
    "label": "settings.json",
    "file": "~/.claude/settings.json",
-   "summary": "Wires every hook by event and matcher; session default model opus; teams on.",
+   "summary": "Wires every hook by event and matcher; session default model opus; agent teams off, subagent spawn depth 5 (#272).",
    "rules": [
     "Denies git add -A / --all at the permission layer too"
    ],
@@ -95,7 +95,7 @@
    "id": "phase:execute-dispatch",
    "kind": "phase",
    "label": "execute / dispatch",
-   "summary": "Work done directly or dispatched to subagents, teammates or workflows.",
+   "summary": "Work done directly or dispatched to subagents (a named tree, #272) or workflows.",
    "rules": [
     "Pause only when done, blocked, or the plan needs revision"
    ]
@@ -280,6 +280,16 @@
    "rules": [
     "Fails closed",
     "A rejected dispatch still spends the grant (accepted 2026-09-21)"
+   ]
+  },
+  {
+   "id": "hook:agent-name-guard",
+   "kind": "hook",
+   "label": "agent-name-guard",
+   "file": "hooks/agent-name-guard.mjs",
+   "summary": "PreToolUse:Agent — in a director's tree only, blocks a spawn without a tree name, a subagent spawn outside its own subtree, and a director spawn outside its scope; elsewhere every spawn passes (#272).",
+   "rules": [
+    "Fails open"
    ]
   },
   {
@@ -550,14 +560,14 @@
    "kind": "script",
    "label": "lib.mjs",
    "file": "scripts/lib.mjs",
-   "summary": "Shared helpers for the workflow scripts; Node builtins only. Owns the session-name format: sessionName/parseSessionName/sessionKey/isChosenName (#175)."
+   "summary": "Shared helpers for the workflow scripts; Node builtins only. Owns the session-name format: sessionName/parseSessionName/sessionKey/isChosenName (#175), tree names included (#272)."
   },
   {
    "id": "script:session-name",
    "kind": "script",
    "label": "session-name.mjs",
    "file": "scripts/session-name.mjs",
-   "summary": "Prints a unit's launch line, claude -n <typed name> (director/epic/ticket/general), built by lib's sessionName so no doc restates the format (#175)."
+   "summary": "Prints a unit's launch line, claude -n <typed name> (director/epic/ticket/general), or an in-session subagent's bare tree name (tree, #272), built by lib's sessionName so no doc restates the format (#175)."
   },
   {
    "id": "store:docs-repo",
@@ -680,14 +690,14 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by parsed session name (legacy and typed forms of a unit join), --session filters to one unit; agent spend per type × model × effort; --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by parsed session name (legacy, typed and tree forms of a unit join; a named subagent joins its own name, #272), --session filters to one unit; agent spend per type × model × effort; --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
   },
   {
    "id": "script:audit-lib",
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-name rows keyed by lib's sessionKey, timestamp timelines for the time dimension; agentMix per type × model × effort; checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-name rows keyed by lib's sessionKey (a named subagent's request by its meta.json name, #272), timestamp timelines for the time dimension; agentMix per type × model × effort; checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
   },
   {
    "id": "store:push-gate-approvals",
@@ -1081,6 +1091,36 @@
    "label": "explicit model required"
   },
   {
+   "from": "hook:agent-name-guard",
+   "to": "phase:execute-dispatch",
+   "kind": "gates",
+   "label": "tree name required"
+  },
+  {
+   "from": "hook:agent-name-guard",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "block, run"
+  },
+  {
+   "from": "hook:agent-name-guard",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "parseSessionName"
+  },
+  {
+   "from": "hook:agent-name-guard",
+   "to": "store:transcripts",
+   "kind": "reads",
+   "label": "caller meta.json name, session custom-title.json"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:agent-name-guard",
+   "kind": "loads",
+   "label": "PreToolUse:Agent"
+  },
+  {
    "from": "hook:bash-guard",
    "to": "phase:execute-dispatch",
    "kind": "gates",
@@ -1450,7 +1490,7 @@
    "from": "skill:agent-factory",
    "to": "script:session-name",
    "kind": "invokes",
-   "label": "launch line (directing-a-batch)"
+   "label": "tree names (directing-a-batch)"
   }
  ]
 }

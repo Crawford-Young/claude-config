@@ -634,43 +634,18 @@ test('#206 review: a dev server launched long before the merge does not suppress
   assert.deepEqual(stopCodes(records, [records.length]), [2]);
 });
 
-// ---- named teammates and SendMessage resumes (#227), trimmed from ~/.claude/projects/C--Users-young-code/ ----
-// A named-teammate spawn and its teammate_spawned result naming it, with no run_in_background
-// (98122171-b7cf-4a58-bf69-02bfef927dac.jsonl:89/:91) or with run_in_background "true", which still spawns a teammate
-// (3b14fba3-6a56-4e13-908f-16ee3fe55f78.jsonl:94/:96).
-const spawn = (min, id, name, description = `Unit ${name}`) => ({
-  type: 'assistant',
-  timestamp: ago(min),
-  message: { content: [{ type: 'tool_use', id, name: 'Agent', input: { description, subagent_type: 'implementer', name, prompt: 'Your brief is brief.md.' } }] },
-});
-const spawnBg = (min, id, name, description = `Unit ${name}`) => {
-  const call = spawn(min, id, name, description);
-  call.message.content[0].input = { name, subagent_type: 'implementer-opus', description, prompt: 'Your brief is brief.md.', run_in_background: 'true' };
-  return call;
-};
-const spawned = (min, id, name, agentId = `a${name}-36dfe29cc1901456`) => ({
-  type: 'user',
-  timestamp: ago(min),
-  message: { role: 'user', content: [{ tool_use_id: id, type: 'tool_result', content: [{ type: 'text', text: `Spawned successfully.\nagent_id: ${agentId}\nname: ${name}\nThe agent is now running and will receive instructions via mailbox.` }] }] },
-  toolUseResult: { status: 'teammate_spawned', agentId, teammate_id: `${name}@session-c114986a`, agent_id: agentId, agent_type: 'implementer', name },
-});
-// Teammate messages arrive as user records: an idle notification (98122171:229) or a plain message (98122171:392).
-const fromTeammate = (min, name, body) => ({
-  type: 'user',
-  timestamp: ago(min),
-  message: { role: 'user', content: `Another Claude session sent a message:\n<teammate-message teammate_id="${name}" color="purple">\n${body}\n</teammate-message>` },
-});
-const idle = (min, name) => fromTeammate(min, name, JSON.stringify({ type: 'idle_notification', from: name, timestamp: ago(min), idleReason: 'available', result: 'RESULT: done.' }));
-const teammateSays = (min, name) => fromTeammate(min, name, 'Unit #216+#217 is done and uncommitted. All gates are green.');
+// ---- SendMessage resumes (#227), trimmed from ~/.claude/projects/C--Users-young-code/ ----
+// With agent teams off (#272) a named spawn is a plain subagent: a background one launches async_launched and reports
+// by task-notification or hand-back, and a SendMessage by name resumes it (teams-off probe 654fabeb, 2026-10-16).
 // A background agent's hand-back, 369ac623-8116-4f35-ba19-602cb32de9bc.jsonl:957.
 const handBack = (min, agentId) => ({
   type: 'user',
   timestamp: ago(min),
   message: { role: 'user', content: `Another Claude session sent a message:\n<agent-message from="${agentId}">\n[Subagent hand-back] The report follows:\n  RESULT: done.\n</agent-message>` },
 });
-// SendMessage call and result shapes: a teammate's inbox (a03e9697-2633-411f-8c28-654f2d16cb5d.jsonl:410/:412), a resumed
-// background agent (369ac623:960/:961), a message queued for a running agent (48ca871b-3656-4626-9fb8-820a9327aa96.jsonl:349)
-// and a cross-session peer (2fb2ab05:51).
+// SendMessage call and result shapes: a resumed background agent (369ac623:960/:961; the teams-off probe's
+// 654fabeb result has the same keys), a message queued for a running agent
+// (48ca871b-3656-4626-9fb8-820a9327aa96.jsonl:349) and a cross-session peer (2fb2ab05:51).
 const send = (min, id, to) => ({
   type: 'assistant',
   timestamp: ago(min),
@@ -682,7 +657,6 @@ const sent = (min, id, toolUseResult) => ({
   message: { role: 'user', content: [{ tool_use_id: id, type: 'tool_result', content: [{ type: 'text', text: JSON.stringify(toolUseResult) }] }] },
   toolUseResult,
 });
-const inbox = (to) => ({ success: true, message: `Message sent to ${to}'s inbox`, msg_id: 'm1', routing: { sender: 'team-lead', target: `@${to}`, summary: 'Fix round' } });
 const resumed = (to) => ({ success: true, message: `Resuming agent ${to.slice(0, 7)}`, resumedAgentId: to, pin: { id: to, name: to, ref: '0e901b' } });
 const queued = (to) => ({ success: true, message: `Message queued for delivery to ${to} at its next tool round.`, pin: { id: to, name: to, ref: 'b6791c' } });
 const peer = { success: true, message: '"Ack review" → uds:\\\\.\\pipe\\LOCAL\\cc-msg-0cd7; in that session\'s inbox, not yet read by its Claude', msg_id: 'm2', display: 'Ack review' };
@@ -697,29 +671,9 @@ const userStop = (min, text, form) => {
 const stoppedByDescription = (min, description, form) => userStop(min, `Background agent "${description}" was stopped by the user.`, form);
 const stoppedMany = (min, descriptions, form) =>
   userStop(min, `${descriptions.length} background agents were stopped by the user: ${descriptions.map((d) => `"${d}"`).join(', ')}.`, form);
-// Verbatim turn-ending waits: a director waiting on teammates (98122171:404) and on a warm redo (369ac623:973).
-const waitTeammates = 'Three reviewers are now running: review-206, review-202 and review-216-217. Still working: #214, #220 and recon-219.\n\n## Action items\nNone yet.';
+// A verbatim turn-ending wait on a warm redo (369ac623:973).
 const waitRedo = "That completion notice is from the agent's first pass, which I've already read. The warm redo is running now, and I'll verify its result when it reports.\n\n### Your action items\n- None right now.";
-
-test('#227: a named teammate is pending from its spawn until a message from it (idle notification or plain message)', () => {
-  const unit = [spawn(9, 't1', 'unit-206'), spawned(9, 't1', 'unit-206')];
-  assert.equal(hasPendingBackground(lines(...unit)), true, 'spawned');
-  assert.equal(hasPendingBackground(lines(spawn(9, 't1', 'unit-206'))), false, 'a call with no spawn result is not yet a launch');
-  assert.equal(hasPendingBackground(lines(...unit, idle(5, 'unit-206'))), false, 'idle notification');
-  assert.equal(hasPendingBackground(lines(...unit, teammateSays(5, 'unit-206'))), false, 'plain message');
-  assert.equal(hasPendingBackground(lines(...unit, idle(5, 'unit-202'))), true, 'another teammate going idle');
-  assert.equal(hasPendingBackground(lines(...unit, spawn(8, 't2', 'unit-202'), spawned(8, 't2', 'unit-202'), idle(5, 'unit-206'))), true, 'a second teammate still running');
-});
-
-test('#227 round 1: a named spawn with run_in_background "true" is a teammate, resolved by its messages (3b14fba3:94/:96)', () => {
-  const unit = [spawnBg(9, 't1', 'ticket-214'), spawned(9, 't1', 'ticket-214')];
-  assert.equal(hasPendingBackground(lines(...unit)), true, 'spawned');
-  assert.equal(hasPendingBackground(lines(...unit, idle(5, 'ticket-214'))), false, 'idle notification');
-  assert.equal(hasPendingBackground(lines(...unit, teammateSays(5, 'ticket-214'))), false, 'plain message');
-  const resent = [...unit, idle(8, 'ticket-214'), send(7, 's1', 'ticket-214'), sent(7, 's1', inbox('ticket-214'))];
-  assert.equal(hasPendingBackground(lines(...resent)), true, 'sent a fix round');
-  assert.equal(hasPendingBackground(lines(...resent, idle(5, 'ticket-214'))), false, 'idle after the fix round');
-});
+const agentRun = (min, id, agentId, description) => [bgAgent(min, id), bgAgentLaunched(min, id, agentId, description)];
 
 test('#227 round 1: a SendMessage also waits on the resumed or pinned agent id, whatever name it was sent to', () => {
   const agent = [bgAgent(30, 'a1'), bgAgentLaunched(30, 'a1', 'ag1'), notified(20, 'a1', 'ag1')];
@@ -734,22 +688,8 @@ test('#227 round 1: only non-empty string ids key a wait, so an empty id does no
   const launched = { ...bgBashLaunched(9, 'b1', 'bt1'), toolUseResult: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: '' } };
   assert.equal(hasPendingBackground(lines(bgBash(9, 'b1'), launched)), true, 'launched');
   assert.equal(hasPendingBackground(lines(bgBash(9, 'b1'), launched, taskStop(5, 's1', 'bt1'), taskStopped(5, 's1', 'bt1'))), false, 'TaskStop of the named id');
-  const odd = { ...spawned(9, 't1', 'unit-1'), toolUseResult: { status: 'teammate_spawned', name: 'unit-1', agentId: 42 } };
-  assert.equal(hasPendingBackground(lines(spawn(9, 't1', 'unit-1'), odd, idle(5, 'unit-1'))), false, 'a numeric agentId is ignored, the name still resolves');
-});
-
-test('#227: the spawn result names the teammate, so a renamed spawn waits on its real name (a03e9697:537-538)', () => {
-  const renamed = [spawn(9, 't1', 'ticket-233'), spawned(9, 't1', 'ticket-233-2')];
-  assert.equal(hasPendingBackground(lines(...renamed, idle(5, 'ticket-233'))), true, 'the name it asked for');
-  assert.equal(hasPendingBackground(lines(...renamed, idle(5, 'ticket-233-2'))), false, 'the name it got');
-});
-
-test('#227: a SendMessage to an idle teammate is pending again until its next message', () => {
-  const idled = [spawn(30, 't1', 'unit-226'), spawned(30, 't1', 'unit-226'), idle(20, 'unit-226')];
-  const resent = [...idled, send(15, 's1', 'unit-226'), sent(15, 's1', inbox('unit-226'))];
-  assert.equal(hasPendingBackground(lines(...resent)), true, 'resumed');
-  assert.equal(hasPendingBackground(lines(...resent, idle(5, 'unit-226'))), false, 'idle again');
-  assert.equal(hasPendingBackground(lines(send(15, 's1', 'unit-226'), sent(15, 's1', inbox('unit-226')))), true, 'a teammate spawned before this transcript');
+  const odd = { ...bgAgentLaunched(9, 'a1', 'ag1'), toolUseResult: { status: 'async_launched', agentId: 42, description: 'implementer' } };
+  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), odd, notified(5, 'a1', 'x'))), false, 'a numeric agentId is ignored, the tool-use id still resolves');
 });
 
 test('#227: a SendMessage resume of a background agent is pending until a notification or hand-back after it (369ac623:937-973)', () => {
@@ -769,27 +709,16 @@ test('#227: a SendMessage resume of a background agent is pending until a notifi
 test('#227: a cross-session peer message or a refused SendMessage is no wait', () => {
   assert.equal(hasPendingBackground(lines(send(9, 's1', 'strate-30'), sent(9, 's1', peer))), false, 'peer');
   assert.equal(hasPendingBackground(lines(send(9, 's1', 'ag1'), agentStoppedByUser(9, 's1', 'ag1'))), false, 'stopped agent refuses the resume');
-  const failed = { ...sent(9, 's1', inbox('unit-1')), message: { content: [{ type: 'tool_result', tool_use_id: 's1', is_error: true, content: 'x' }] } };
-  assert.equal(hasPendingBackground(lines(send(9, 's1', 'unit-1'), failed)), false, 'an error result');
+  const failed = { ...sent(9, 's1', resumed('ag1')), message: { content: [{ type: 'tool_result', tool_use_id: 's1', is_error: true, content: 'x' }] } };
+  assert.equal(hasPendingBackground(lines(send(9, 's1', 'ag1'), failed)), false, 'an error result');
 });
 
-test('#227: only spawns and SendMessages after the cutoff count', () => {
-  const text = lines(spawn(90, 't1', 'unit-1'), spawned(90, 't1', 'unit-1'));
-  assert.equal(hasPendingBackground(text, Date.now() - 60 * 60_000), false, 'spawned before the cutoff');
-  assert.equal(hasPendingBackground(text, Date.now() - 100 * 60_000), true, 'spawned after the cutoff');
-  const resent = lines(spawn(90, 't1', 'unit-1'), spawned(90, 't1', 'unit-1'), idle(80, 'unit-1'), send(30, 's1', 'unit-1'), sent(30, 's1', inbox('unit-1')));
+test('#227: only launches and SendMessages after the cutoff count', () => {
+  const text = lines(...agentRun(90, 'a1', 'ag1'));
+  assert.equal(hasPendingBackground(text, Date.now() - 60 * 60_000), false, 'launched before the cutoff');
+  assert.equal(hasPendingBackground(text, Date.now() - 100 * 60_000), true, 'launched after the cutoff');
+  const resent = lines(...agentRun(90, 'a1', 'ag1'), notified(80, 'a1', 'ag1'), send(30, 's1', 'ag1'), sent(30, 's1', resumed('ag1')));
   assert.equal(hasPendingBackground(resent, Date.now() - 60 * 60_000), true, 'resumed after the cutoff');
-});
-
-test('#227: a stopped teammate resolves its wait (TaskStop by name or agent id, or a user stop)', () => {
-  const unit = [spawn(9, 't1', 'unit-1'), spawned(9, 't1', 'unit-1', 'aunit-1-524330177fe8a865')];
-  assert.equal(hasPendingBackground(lines(...unit, taskStop(5, 'x1', 'unit-1'), taskStopped(5, 'x1', 'unit-1'))), false, 'TaskStop by name');
-  assert.equal(hasPendingBackground(lines(...unit, taskStop(5, 'x1', 'aunit-1-524330177fe8a865'), taskStopped(5, 'x1', 'aunit-1-524330177fe8a865'))), false, 'TaskStop by agent id');
-  assert.equal(hasPendingBackground(lines(...unit, taskStop(5, 'x1', 'unit-1'), taskStopped(5, 'x1', 'unit-1', true))), true, 'a failed TaskStop');
-  assert.equal(hasPendingBackground(lines(...unit, agentStoppedByUser(5, 'm1', 'unit-1'))), false, 'stopped by the user, by name');
-  assert.equal(hasPendingBackground(lines(...unit, stoppedByDescription(5, 'Unit unit-1', 'attachment'))), false, 'stopped by the user, by description');
-  const resent = [...unit, idle(8, 'unit-1'), send(7, 's1', 'unit-1'), sent(7, 's1', inbox('unit-1'))];
-  assert.equal(hasPendingBackground(lines(...resent, stoppedByDescription(5, 'Unit unit-1', 'attachment'))), false, 'stopped after a resume');
 });
 
 test('#227 comment: a user-stopped background agent resolves by its launch description (48ca871b:165/:175/:176, 26ff1fb8:231)', () => {
@@ -800,23 +729,21 @@ test('#227 comment: a user-stopped background agent resolves by its launch descr
   assert.equal(hasPendingBackground(lines(...quoted, stoppedByDescription(5, 'Fix "quoted" \\ names', 'attachment'))), false, 'quotes and backslashes');
 });
 
-test('#227: a teammate or warm-redo wait after reflect does not spend the continuation block; the turn end after it reports does', () => {
+test('#227: a running or warm-redo agent after reflect does not spend the continuation block; the turn end after it reports does', () => {
   const base = [...mergeAt('w1', 60), reflectRead('r', 50), say(49, pauseCall), human(48, 'go ahead')];
-  const team = [...base, spawn(46, 't1', 'review-206'), spawned(46, 't1', 'review-206')];
-  assert.deepEqual(stopCodes([...team, say(40, waitTeammates)], [team.length + 1]), [0], 'teammate running (98122171:404)');
-  const back = [...team, idle(42, 'review-206'), say(40, finished)];
-  assert.deepEqual(stopCodes(back, [back.length]), [2], 'teammate reported');
+  const running = [...base, ...agentRun(46, 'a2', 'ag2', 'Review #206 diff')];
+  assert.deepEqual(stopCodes([...running, say(40, waitProbe)], [running.length + 1]), [0], 'agent running');
+  const back = [...running, notified(42, 'a2', 'ag2'), say(40, finished)];
+  assert.deepEqual(stopCodes(back, [back.length]), [2], 'agent reported');
   const redo = [...base, bgAgent(46, 'a1'), bgAgentLaunched(46, 'a1', 'ag1'), notified(44, 'a1', 'ag1'), send(43, 's1', 'ag1'), sent(43, 's1', resumed('ag1')), say(42, waitRedo)];
   assert.deepEqual(stopCodes(redo, [redo.length]), [0], 'warm redo running (369ac623:973)');
 });
 
 // ---- description stops and process exits (#243) ----
-test('#243: a description stop resolves only a launch or spawn made at or before it', () => {
-  const agent = (min) => [bgAgent(min, 'a1'), bgAgentLaunched(min, 'a1', 'ag1', 'Review #243 diff')];
+test('#243: a description stop resolves only a launch made at or before it', () => {
+  const agent = (min) => agentRun(min, 'a1', 'ag1', 'Review #243 diff');
   assert.equal(hasPendingBackground(lines(stoppedByDescription(9, 'Review #243 diff', 'attachment'), ...agent(5))), true, 'an earlier agent with the same description');
   assert.equal(hasPendingBackground(lines(...agent(9), stoppedByDescription(5, 'Review #243 diff', 'attachment'))), false, 'stopped after the launch');
-  const unit = (min) => [spawn(min, 't1', 'unit-1'), spawned(min, 't1', 'unit-1')];
-  assert.equal(hasPendingBackground(lines(stoppedByDescription(9, 'Unit unit-1', 'attachment'), ...unit(5))), true, 'an earlier teammate with the same description');
 });
 
 test('#243: a user-typed queue-operation enqueue of the stop text does not resolve; the real attachment does', () => {
@@ -831,7 +758,7 @@ test('#243: stop text quoted in a brief, a message or a tool result does not res
   const agent = [bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1', 'Implement strate#17 app shell')];
   const quoted = [
     ['typed brief', human(5, `Prior context: the log reads ${quote}`)],
-    ['teammate message', fromTeammate(5, 'review-1', `Finding: ${quote}`)],
+    ['agent message', { type: 'user', timestamp: ago(5), message: { role: 'user', content: `<agent-message from="review-1">\nFinding: ${quote}\n</agent-message>` } }],
     ['tool result', { type: 'user', timestamp: ago(5), message: { content: [{ type: 'tool_result', tool_use_id: 'g1', content: `48ca871b:165 ${quote}` }] } }],
     ['SendMessage call', { ...send(5, 's1', 'review-1'), message: { content: [{ type: 'tool_use', id: 's1', name: 'SendMessage', input: { to: 'review-1', message: quote } }] } }],
   ];
@@ -839,13 +766,13 @@ test('#243: stop text quoted in a brief, a message or a tool result does not res
 });
 
 test('#243: the harness record of several user stops resolves every description it names (71d9f934:6/:24)', () => {
-  const units = [spawn(9, 't1', 'unit-199', 'Implement #199 reflect later pause'), spawned(9, 't1', 'unit-199'), spawn(9, 't2', 'unit-190', 'Fix #190 review findings'), spawned(9, 't2', 'unit-190')];
+  const units = [...agentRun(9, 'a1', 'ag1', 'Implement #199 reflect later pause'), ...agentRun(9, 'a2', 'ag2', 'Fix #190 review findings')];
   assert.equal(hasPendingBackground(lines(...units, stoppedMany(5, ['Implement #199 reflect later pause', 'Fix #190 review findings'], 'attachment'))), false);
-  assert.equal(hasPendingBackground(lines(...units, stoppedMany(5, ['Implement #199 reflect later pause', 'Review #171 diff'], 'attachment'))), true, 'one teammate not named');
+  assert.equal(hasPendingBackground(lines(...units, stoppedMany(5, ['Implement #199 reflect later pause', 'Review #171 diff'], 'attachment'))), true, 'one agent not named');
 });
 
 // Claude Code writes an untimed cost-state record at exit or /clear (79e0cf9f-58cd-4c54-8e0a-1b17daefbd5d.jsonl:730); a
-// /clear opens a new transcript, so in the one the gate reads it marks an exit, which kills its tasks and teammates.
+// /clear opens a new transcript, so in the one the gate reads it marks an exit, which kills its tasks.
 // A resumed or forked process starts with a SessionStart hook record (79e0cf9f:734 resume;
 // dd0f76cc-fb28-44b2-aab7-3a1427bcc1ce.jsonl:142 fork, whose copied history holds no cost-state).
 const exited = { type: 'cost-state', sessionId: 's1', totalCostUSD: 15.37, totalDuration: 2953144 };
@@ -856,22 +783,21 @@ const sessionStart = (min, source) => ({
 });
 
 test('#243: a process exit, or a resumed or forked start, ends every wait from before it', () => {
-  const unit = [spawn(9, 't1', 'unit-1'), spawned(9, 't1', 'unit-1')];
+  const unit = agentRun(9, 'a1', 'ag1');
   assert.equal(hasPendingBackground(lines(...unit, exited)), false, 'exit');
   assert.equal(hasPendingBackground(lines(...unit, sessionStart(5, 'resume'))), false, 'resume with no exit record');
   assert.equal(hasPendingBackground(lines(...unit, sessionStart(5, 'fork'))), false, 'fork');
   assert.equal(hasPendingBackground(lines(...unit, sessionStart(5, 'compact'))), true, 'a compaction keeps the process');
-  const resent = [...unit, idle(8, 'unit-1'), send(7, 's1', 'unit-1'), sent(7, 's1', inbox('unit-1'))];
+  const resent = [...unit, notified(8, 'a1', 'ag1'), send(7, 's1', 'ag1'), sent(7, 's1', resumed('ag1'))];
   assert.equal(hasPendingBackground(lines(...resent, exited)), false, 'a SendMessage wait');
-  assert.equal(hasPendingBackground(lines(bgAgent(9, 'a1'), bgAgentLaunched(9, 'a1', 'ag1'), exited)), false, 'a background agent');
-  assert.equal(hasPendingBackground(lines(...unit, exited, sessionStart(5, 'resume'), spawn(4, 't2', 'unit-2'), spawned(4, 't2', 'unit-2'))), true, 'a spawn after the resume');
+  assert.equal(hasPendingBackground(lines(...unit, exited, sessionStart(5, 'resume'), ...agentRun(4, 'a2', 'ag2'))), true, 'a launch after the resume');
   const quoted = { type: 'user', timestamp: ago(5), message: { content: [{ type: 'tool_result', tool_use_id: 'g1', content: '{"type":"cost-state"} SessionStart:resume' }] } };
   assert.equal(hasPendingBackground(lines(...unit, quoted)), true, 'the record names quoted in a tool result');
 });
 
-test('#243: a teammate dropped by a session exit does not suppress the continuation block for the rest of the session', () => {
+test('#243: an agent dropped by a session exit does not suppress the continuation block for the rest of the session', () => {
   const base = [...mergeAt('w1', 60), reflectRead('r', 50), say(49, pauseCall), human(48, 'go ahead')];
-  const waiting = [...base, spawn(46, 't1', 'review-206'), spawned(46, 't1', 'review-206'), say(45, waitTeammates)];
+  const waiting = [...base, ...agentRun(46, 'a1', 'ag1', 'Review #206 diff'), say(45, waitProbe)];
   const afterResume = [...waiting, exited, sessionStart(30, 'resume'), human(29, 'where were we?'), say(28, finished)];
   assert.deepEqual(stopCodes(afterResume, [waiting.length, afterResume.length]), [0, 2]);
 });

@@ -274,7 +274,7 @@ test('session name: control and bidi bytes are stripped', () => {
 });
 
 test('session name: a typed name is chosen whatever its nameSource, and renders as-is', () => {
-  for (const entry of [{ name: 'ticket-claude-config-175', nameSource: 'auto' }, { name: 'director-harness' }, { name: 'claude-config-62', nameSource: 'user' }]) {
+  for (const entry of [{ name: 'ticket-claude-config-175', nameSource: 'auto' }, { name: 'director-harness' }, { name: 'claude-config-62', nameSource: 'user' }, { name: 'harness_claude-config_t264', nameSource: 'auto' }]) {
     const dir = registry(entry);
     try {
       const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });

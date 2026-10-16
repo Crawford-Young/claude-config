@@ -17,6 +17,9 @@
 //   the rule is strate's store/group.rs, settled on real data). Rows group per unit
 //   on lib's sessionKey, so a legacy and a typed name of one unit join (#175).
 //   ai-title and agent-name records carry auto names, not unit names (#73).
+// - A named subagent's .meta.json carries its Agent `name` (verified 2026-10-16, CC
+//   2.1.301); with agent teams off its id no longer embeds the name. Its spend and time
+//   group under that name's sessionKey, not its window's title (#272).
 // - An assistant record carries the request's effort as a top-level `effort` field
 //   (#113; on every subagent record of CC 2.1.26x-2.1.296 on disk 2026-10-13, except
 //   Haiku 4.5, whose records have none: its effort is unknown, not a default).
@@ -220,6 +223,21 @@ export function commandHead(command) {
   return '?';
 }
 
+/** Gaps longer than `gapMs` between consecutive stamps of a sorted list, as [from, to]. */
+function idleGaps(ts, gapMs) {
+  const idle = [];
+  for (let i = 1; i < ts.length; i++) if (ts[i] - ts[i - 1] > gapMs) idle.push([ts[i - 1], ts[i]]);
+  return idle;
+}
+
+/** A timeline's sweep intervals: its idle gaps, requests and tool calls. */
+function intervalsOf(tl, idle) {
+  const iv = idle.map(([a, b]) => [a, b, 'idle']);
+  for (const q of tl.reqs.values()) iv.push([q.start, q.end, 'model']);
+  for (const u of tl.uses) if (u.end !== null) iv.push([u.t, u.end, USER_TOOLS.has(u.name) ? 'ask' : 'tools']);
+  return iv;
+}
+
 /** Splits [first, last] into bucket ms per UTC day; on overlap the earliest ORDER
  *  category wins, so parallel spans count once. intervals: [start, end, category]. */
 function sweep(intervals, first, last) {
@@ -288,6 +306,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const ai = new Map(); // sessionId -> auto title, a per-file fallback label
   const fileOf = new Map(); // window -> sessionId
   const titleOf = (key) => custom.get(key) || ai.get(fileOf.get(key)) || '';
+  /** The per-name row a context's spend joins: a named subagent's own name (#272), else its window's title. */
+  const nameKeyOf = (ctx) => sessionKey(ctx.agent?.name) ?? sessionKey(custom.get(ctx.window ?? ctx.sessionId));
   const reported = new Map(); // sessionId -> Claude Code's cost-state total (its max)
   const reportedModels = new Map(); // sessionId -> that record's modelUsage
   const skills = {}, skillReads = {}, slash = {}, docs = {};
@@ -465,6 +485,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     const totals = { requests: 0, usd: 0, tokens: zero() };
     const days = new Map(), sessions = new Map(), agents = {}, agentRuns = {}, unpriced = {}, runUsd = new Map();
     const runSettings = new Map(); // agent id -> { type, settings: model\neffort -> { model, effort, requests, usd } }
+    const names = new Map(); // session key -> one row over every window and named subagent it holds
     for (const { u, model, effort, day, ctx } of requests.values()) {
       const { usd } = priceUsage(u, model, prices);
       const tk = tokensOf(u);
@@ -512,7 +533,18 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       }
       days.set(day, d);
       sessions.set(win, s);
+      const key = nameKeyOf(ctx);
+      if (key) {
+        const g = names.get(key) || names.set(key, { name: key, windows: new Set(), requests: 0, usd: 0, subagentUsd: 0, first: day, last: day }).get(key);
+        g.windows.add(win);
+        g.requests++;
+        g.usd += cost;
+        if (ctx.agent) g.subagentUsd += cost;
+        if (day && (!g.first || day < g.first)) g.first = day;
+        if (day > g.last) g.last = day;
+      }
     }
+    for (const g of names.values()) g.windows = g.windows.size;
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
     const agentMix = agentMixOf(runSettings);
 
@@ -552,19 +584,6 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 
     const timed = {};
     for (const [h, ms] of Object.entries(hookTimes)) timed[h] = { fires: ms.length, p50: pct(ms, 50), p95: pct(ms, 95) };
-    const names = new Map(); // session key -> one row over all its windows
-    for (const s of sessions.values()) {
-      const name = sessionKey(custom.get(s.sessionId));
-      if (!name) continue;
-      const g = names.get(name) || { name, windows: 0, requests: 0, usd: 0, subagentUsd: 0, first: s.first, last: s.last };
-      g.windows++;
-      g.requests += s.requests;
-      g.usd += s.usd;
-      g.subagentUsd += s.subagentUsd;
-      if (s.first < g.first) g.first = s.first;
-      if (s.last > g.last) g.last = s.last;
-      names.set(name, g);
-    }
     const used = new Set([...Object.keys(skills), ...Object.keys(skillReads), ...Object.keys(slash)].map((s) => s.split(':').pop()));
 
     return {
@@ -586,7 +605,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       unusedSkills: installedSkills.filter((s) => !used.has(s)).sort(),
       docs,
       hooks: { blocks: hookBlocks, timed, fires: hookFires },
-      time: timeReport({ sessions, days, agents, runUsd }),
+      time: timeReport({ sessions, days, agents, runUsd, names }),
       inline: inlineReport(),
     };
   }
@@ -625,14 +644,20 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   function timeReport(cost) {
     const { sessions, days, totals, idleOf } = windowTimes(cost);
     const names = new Map();
+    const rowOf = (name) => names.get(name) || names.set(name, { name, windows: new Set(), wallMs: 0, activeMs: 0, ...zeroSplit(), usd: cost.names.get(name)?.usd || 0 }).get(name);
     for (const s of sessions) {
       const name = sessionKey(custom.get(s.sessionId));
       if (!name) continue;
-      const g = names.get(name) || { name, windows: 0, wallMs: 0, activeMs: 0, ...zeroSplit(), usd: 0 };
-      g.windows++;
-      for (const k of ['wallMs', 'activeMs', ...SPLIT, 'usd']) g[k] += s[k];
-      names.set(name, g);
+      const g = rowOf(name);
+      g.windows.add(s.sessionId);
+      for (const k of ['wallMs', 'activeMs', ...SPLIT]) g[k] += s[k];
     }
+    for (const run of namedRunTimes()) {
+      const g = rowOf(run.name);
+      g.windows.add(run.win);
+      for (const k of ['wallMs', 'activeMs', ...SPLIT]) g[k] += run[k];
+    }
+    for (const g of names.values()) g.windows = g.windows.size;
     const { agents, agentRuns } = agentTimes(cost);
     const { tools, commands, retry } = toolTimes(idleOf);
     return {
@@ -663,12 +688,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       if (tl.agent || !tl.ts.length) continue;
       const ts = [...tl.ts, ...(subs.get(tl.sessionId) || []).flatMap((s) => s.ts)].sort((a, b) => a - b);
       const first = ts[0], last = ts.at(-1);
-      const idle = [];
-      for (let i = 1; i < ts.length; i++) if (ts[i] - ts[i - 1] > idleGapMs) idle.push([ts[i - 1], ts[i]]);
+      const idle = idleGaps(ts, idleGapMs);
       idleOf.set(tl.sessionId, idle);
-      const iv = idle.map(([a, b]) => [a, b, 'idle']);
-      for (const q of tl.reqs.values()) iv.push([q.start, q.end, 'model']);
-      for (const u of tl.uses) if (u.end !== null) iv.push([u.t, u.end, USER_TOOLS.has(u.name) ? 'ask' : 'tools']);
+      const iv = intervalsOf(tl, idle);
       for (const p of tl.prompts) if (p.human && p.from !== null) iv.push([p.from, p.t, 'wait']);
       // starts are in order by markStart. A window that never got one (at null) takes
       // the next window's start, filled from the back, so it is empty and the window
@@ -693,6 +715,24 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       });
     }
     return { sessions, days, totals, idleOf };
+  }
+
+  /** Each named subagent run keyed away from its window (#272): its wall, first record to
+   *  last, swept over its own intervals; a wait on a prompt there (a resumed run) is other,
+   *  not user time, since the user waits on the director, not on the run. A run named as its
+   *  window is already inside the window's span. */
+  function namedRunTimes() {
+    const idleGapMs = idleGapMin * 60e3, runs = [];
+    for (const tl of lines.values()) {
+      const name = sessionKey(tl.agent?.name);
+      if (!name || !tl.ts.length || timeOnly.has(tl.win) || name === sessionKey(custom.get(tl.win))) continue;
+      const ts = [...tl.ts].sort((a, b) => a - b);
+      const run = { name, win: tl.win, wallMs: ts.at(-1) - ts[0], ...zeroSplit() };
+      for (const [, split] of sweep(intervalsOf(tl, idleGaps(ts, idleGapMs)), ts[0], ts.at(-1))) for (const k of SPLIT) run[k] += split[k];
+      run.activeMs = run.wallMs - run.idleMs;
+      runs.push(run);
+    }
+    return runs;
   }
 
   /** Wall time per subagent run, first record to last, and per agent type. */
@@ -878,7 +918,8 @@ export async function* walkTranscripts(root) {
           const id = basename(f, '.jsonl').replace(/^agent-/, '');
           let meta = {};
           try { meta = JSON.parse(readFileSync(join(sub, `agent-${id}.meta.json`), 'utf8')); } catch { /* no meta: untyped */ }
-          yield { file: join(sub, f), ctx: { sessionId: e.name, agent: { id, type: meta.agentType || 'unknown', model: meta.model } } };
+          const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : null;
+          yield { file: join(sub, f), ctx: { sessionId: e.name, agent: { id, type: meta.agentType || 'unknown', model: meta.model, ...(name && { name }) } } };
         }
       }
     }

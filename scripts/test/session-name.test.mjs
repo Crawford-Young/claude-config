@@ -230,3 +230,89 @@ test('a harness-deduped role name (seen live: ticket-claude-config-214-review-2)
   assert.deepEqual([p.type, p.repo, p.issue, p.role, p.dedupe, p.name], ['ticket', 'claude-config', 214, 'review', 2, 'ticket-claude-config-214']);
   assert.equal(sessionKey('ticket-claude-config-214-review-2'), sessionKey('ticket-claude-config-214-review'));
 });
+
+// ---- tree names (#272): <dir>_<repo>[_e<N>][_t<N>][_<worker>[-r<K>]] -------------
+
+const AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/; // the Agent tool's name rule, tested 2026-10-16
+
+test('sessionName builds a tree name level by level, `_` between levels', () => {
+  assert.equal(sessionName('tree', 'harness', 'claude-config'), 'harness_claude-config');
+  assert.equal(sessionName('tree', 'harness', 'claude-config', { epic: 176 }), 'harness_claude-config_e176');
+  assert.equal(sessionName('tree', 'harness', 'claude-config', { epic: '176', ticket: 264 }), 'harness_claude-config_e176_t264');
+  assert.equal(sessionName('tree', 'harness', 'claude-config', { ticket: '0264', worker: 'impl' }), 'harness_claude-config_t264_impl');
+  assert.equal(sessionName('tree', 'harness', 'claude-config', { ticket: 264, worker: 'review', round: 2 }), 'harness_claude-config_t264_review-r2');
+  assert.equal(sessionName('tree', 'strate-audit', 'dog-eat-dog', { worker: 'recon' }), 'strate-audit_dog-eat-dog_recon');
+});
+
+test('sessionName throws on a tree name that would not parse back or fit the Agent tool', () => {
+  assert.throws(() => sessionName('tree', 'Harness', 'repo'), /scope/);
+  assert.throws(() => sessionName('tree', 'harness'), /repo/);
+  assert.throws(() => sessionName('tree', 'harness', 'my_repo'), /repo/);
+  assert.throws(() => sessionName('tree', 'harness', 'repo', { epic: 0 }), /epic/);
+  assert.throws(() => sessionName('tree', 'harness', 'repo', { ticket: 'x7' }), /ticket/);
+  assert.throws(() => sessionName('tree', 'harness', 'repo', { worker: 'implementer' }), /worker/);
+  assert.throws(() => sessionName('tree', 'harness', 'repo', { ticket: 5, round: 2 }), /round needs a worker/, 'a round marks a worker re-dispatch');
+  for (const bad of [1, 0, 1.5, 'x']) assert.throws(() => sessionName('tree', 'harness', 'repo', { worker: 'impl', round: bad }), /round/, String(bad));
+  assert.throws(() => sessionName('tree', 'harness', 'repo', { tciket: 5 }), /option/);
+  assert.throws(() => sessionName('tree', 'harness', 'repo', {}, 'extra'), /arguments/);
+  assert.throws(() => sessionName('tree', 'a'.repeat(40), 'b'.repeat(30)), /64/);
+});
+
+test('parseSessionName reads a tree name: its type, repo, issue, worker role, round and ticket key', () => {
+  assert.deepEqual(parseSessionName('harness_claude-config'), { type: 'repo', tree: true, repo: 'claude-config', legacy: false, name: 'harness_claude-config', raw: 'harness_claude-config' });
+  assert.deepEqual(parseSessionName('harness_claude-config_e176'), { type: 'epic', tree: true, repo: 'claude-config', issue: 176, legacy: false, name: 'epic-claude-config-176', raw: 'harness_claude-config_e176' });
+  assert.deepEqual(parseSessionName('harness_claude-config_e176_t264'), { type: 'ticket', tree: true, repo: 'claude-config', issue: 264, legacy: false, name: 'ticket-claude-config-264', raw: 'harness_claude-config_e176_t264' });
+  assert.deepEqual(parseSessionName('harness_claude-config_t264_review-r2'), { type: 'ticket', tree: true, repo: 'claude-config', issue: 264, role: 'review', round: 2, legacy: false, name: 'ticket-claude-config-264', raw: 'harness_claude-config_t264_review-r2' });
+  const repoWorker = parseSessionName('harness_claude-config_impl');
+  assert.deepEqual([repoWorker.type, repoWorker.role, repoWorker.name], ['repo', 'impl', 'harness_claude-config']);
+  const epicWorker = parseSessionName('harness_claude-config_e176_recon');
+  assert.deepEqual([epicWorker.type, epicWorker.issue, epicWorker.role, epicWorker.name], ['epic', 176, 'recon', 'epic-claude-config-176']);
+});
+
+test('a tree name joins its ticket or epic with the typed and legacy forms, whatever its dir', () => {
+  assert.equal(sessionKey('harness_claude-config_t264_review-r2'), sessionKey('ticket-claude-config-264'));
+  assert.equal(sessionKey('harness_claude-config_e176_t264'), sessionKey('claude-config-264'));
+  assert.equal(sessionKey('other_claude-config_t264_impl'), sessionKey('harness_claude-config_t264'));
+  assert.equal(sessionKey('harness_claude-config_e176'), sessionKey('epic-claude-config-176'));
+  assert.notEqual(sessionKey('harness_claude-config_e5'), sessionKey('harness_claude-config_t5'), 'an epic and a ticket on one issue are different units');
+  assert.equal(sessionKey('Harness_Claude-Config_T264'), 'ticket-claude-config-264', 'case-folded');
+  for (const src of ['user', 'peer', 'auto', undefined]) assert.equal(isChosenName('harness_claude-config_t264', src), true, String(src));
+});
+
+test('a name outside the tree grammar never parses as one', () => {
+  for (const raw of ['harness', 'harness_', '_claude-config', 'harness__claude-config', 'harness_claude-config_', 'harness.claude-config', 'harness_claude-config_t264_e176', 'harness_claude-config_t0', 'harness_claude-config_e01', 'harness_claude-config_t264_implementer', 'harness_claude-config_t264_review-r1', 'harness_claude-config_t264-r2', 'harness_claude-config_t264_impl_recon', 'harness_claude_config', 'harness_claude-config_t264_impl-2']) {
+    assert.equal(parseSessionName(raw).name, null, raw);
+  }
+});
+
+test('every built tree name parses back to its unit and worker and fits the Agent tool', () => {
+  const cases = [
+    [{}, 'repo', 'harness_dog-eat-dog'],
+    [{ epic: 9 }, 'epic', 'epic-dog-eat-dog-9'],
+    [{ epic: 9, ticket: 10 }, 'ticket', 'ticket-dog-eat-dog-10'],
+    [{ ticket: 10, worker: 'impl' }, 'ticket', 'ticket-dog-eat-dog-10'],
+    [{ epic: 9, ticket: 10, worker: 'review', round: 12 }, 'ticket', 'ticket-dog-eat-dog-10'],
+    [{ worker: 'recon' }, 'repo', 'harness_dog-eat-dog'],
+  ];
+  for (const [opts, type, key] of cases) {
+    const name = sessionName('tree', 'harness', 'dog-eat-dog', opts);
+    assert.match(name, AGENT_NAME_RE, name);
+    const p = parseSessionName(name);
+    assert.deepEqual([p.tree, p.type, p.repo, p.name, p.role, p.round], [true, type, 'dog-eat-dog', key, opts.worker, opts.round], name);
+  }
+});
+
+test('CLI prints a bare tree name for an Agent dispatch', () => {
+  const run = (...a) => spawnHarness(cli, a);
+  assert.equal(run('tree', 'harness', 'claude-config').stdout, 'harness_claude-config\n');
+  assert.equal(run('tree', 'Harness', 'Claude-Config', '--epic', '176').stdout, 'harness_claude-config_e176\n', 'dir and repo slugified');
+  assert.equal(run('tree', 'harness', 'claude-config', '--epic', '176', '--ticket', '264').stdout, 'harness_claude-config_e176_t264\n');
+  assert.equal(run('tree', 'harness', 'claude-config', '--ticket', '264', '--worker', 'review', '--round', '2').stdout, 'harness_claude-config_t264_review-r2\n');
+  for (const args of [['tree', 'harness'], ['tree', 'harness', 'repo', 'extra'], ['tree', 'harness', 'repo', '--worker', 'bogus'], ['tree', 'harness', 'repo', '--round', '2'], ['tree', 'harness', 'repo', '--ticket'], ['tree', 'harness', 'repo', '--bogus', '1'], ['ticket', 'repo', '5', '--epic', '3']]) {
+    const r = run(...args);
+    assert.notEqual(r.status, 0, args.join(' '));
+    assert.equal(r.stdout, '', args.join(' '));
+    assert.match(r.stderr, /usage: session-name\.mjs/, args.join(' '));
+  }
+  assert.match(run('tree', 'harness', 'repo', '--ticket', '5', '--round', '2').stderr, /round needs a worker \(--worker/);
+});

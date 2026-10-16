@@ -156,9 +156,9 @@ function expectedUnit(repoName, slug, branch) {
 
 // Warn (never block) when the running session's name won't join this unit's spend
 // and reflect: auto-generated, untyped (the parser's general failsafe), or another
-// unit's. A ticket or epic on this repo and issue passes, typed or legacy, and so
-// does an orchestrator cutting a child's worktree (a director, or an epic of this
-// repo); with no issue to check against, any chosen name passes. The fix is the launch line for the
+// unit's. A ticket or epic on this repo and issue passes, typed, tree or legacy, and so
+// does an orchestrator cutting a child's worktree (a director, or an epic or tree repo
+// lead, not one of its workers, of this repo); with no issue to check against, any chosen name passes. The fix is the launch line for the
 // next window, or a /rename for this one (agents can't run slash commands). Silent
 // on non-Claude shells (no CLAUDE_PID / no registry file).
 function warnOnSessionName(unit) {
@@ -185,8 +185,8 @@ function warnOnSessionName(unit) {
     if (!userSet) problem = `${shown} is auto-generated`;
     else problem = name ? `${shown} has no type` : 'session has no name';
   } else if (unit.issue !== null && !((p.type === 'ticket' || p.type === 'epic') && p.repo === unit.repo && p.issue === unit.issue)) {
-    // a director or an epic of this repo is cutting a child's worktree: it keeps its own name
-    if (p.type === 'director' || (p.type === 'epic' && p.repo === unit.repo)) return;
+    // a director, or an epic or repo lead of this repo, is cutting a child's worktree: it keeps its own name
+    if (p.type === 'director' || ((p.type === 'epic' || (p.type === 'repo' && !p.role)) && p.repo === unit.repo)) return;
     problem = `${shown} names another unit`;
   } else return;
   log(`WARNING: ${problem} — spend and reflect join on the parsed session name. Launch the unit as:\n  ${launchCommand(unit.name)}\nor name this session now with:\n  /rename ${unit.name}`);

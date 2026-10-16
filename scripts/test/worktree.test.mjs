@@ -218,8 +218,8 @@ test('new normalizes a leading-zero issue number and treats 0 as no number, neve
   assert.match(zero.stdout, /launch: {3}claude -n general-0-foo\n/);
 });
 
-test('a director, or an epic of this repo, gets the child launch line and no warning', () => {
-  for (const name of ['director-harness', 'epic-app-40']) {
+test('a director, or an epic or repo lead of this repo, gets the child launch line and no warning', () => {
+  for (const name of ['director-harness', 'epic-app-40', 'harness_app', 'harness_app_e40']) {
     const root = mkdtempSync(join(tmpdir(), 'wt-'));
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
@@ -269,7 +269,7 @@ test('new warns when the user-set session name has no type', () => {
 });
 
 test('new says nothing when the session name is this unit, as a typed or legacy ticket or an epic', () => {
-  for (const [name, source] of [['app-72', 'user'], ['ticket-app-72', 'user'], ['epic-app-72', 'peer'], ['ticket-app-72', undefined], ['ticket-app-72', 'auto'], ['Ticket-App-72', 'derived']]) {
+  for (const [name, source] of [['app-72', 'user'], ['ticket-app-72', 'user'], ['epic-app-72', 'peer'], ['ticket-app-72', undefined], ['ticket-app-72', 'auto'], ['Ticket-App-72', 'derived'], ['harness_app_t72', 'auto'], ['harness_app_e40_t72_impl', undefined]]) {
     const root = mkdtempSync(join(tmpdir(), 'wt-'));
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
@@ -282,7 +282,7 @@ test('new says nothing when the session name is this unit, as a typed or legacy 
 });
 
 test('new warns, never blocks, when the session names another unit', () => {
-  for (const name of ['ticket-app-73', 'ticket-other-72', 'epic-other-72']) {
+  for (const name of ['ticket-app-73', 'ticket-other-72', 'epic-other-72', 'harness_app_t73', 'harness_other', 'harness_app_impl']) {
     const root = mkdtempSync(join(tmpdir(), 'wt-'));
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');

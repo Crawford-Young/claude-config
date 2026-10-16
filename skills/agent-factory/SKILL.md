@@ -15,7 +15,7 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 | Lane | Who holds the plan | Shape | Status |
 |---|---|---|---|
 | subagent | Claude, turn by turn | results return to the caller | GA |
-| teammate | the lead, turn by turn | shared task list plus direct teammate messaging | experimental, now on |
+| teammate | the lead, turn by turn | shared task list plus direct teammate messaging | experimental, off since 2026-10-16 (#272) |
 | Workflow | the script | results live in script variables; dozens to hundreds of agents | user opt-in |
 | agent view (`claude agents`) | you | independent background sessions | research preview, on by default |
 | cloud session / routine | you, or a schedule | unattended session on Anthropic infra (`claude --cloud`, `/schedule`) | research preview |
@@ -24,8 +24,8 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 
 - **Orchestrator (main session):** dispatch readily — but sweep effort on the current model first (raise your own effort/thinking level before reaching for a child). Dispatch pays off when (a) the pieces are independent, ideally more than one context window each, or (b) there's a long cost tail on routine work. Parallel-safe clusters, cross-repo work, and gate-heavy tasks are cheaper in a child than in your own context. Small docs/config tasks (≤2 files) run inline.
 - **`ultrathink`** deepens reasoning for one turn at unchanged API effort — the cheapest escalation available (cheaper than switching models or dispatching a child). "think", "think hard", "think more" are casual English, not recognized keywords with any effect.
-- **Spawned agents:** inline is the default; spawn only when the task exceeds what you can do well (missing tools/skills, context blowout, real parallelism). Agents may spawn their own subagents when the situation calls for it.
-- **Depth limit:** the default subagent spawn depth is 3 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`; the pre-v2.1.219 default was 5) — at the wall a subagent loses the `Agent` tool outright, and a `fork` keeps it listed but the call errors, so no lane spawns past the wall. Depth is about nesting, not foreground vs background, and an agent cannot observe its own current depth from inside itself. Before planning any spawn, confirm `Agent` is in your tool list. If it is absent, report `NEEDS_CONTEXT: no Agent tool in this dispatch` — do not plan around it. If present, spawn only when the situation genuinely calls for it (missing tools, context blowout, real parallelism).
+- **Spawned agents:** inline is the default; spawn only when the task exceeds what you can do well (missing tools/skills, context blowout, real parallelism). A lead (repo, epic or ticket) spawns its own subtree; a worker (`impl`, `review`, `recon`) is a leaf, since no tree name extends a worker's, so it reports a need up to its lead. Only the director asks the user, because AskUserQuestion is absent in subagents with teams on (#272 probe); with teams off that is unverified until the live chain checks it.
+- **Depth limit:** the harness sets `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=5` in `~/.claude/settings.json` (platform default 3; #272), room for dir → repo → epic → ticket → worker — at the wall a subagent loses the `Agent` tool outright, and a `fork` keeps it listed but the call errors, so no lane spawns past the wall. Depth is about nesting, not foreground vs background, and an agent cannot observe its own current depth from inside itself. Before planning any spawn, confirm `Agent` is in your tool list. If it is absent, report `NEEDS_CONTEXT: no Agent tool in this dispatch` — do not plan around it. If present, spawn only when the situation genuinely calls for it (missing tools, context blowout, real parallelism).
 - **No self-verification:** a reviewer (or any agent) must not judge or validate its own prior output — that's a fresh-context subagent's job. Objective gates the orchestrator can run itself (tests, lint, typecheck — read by exit line) are unaffected.
 - **Worktree isolation** (`isolation: "worktree"`) when parallel children mutate files — disjoint file sets required; a shared registry (`harness-map.json`) gets one owner per wave, and other children report their map changes as `ISSUE:` lines because parallel map edits conflict at integration.
 - **Workflow tool** for enumeration-shaped fan-outs (consumer sweeps, adversarial verify rounds, migrations over a file list). User opt-in: propose it in one line (agent count, rough cost), wait for the go.
@@ -33,17 +33,13 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 - **Workflow limits:** 1,000-agent hard cap on a single run. If an agent mid-run fails, resuming reruns every agent started after the failed one, including ones that already finished successfully — resume is not free.
 - **Workflow-lane settings:** `workflowSizeGuideline` is `medium` (<10 agents, platform default — user decision 2026-09-21, keeps runs inside the Max plan with no extra usage); `subagentPromptCacheTtl` stays unset until a Workflow run is actually proposed.
 
-### Agent teams
+### The named tree
 
-Agent teams went on globally 2026-09-21 (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `~/.claude/settings.json`).
+Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call is a plain subagent, its name kept in its `meta.json`, and names nest (probe: a named child of a named child at spawnDepth 2). SendMessage by name still resumes a finished agent. Gone with teams: the flat roster, the shared task list, peer messaging and idle notifications.
 
-- An Agent call with a `name` launches a teammate instead of a subagent, unless it's a `fork` or passes `isolation` — unnamed Agent calls stay plain subagents, so naming is the deliberate act that changes the lane.
-- One team per session, lead fixed, no nested teams; in-process teammates can't be resumed by `/resume` or `/rewind` — don't plan a teammate dispatch across a session boundary.
-- Teammates are NOT worktree-isolated — partition work by file, never by ticket, to avoid concurrent-write collisions.
-- Teammate permission prompts surface in the lead's session — expect to answer them yourself, not the teammate.
-- A named def keeps its `tools:`, `model:` and body but drops `effort:` — teammates inherit the lead's effort, so a named `recon` runs at the lead's level, not `low`; teammates also spawn foreground subagents only. Final text still reaches the lead, in the idle notification.
-- Name an agent (make it a teammate) only when workers must exchange results mid-task via shared task list or direct messaging — independent work stays an unnamed subagent, cheaper and simpler.
-- Fable clearance is hook-enforced on every lane — teammates and subagents (Agent tool, `agent-model-guard.mjs`), `/model` switches (`pre-model-switch.mjs`), and shell-launched sessions (`claude -p`/`--bg`/`agents --model fable`, `bash-guard.mjs`) — all spending the same single-use marker and writing the same dispatch log.
+- Inside a director's tree (a director-titled session and every tree-named agent below it), name every spawn with its tree name, `<dir>_<repo>[_e<N>][_t<N>][_<impl|review|recon>[-r<K>]]`, from `node ~/code/claude-config/scripts/session-name.mjs tree <dir> <repo> [--epic N] [--ticket N] [--worker W]`, because audit and reflect group its spend under its ticket by that name. `agent-name-guard.mjs` blocks a missing or off-grammar name there, a subagent's spawn outside its own subtree, and a director's spawn outside its scope; outside a director's tree it lets every spawn through, named or not.
+- A fresh dispatch on a worker name already used adds `--round K` (`-r2`), so the name you dispatch is the name you address.
+- Fable clearance is hook-enforced on every lane — subagents (Agent tool, `agent-model-guard.mjs`), `/model` switches (`pre-model-switch.mjs`), and shell-launched sessions (`claude -p`/`--bg`/`agents --model fable`, `bash-guard.mjs`) — all spending the same single-use marker and writing the same dispatch log.
 
 ## Model routing
 
@@ -51,7 +47,7 @@ Roster: `implementer` (code via TDD, and docs/prose edits), `reviewer` (read-onl
 
 - **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort was silently dropped on Haiku 4.5; Haiku 5.5 now documents effort support, so #112 re-tests this. Lower the effort, not the model.
 - **sonnet** — scoped implementation with a clear brief; verbatim/mechanical batches; adjudication-style reviews with enumerated probes.
-- **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations). Dispatch an opus implementer as `implementer-opus` (effort high by frontmatter, survives `name:`; #233, ROUTING.md). Name every in-session subagent from `session-name.mjs ticket <repo> <N> [review|recon]`.
+- **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations). Dispatch an opus implementer as `implementer-opus` (effort high by frontmatter, survives `name:`; #233, ROUTING.md).
 - **fable** — usage-billed; per-run user clearance required (the Agent hook enforces it — user replies `FABLE OK`). Reserve for diagnostics after an opus failure or exceptional-stakes review.
 
 Set `model:` explicitly on every dispatch of a type without a frontmatter default (hook-enforced). Any brief, any model: omit "verify your work" scaffolding (over-verification — the harness's verifier is a fresh-context subagent regardless of which model wrote the brief); add one scope line that fixes the file boundary (parallel safety) and leaves improvement inside it to the agent; cap delegation explicitly when the dispatched type carries the `Agent` tool.
@@ -82,7 +78,7 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 - Never restate brief contents in dispatch prose — point at the brief.
 - No commit steps in implementer briefs — the orchestrator owns git.
 - Any brief that reads, edits or republishes an Artifact names a scratch folder (the session scratchpad, or a `<scratchpad>/<artifact-slug>/` subfolder) for working copies — nothing lands in a repo or `~/code` (strate v1 mockup work, 2026-10-08).
-- Verify any agent report you act on — reviewer finding or teammate status — against source first, because a teammate's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
+- Verify any agent report you act on — reviewer finding or subagent status — against source first, because an agent's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
 - Dispatch a reviewer only after the implementer it reviews has handed back, because a tree read mid-edit gives a false red-gates verdict (strate-18).
 - Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch. A rewrite reported mid-task (gated green before building on it) → commit it, then continue the same agent warm, so it lands as its own commit.
 
