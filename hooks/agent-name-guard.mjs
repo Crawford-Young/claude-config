@@ -19,7 +19,8 @@
 // answers allow with updatedInput. The rule as documented for the Agent SDK ("If any hook
 // returns deny, the operation is blocked regardless of other hooks", code.claude.com/docs/
 // en/agent-sdk/hooks.md, quoted in docs/harness-evolution/research/2026-09-04/
-// sdk-headless.md:74); unverified live for the CLI's exit-2 block (#272).
+// sdk-headless.md:74), and seen live in the CLI: an unnamed, model-omitted spawn was blocked
+// while agent-model-guard filled its model (#272).
 //
 // Fails OPEN (_hooklib's default): naming isn't a safety boundary, unlike
 // agent-model-guard, and a crashed check must not stop every dispatch.
