@@ -307,24 +307,30 @@ test('M4: gh cannot comment from the barrier env', { skip: !hasGh && 'gh not ins
 });
 
 test('M5 / Major 2 / round 6 A+B: a path the round served (a Read of hooks/README.md) is explained; a command that spells it, and every reach into the real workspace, config and temp (/tmp included), flag', () => {
+  // The fixture's real temp is a host path. Git Bash mounts /tmp at it on Windows only (msys
+  // usertemp); on Linux /tmp is a plain path, so the session's /tmp lines name nothing under the
+  // fixture temp there. scanContamination's own tests pin both cases with fixed paths on any host.
+  const gitBashTmp = process.platform === 'win32';
+  // The order of `paths` follows spelling order, which differs by host; compare them as a set.
+  const bySet = (xs) => xs.map((x) => ({ ...x, paths: [...x.paths].sort() }));
   for (const arm of ['current', 'bare']) {
     const { result, dir } = fx[arm];
     assert.ok(existsSync(join(dir, 'transcripts', 'k', 's.jsonl')), arm);
     assert.deepEqual(
-      result.contamination,
-      [
+      bySet(result.contamination),
+      bySet([
         { source: 'tool inputs', label: 'workspace', count: 2, paths: [LEAKS.workspace, README_PATH] },
         { source: 'tool inputs', label: 'config', count: 1, paths: [LEAKS.config] },
-        { source: 'tool inputs', label: 'temp', count: 2, paths: [LEAKS.temp, '/tmp/claude/other-session'] },
+        { source: 'tool inputs', label: 'temp', count: gitBashTmp ? 2 : 1, paths: [LEAKS.temp, ...(gitBashTmp ? ['/tmp/claude/other-session'] : [])] },
         ...['diff.patch', 'gate-test.log', 'gate-shrunk.log'].map((source) => ({ source, label: 'workspace', count: 1, paths: [LEAKS.workspace] })),
-      ],
+      ]),
       arm,
     );
     assert.deepEqual(
       result.contaminationExplained,
       [
         { source: 'transcripts', label: 'workspace', count: 1, paths: [README_PATH] },
-        { source: 'transcripts', label: 'temp', count: 1, paths: ['/tmp'] },
+        ...(gitBashTmp ? [{ source: 'transcripts', label: 'temp', count: 1, paths: ['/tmp'] }] : []),
       ],
       arm,
     );

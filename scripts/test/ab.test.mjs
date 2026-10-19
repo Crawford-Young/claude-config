@@ -377,6 +377,20 @@ test('scanContamination: tree-spelled paths the round served (tool results, raw 
   assert.deepEqual(scanTranscript(toolResult('C:\\Users\\u\\.claude\\projects\\real\\t.jsonl')).flagged, [{ source: 'transcripts', label: 'config', count: 1, paths: ['C:\\Users\\u\\.claude\\projects\\real\\t.jsonl'] }]);
 });
 
+test('scanContamination on POSIX roots (CI on Linux): whole paths are reported, and /tmp is a plain path, not the Git Bash alias', () => {
+  // Every root under /tmp, as on a Linux runner; none overlaps another.
+  const roots = [{ path: '/tmp/w/code', label: 'workspace' }, { path: '/tmp/w/.claude', label: 'config' }, { path: '/tmp/w/t', label: 'temp' }];
+  const inputs = JSON.stringify({ command: 'cat /tmp/w/code/claude-config/x /tmp/w/.claude/projects/p.jsonl /tmp/w/t/claude/n.md && ls /tmp/other /tmp' });
+  assert.deepEqual(scanContamination({ 'tool inputs': inputs }, roots, { tmp: '/tmp/w/t', written: ['tool inputs'] }), {
+    flagged: [
+      { source: 'tool inputs', label: 'workspace', count: 1, paths: ['/tmp/w/code/claude-config/x'] },
+      { source: 'tool inputs', label: 'config', count: 1, paths: ['/tmp/w/.claude/projects/p.jsonl'] },
+      { source: 'tool inputs', label: 'temp', count: 1, paths: ['/tmp/w/t/claude/n.md'] },
+    ],
+    explained: [],
+  });
+});
+
 test("scanContamination knows git-bash's /tmp, which is the real temp whatever TEMP the round sets: a path under it flags, the round's own alias is masked", () => {
   const tmp = 'C:\\Users\\u\\AppData\\Local\\Temp';
   const opts = { mask: [`${tmp}\\ab\\r1d`], tmp };

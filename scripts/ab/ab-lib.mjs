@@ -307,9 +307,10 @@ const ALIAS_START = '(?<=^|[\\s"\'`<>|*?,;()[\\]{}=:&]|\\\\[nrt])';
 const ROUND_MASK = '@round@';
 
 /** Git Bash's spelling of `p` under its /tmp mount, which is the real temp `tmp` whatever TEMP the round
- *  sets (msys's usertemp mount): '/tmp' for `tmp` itself, null for a path outside it. */
+ *  sets (msys's usertemp mount): '/tmp' for `tmp` itself, null for a path outside it. Only a Windows
+ *  temp (a drive path) has that mount; elsewhere /tmp is a plain path its own spelling covers. */
 function tmpAlias(p, tmp) {
-  if (!tmp || !isInside(p, tmp)) return null;
+  if (!tmp || !/^[A-Za-z]:[\\/]/.test(tmp) || !isInside(p, tmp)) return null;
   return `/tmp${fwd(p).slice(fwd(tmp).replace(/\/+$/, '').length)}`;
 }
 
@@ -328,7 +329,8 @@ function pathSpellings(p, tmp) {
     { text: bash, sep: '/' },
     ...(alias ? [{ text: alias, sep: '/', alias: true }] : []),
   ];
-  return all.filter((s, i) => all.findIndex((o) => o.text === s.text) === i);
+  // Keep the last of equal texts: a POSIX path spells the same at every escaping level, and its separator is '/'.
+  return all.filter((s, i) => all.findLastIndex((o) => o.text === s.text) === i);
 }
 
 const halve = (s) => s.replace(/\\\\/g, '\\');
