@@ -2,9 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { execHarness, spawnHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execHarness, spawnHarness, tempDir } from './_spawn.mjs';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
@@ -41,7 +40,7 @@ function makeRepoWithOrigin(root) {
 }
 
 test('new copies env files and cuts clean from origin/main; remove cleans up', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
 
@@ -61,7 +60,7 @@ test('new copies env files and cuts clean from origin/main; remove cleans up', (
 });
 
 test('remove finishes a half-removed worktree: empty dir, no .git pointer', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const dir = join(root, '.worktrees', 'app-half');
   mkdirSync(dir, { recursive: true });
 
@@ -71,7 +70,7 @@ test('remove finishes a half-removed worktree: empty dir, no .git pointer', () =
 });
 
 test('remove refuses a non-empty dir with no .git pointer, listing what remains', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const dir = join(root, 'not-a-worktree');
   mkdirSync(dir);
   for (let i = 0; i < 12; i++) writeFileSync(join(dir, `file${String(i).padStart(2, '0')}.txt`), 'x');
@@ -85,7 +84,7 @@ test('remove refuses a non-empty dir with no .git pointer, listing what remains'
 });
 
 test('remove on a plain file dies and leaves the file', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const file = join(root, 'some-file.txt');
   writeFileSync(file, 'keep me');
 
@@ -96,7 +95,7 @@ test('remove on a plain file dies and leaves the file', () => {
 });
 
 test('bare remove dies with the usage line instead of targeting the cwd', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const r = spawnHarness(script, ['remove'], { cwd: root, env: { CLAUDE_WORKSPACE_ROOT: root } });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /usage: worktree\.mjs remove <worktree-path>/);
@@ -134,7 +133,7 @@ function assertHolderMessage(r) {
 const heldOpts = { skip: process.platform !== 'win32' && 'a held cwd only blocks deletion on Windows', timeout: 60_000 };
 
 test('remove names the likely holder when the directory delete fails', heldOpts, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'held'], { encoding: 'utf8', env });
@@ -144,7 +143,7 @@ test('remove names the likely holder when the directory delete fails', heldOpts,
 });
 
 test('remove retries a pinned-dir EPERM until the holder exits', heldOpts, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'pinned'], { encoding: 'utf8', env });
@@ -159,7 +158,7 @@ test('remove retries a pinned-dir EPERM until the holder exits', heldOpts, async
 });
 
 test('retry on a held, already-unregistered empty dir names the holder and keeps the dir', heldOpts, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const dir = join(root, '.worktrees', 'app-retry');
   mkdirSync(dir, { recursive: true });
 
@@ -168,7 +167,7 @@ test('retry on a held, already-unregistered empty dir names the holder and keeps
 });
 
 test('.worktreeinclude overrides the default env set', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   writeFileSync(join(repo, '.worktreeinclude'), '# only this one\n.env.local\n');
   const env = { CLAUDE_WORKSPACE_ROOT: root };
@@ -180,7 +179,7 @@ test('.worktreeinclude overrides the default env set', () => {
 });
 
 test('new warns when the session name is auto-generated, even if it happens to match', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   writeSession(sessionsDir, '4242', 'app-72', 'auto');
@@ -199,7 +198,7 @@ test('new warns when the session name is auto-generated, even if it happens to m
 });
 
 test('new prints the ticket launch line from the slug or the branch number', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   assert.match(execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env }), /launch: {3}claude -n ticket-app-72\n/);
@@ -207,7 +206,7 @@ test('new prints the ticket launch line from the slug or the branch number', () 
 });
 
 test('new normalizes a leading-zero issue number and treats 0 as no number, never throwing mid-new', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   const z = spawnHarness(script, ['new', repo, '007-foo'], { env });
@@ -220,7 +219,7 @@ test('new normalizes a leading-zero issue number and treats 0 as no number, neve
 
 test('a director, or an epic or repo lead of this repo, gets the child launch line and no warning', () => {
   for (const name of ['director-harness', 'epic-app-40', 'harness_app', 'harness_app_e40']) {
-    const root = mkdtempSync(join(tmpdir(), 'wt-'));
+    const root = tempDir('wt-');
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
     writeSession(sessionsDir, '4242', name, 'user');
@@ -233,14 +232,14 @@ test('a director, or an epic or repo lead of this repo, gets the child launch li
 });
 
 test('a long slug with no number gives the same general name as the CLI (4-word cap)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const out = execHarness(script, ['new', repo, 'one-two-three-four-five'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
   assert.match(out, /launch: {3}claude -n general-one-two-three-four\n/);
 });
 
 test('new survives a null session registry entry', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   mkdirSync(sessionsDir, { recursive: true });
@@ -251,7 +250,7 @@ test('new survives a null session registry entry', () => {
 });
 
 test('new warns when the user-set session name has no type', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   writeSession(sessionsDir, '4242', 'some-other-name', 'user');
@@ -270,7 +269,7 @@ test('new warns when the user-set session name has no type', () => {
 
 test('new says nothing when the session name is this unit, as a typed or legacy ticket or an epic', () => {
   for (const [name, source] of [['app-72', 'user'], ['ticket-app-72', 'user'], ['epic-app-72', 'peer'], ['ticket-app-72', undefined], ['ticket-app-72', 'auto'], ['Ticket-App-72', 'derived'], ['harness_app_t72', 'auto'], ['harness_app_e40_t72_impl', undefined]]) {
-    const root = mkdtempSync(join(tmpdir(), 'wt-'));
+    const root = tempDir('wt-');
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
     writeSession(sessionsDir, '4242', name, source);
@@ -283,7 +282,7 @@ test('new says nothing when the session name is this unit, as a typed or legacy 
 
 test('new warns, never blocks, when the session names another unit', () => {
   for (const name of ['ticket-app-73', 'ticket-other-72', 'epic-other-72', 'harness_app_t73', 'harness_other', 'harness_app_impl']) {
-    const root = mkdtempSync(join(tmpdir(), 'wt-'));
+    const root = tempDir('wt-');
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
     writeSession(sessionsDir, '4242', name, 'user');
@@ -297,7 +296,7 @@ test('new warns, never blocks, when the session names another unit', () => {
 });
 
 test('new warns on an auto name even when the slug has no issue number, with the generic name', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   writeSession(sessionsDir, '4242', 'whatever', 'auto');
@@ -316,7 +315,7 @@ test('new warns on an auto name even when the slug has no issue number, with the
 
 test('with no issue number in the slug, any typed name passes and an untyped one warns', () => {
   for (const [name, warns] of [['director-harness', false], ['general-cleanup', false], ['ticket-app-9', false], ['whatever', true]]) {
-    const root = mkdtempSync(join(tmpdir(), 'wt-'));
+    const root = tempDir('wt-');
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
     writeSession(sessionsDir, '4242', name, 'user');
@@ -329,7 +328,7 @@ test('with no issue number in the slug, any typed name passes and an untyped one
 });
 
 test('an auto session with no name never prints undefined', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   writeSession(sessionsDir, '4242', undefined, 'auto');
@@ -346,7 +345,7 @@ test('an auto session with no name never prints undefined', () => {
 });
 
 test('new says nothing when CLAUDE_PID is unset (non-Claude shell)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   writeSession(sessionsDir, '4242', 'whatever', 'auto');
@@ -357,7 +356,7 @@ test('new says nothing when CLAUDE_PID is unset (non-Claude shell)', () => {
 });
 
 test('new says nothing when the session registry file is missing', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions'); // never written
   const env = {
@@ -398,7 +397,7 @@ function commitIn(wt, file, msg) {
 }
 
 test('prepush skips a checkout with no commitlint config', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'nolint'], { env });
@@ -411,7 +410,7 @@ test('prepush skips a checkout with no commitlint config', () => {
 });
 
 test('prepush blocks a bad subject over origin/main..HEAD and passes once it is reworded', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'lint'], { env });
@@ -437,7 +436,7 @@ test('prepush blocks a bad subject over origin/main..HEAD and passes once it is 
 });
 
 test('prepush fails closed with commitlint uninstalled, and borrows the main checkout install', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'borrow'], { env });
@@ -459,7 +458,7 @@ test('prepush fails closed with commitlint uninstalled, and borrows the main che
 // ---- remove: stop the serve-port listener first (#170) ----
 
 test('servePorts reads serve-type Justfile recipes and package.json scripts only', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'wt-ports-'));
+  const dir = tempDir('wt-ports-');
   writeFileSync(join(dir, 'Justfile'), [
     'port := "1234"',
     'set shell := ["bash", "-c"]',
@@ -479,7 +478,7 @@ test('servePorts reads serve-type Justfile recipes and package.json scripts only
     scripts: { dev: 'next dev --port 3001', preview: 'vite preview --port=4173', start: 'PORT=5000 node server.js', test: 'vitest -p 9999' },
   }));
   assert.deepEqual(servePorts(dir), [3001, 4173, 5000, 8060]);
-  assert.deepEqual(servePorts(mkdtempSync(join(tmpdir(), 'wt-ports-'))), [], 'no Justfile or package.json');
+  assert.deepEqual(servePorts(tempDir('wt-ports-')), [], 'no Justfile or package.json');
   assert.equal(commitlintConfig(dir), null, 'package.json with no commitlint key');
 });
 
@@ -509,7 +508,7 @@ async function startListener(cwd, port) {
 
 const lsofMissing = process.platform !== 'win32' && spawnSync('lsof', ['-v']).error;
 test('remove --dry-run names the serve-port listener; remove stops it, then removes the worktree', { skip: lsofMissing && 'lsof not installed', timeout: 60_000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'serve'], { env });
@@ -536,7 +535,7 @@ test('remove --dry-run names the serve-port listener; remove stops it, then remo
 });
 
 test('remove --port rejects a value that is not a port', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-'));
+  const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   execHarness(script, ['new', repo, 'badport'], { env });
@@ -549,7 +548,7 @@ test('remove --port rejects a value that is not a port', () => {
 });
 
 test('isHuskyRepo detects the prepare script or a core.hooksPath under .husky/', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-husky-'));
+  const root = tempDir('wt-husky-');
   const repo = makeRepoWithOrigin(root);
   assert.equal(isHuskyRepo(repo), false, 'plain repo');
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { prepare: 'husky' } }));
@@ -561,7 +560,7 @@ test('isHuskyRepo detects the prepare script or a core.hooksPath under .husky/',
 });
 
 test('new copies the main checkout husky stubs so commit-msg runs, or warns loudly when it has none', () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-husky-'));
+  const root = tempDir('wt-husky-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { prepare: 'husky' } }));

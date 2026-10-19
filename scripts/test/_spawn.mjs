@@ -5,7 +5,9 @@
 // the child's env, not mutated in-process. scripts/test/source-hygiene.test.mjs fails a
 // test file that spawns node on a script without this helper.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { after } from 'node:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -28,6 +30,19 @@ const PATH_OVERRIDES = {
 /** Live-session identity must not leak into a child; a test that needs it passes it in `env`. */
 const SCRUBBED = ['CLAUDE_PID'];
 
+const made = new Set();
+/** Async rm with retries: Node 24's rmSync throws EPERM at once on a dir a live child still holds (#172). */
+const removeDir = (dir) => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+// Registered at import, so it runs once as the importing test file finishes, pass or fail.
+after(() => Promise.all([...made].map(removeDir)));
+
+/** A fresh temp dir under `parent`, removed when the test file finishes. */
+export function tempDir(prefix, parent = tmpdir()) {
+  const dir = mkdtempSync(join(parent, prefix));
+  made.add(dir);
+  return dir;
+}
+
 export const OVERRIDE_NAMES = Object.keys(PATH_OVERRIDES);
 
 /** Child env: process.env, then the isolated HOME and overrides, then the caller's `env`. */
@@ -42,17 +57,12 @@ export function isolatedEnv(home, extra = {}) {
 
 /**
  * spawnSync(node, [script, ...args]) with an isolated environment. `home` defaults to a
- * fresh temp dir (removed afterwards); `env` overrides win over the isolated defaults.
+ * fresh temp dir (removed when the test file finishes); `env` overrides win over the isolated defaults.
  * Other options (input, cwd, ...) pass through; encoding defaults to utf8.
  */
 export function spawnHarness(script, args = [], { home, env, ...opts } = {}) {
-  const own = home === undefined;
-  const h = own ? mkdtempSync(join(tmpdir(), 'harness-home-')) : home;
-  try {
-    return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', ...opts, env: isolatedEnv(h, env) });
-  } finally {
-    if (own) rmSync(h, { recursive: true, force: true });
-  }
+  const h = home ?? tempDir('harness-home-');
+  return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', ...opts, env: isolatedEnv(h, env) });
 }
 
 /** Like execFileSync: returns stdout, throws (with status/stdout/stderr) on a non-zero exit. */

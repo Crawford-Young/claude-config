@@ -1,8 +1,8 @@
 // node --test scripts/test/session-start.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execHarness, tempDir } from './_spawn.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ const index = readFileSync(join(repo, 'skills', 'INDEX.md'), 'utf8').replace(/\r
 
 /** A node script standing in for `gh`; it records its argv and runs `body`. */
 function ghStub(body) {
-  const dir = mkdtempSync(join(tmpdir(), 'ss-gh-'));
+  const dir = tempDir('ss-gh-');
   const script = join(dir, 'gh.mjs');
   writeFileSync(
     script,

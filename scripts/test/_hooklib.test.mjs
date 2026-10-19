@@ -3,8 +3,8 @@
 // this covers (H21 BOM, H3 unbounded logs) only appear across the process boundary.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness, raceHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { execHarness, raceHarness, tempDir } from './_spawn.mjs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,7 +18,7 @@ const BOM = '\uFEFF'; // EF BB BF on the wire
 
 /** A throwaway HOME so nothing here touches the real ~/.claude logs. */
 function home({ claudeIsAFile = false } = {}) {
-  const h = mkdtempSync(join(tmpdir(), 'hooklib-'));
+  const h = tempDir('hooklib-');
   if (claudeIsAFile) writeFileSync(join(h, '.claude'), 'not a directory');
   else mkdirSync(join(h, '.claude'), { recursive: true });
   return h;

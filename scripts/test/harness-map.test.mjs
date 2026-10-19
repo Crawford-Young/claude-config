@@ -1,17 +1,17 @@
 // node --test scripts/test/harness-map.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkMap, harnessFiles, render } from '../harness-map.mjs';
+import { tempDir } from './_spawn.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** A throwaway repo with one of each harness part. */
 function fixture() {
-  const r = mkdtempSync(join(tmpdir(), 'hmap-'));
+  const r = tempDir('hmap-');
   for (const d of ['skills/plan', 'hooks', 'agents', 'scripts', 'workspace']) mkdirSync(join(r, d), { recursive: true });
   for (const f of ['skills/plan/SKILL.md', 'hooks/guard.mjs', 'hooks/README.md', 'agents/recon.md', 'agents/README.md', 'scripts/qa.mjs', 'scripts/x.template.html', 'workspace/CLAUDE.md'])
     writeFileSync(join(r, f), 'x');

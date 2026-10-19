@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { raceHarness, spawnHarness } from './_spawn.mjs';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { raceHarness, spawnHarness, tempDir } from './_spawn.mjs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,7 +26,7 @@ const bar = (pct) => {
   const n = Math.min(10, Math.ceil(pct / 10));
   return '▰'.repeat(n) + '▱'.repeat(10 - n);
 };
-const tmp = () => mkdtempSync(join(tmpdir(), 'statusline-'));
+const tmp = () => tempDir('statusline-');
 /** Cleanup for tests that spawn the detached spend worker: its cwd is the spend dir and it
  *  drops the lock before it exits, so Windows pins the dir (EPERM) for a moment after (#172, #143).
  *  Async rm: Node 24's rmSync throws that EPERM at once, ignoring maxRetries. */
@@ -42,13 +42,14 @@ const at = (name, dir) => {
   return s;
 };
 // render() reads the real registry by default; tests point it at an empty dir
+const HISTORY = tempDir('statusline-noreg-');
 const NOREG = {
   CLAUDE_SESSIONS_DIR: join(tmpdir(), 'statusline-no-registry'),
   CLAUDE_ACTIVE_REPO_DIR: join(tmpdir(), 'statusline-no-active-repo'),
   CLAUDE_SPEND_DIR: join(tmpdir(), 'statusline-no-spend'),
   CLAUDE_SPEND_NO_REFRESH: '1',
-  CLAUDE_USAGE_HISTORY_DIR: join(tmpdir(), 'statusline-test-history'),
-  CLAUDE_USAGE_THROTTLE_DIR: join(tmpdir(), 'statusline-test-history'),
+  CLAUDE_USAGE_HISTORY_DIR: HISTORY,
+  CLAUDE_USAGE_THROTTLE_DIR: HISTORY,
 };
 const SID = '4ebbd908-ff44-4647-a06b-2f807203d3b8';
 
@@ -86,18 +87,14 @@ test('token counts compact to k/M', () => {
 
 test('full fixture: identity row, then ctx/cache/5h/7d row', () => {
   const root = tmp();
-  try {
-    mkdirSync(join(root, 'plain-folder'));
-    const out = render(at('full.json', join(root, 'plain-folder')), NOREG);
-    const [row1, row2] = plain(out).split('\n');
-    assert.equal(row1, 'plain-folder · Fable 5 · high · $3.13');
-    assert.ok(row2.startsWith(`ctx ${bar(10)} 102k/1M 10% · cache warm 91% · 5h ${bar(22)} 22%→`), row2);
-    assert.ok(row2.includes(`7d ${bar(4)} 4%→`));
-    assert.ok(out.includes('\x1b[32mwarm 91%'));
-    assert.ok(!row2.includes('miss:'));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  mkdirSync(join(root, 'plain-folder'));
+  const out = render(at('full.json', join(root, 'plain-folder')), NOREG);
+  const [row1, row2] = plain(out).split('\n');
+  assert.equal(row1, 'plain-folder · Fable 5 · high · $3.13');
+  assert.ok(row2.startsWith(`ctx ${bar(10)} 102k/1M 10% · cache warm 91% · 5h ${bar(22)} 22%→`), row2);
+  assert.ok(row2.includes(`7d ${bar(4)} 4%→`));
+  assert.ok(out.includes('\x1b[32mwarm 91%'));
+  assert.ok(!row2.includes('miss:'));
 });
 
 test('high usage: red/yellow thresholds, cold cache with miss cause, fast tag', () => {
@@ -123,110 +120,86 @@ test('malformed or empty stdin renders the sentinel and exits 0', () => {
 
 test('location: repo@branch in a checkout, short SHA when detached, folder name outside git', () => {
   const root = tmp();
-  try {
-    const { dir, git } = gitRepo(root, 'my-repo', 'feat/test-branch');
-    mkdirSync(join(dir, 'sub'));
-    assert.ok(plain(render(at('full.json', join(dir, 'sub')), NOREG)).startsWith('my-repo@feat/test-branch · '));
-    git('checkout', '-q', '--detach');
-    assert.match(plain(render(at('full.json', dir), NOREG)), /^my-repo@[0-9a-f]{7} · /);
-    mkdirSync(join(root, 'plain'));
-    assert.ok(plain(render(at('full.json', join(root, 'plain')), NOREG)).startsWith('plain · '));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { dir, git } = gitRepo(root, 'my-repo', 'feat/test-branch');
+  mkdirSync(join(dir, 'sub'));
+  assert.ok(plain(render(at('full.json', join(dir, 'sub')), NOREG)).startsWith('my-repo@feat/test-branch · '));
+  git('checkout', '-q', '--detach');
+  assert.match(plain(render(at('full.json', dir), NOREG)), /^my-repo@[0-9a-f]{7} · /);
+  mkdirSync(join(root, 'plain'));
+  assert.ok(plain(render(at('full.json', join(root, 'plain')), NOREG)).startsWith('plain · '));
 });
 
 test('gitInfo: a linked worktree names its owning repo', () => {
   const root = tmp();
-  try {
-    const { dir, git } = gitRepo(root, 'owner-repo', 'main');
-    git('worktree', 'add', '-q', '-b', 'feat/x', join(root, 'wt-dir'));
-    const g = gitInfo(join(root, 'wt-dir'));
-    assert.equal(g.branch, 'feat/x');
-    assert.equal(g.worktree, 'wt-dir');
-    assert.equal(g.repo, 'owner-repo');
-    assert.deepEqual({ ...gitInfo(dir), top: '' }, { top: '', branch: 'main', worktree: '', repo: 'owner-repo' });
-    // a worktree of a bare repo names the repo, not the bare dir's parent
-    execFileSync('git', ['clone', '-q', '--bare', dir, join(root, 'foo.git')], { stdio: 'ignore' });
-    execFileSync('git', ['-C', join(root, 'foo.git'), 'worktree', 'add', '-q', '-b', 'feat/b', join(root, 'bare-wt')], { stdio: 'ignore' });
-    assert.equal(gitInfo(join(root, 'bare-wt')).repo, 'foo');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { dir, git } = gitRepo(root, 'owner-repo', 'main');
+  git('worktree', 'add', '-q', '-b', 'feat/x', join(root, 'wt-dir'));
+  const g = gitInfo(join(root, 'wt-dir'));
+  assert.equal(g.branch, 'feat/x');
+  assert.equal(g.worktree, 'wt-dir');
+  assert.equal(g.repo, 'owner-repo');
+  assert.deepEqual({ ...gitInfo(dir), top: '' }, { top: '', branch: 'main', worktree: '', repo: 'owner-repo' });
+  // a worktree of a bare repo names the repo, not the bare dir's parent
+  execFileSync('git', ['clone', '-q', '--bare', dir, join(root, 'foo.git')], { stdio: 'ignore' });
+  execFileSync('git', ['-C', join(root, 'foo.git'), 'worktree', 'add', '-q', '-b', 'feat/b', join(root, 'bare-wt')], { stdio: 'ignore' });
+  assert.equal(gitInfo(join(root, 'bare-wt')).repo, 'foo');
 });
 
 test('gitInfo: submodule worktree names the submodule; reftable HEAD stub shows no branch', () => {
   const root = tmp();
-  try {
-    // fs-shaped fixtures: a submodule's linked worktree, and a reftable repo's HEAD
-    const mod = join(root, 'super', '.git', 'modules', 'sub');
-    mkdirSync(join(mod, 'worktrees', 'subwt'), { recursive: true });
-    writeFileSync(join(mod, 'worktrees', 'subwt', 'HEAD'), 'ref: refs/heads/f\n');
-    writeFileSync(join(mod, 'worktrees', 'subwt', 'commondir'), '../..\n');
-    mkdirSync(join(root, 'subwt'));
-    writeFileSync(join(root, 'subwt', '.git'), `gitdir: ${join(mod, 'worktrees', 'subwt')}\n`);
-    assert.deepEqual({ ...gitInfo(join(root, 'subwt')), top: '' }, { top: '', branch: 'f', worktree: 'subwt', repo: 'sub' });
-    mkdirSync(join(root, 'rt', '.git'), { recursive: true });
-    writeFileSync(join(root, 'rt', '.git', 'HEAD'), 'ref: refs/heads/.invalid\n');
-    assert.equal(gitInfo(join(root, 'rt')).branch, '');
-    assert.ok(plain(render(at('full.json', join(root, 'rt')), NOREG)).startsWith('rt · '));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // fs-shaped fixtures: a submodule's linked worktree, and a reftable repo's HEAD
+  const mod = join(root, 'super', '.git', 'modules', 'sub');
+  mkdirSync(join(mod, 'worktrees', 'subwt'), { recursive: true });
+  writeFileSync(join(mod, 'worktrees', 'subwt', 'HEAD'), 'ref: refs/heads/f\n');
+  writeFileSync(join(mod, 'worktrees', 'subwt', 'commondir'), '../..\n');
+  mkdirSync(join(root, 'subwt'));
+  writeFileSync(join(root, 'subwt', '.git'), `gitdir: ${join(mod, 'worktrees', 'subwt')}\n`);
+  assert.deepEqual({ ...gitInfo(join(root, 'subwt')), top: '' }, { top: '', branch: 'f', worktree: 'subwt', repo: 'sub' });
+  mkdirSync(join(root, 'rt', '.git'), { recursive: true });
+  writeFileSync(join(root, 'rt', '.git', 'HEAD'), 'ref: refs/heads/.invalid\n');
+  assert.equal(gitInfo(join(root, 'rt')).branch, '');
+  assert.ok(plain(render(at('full.json', join(root, 'rt')), NOREG)).startsWith('rt · '));
 });
 
 test('active repo: the hook records the edited checkout; the row names its owning repo + wt', () => {
   const root = tmp();
   const active = join(root, 'active');
-  try {
-    const { dir, git } = gitRepo(root, 'owner-repo', 'main');
-    git('worktree', 'add', '-q', '-b', 'feat/77-x', join(root, 'owner-repo-77-x'));
-    mkdirSync(join(root, 'launch'));
-    const payload = { session_id: SID, tool_name: 'Write', tool_input: { file_path: join(root, 'owner-repo-77-x', 'new', 'file.mjs') } };
-    // the file's directory does not exist yet: the hook resolves upward
-    mkdirSync(join(root, 'owner-repo-77-x', 'new'));
-    const r = spawnHarness(HOOK, [], { input: JSON.stringify(payload), env: { CLAUDE_ACTIVE_REPO_DIR: active } });
-    assert.equal(r.status, 0);
-    assert.equal(r.stdout, '');
-    const env = { ...NOREG, CLAUDE_ACTIVE_REPO_DIR: active };
-    const row1 = render(at('no-rate-limits.json', join(root, 'launch')), env).split('\n')[0];
-    assert.ok(row1.startsWith('owner-repo@feat/77-x \x1b[2mwt\x1b[0m · '), JSON.stringify(row1));
-    // the primary checkout on main: yellow, no wt marker
-    record({ ...payload, tool_input: { file_path: join(dir, 'a.txt') } }, active);
-    const main = render(at('no-rate-limits.json', join(root, 'launch')), env).split('\n')[0];
-    assert.ok(main.startsWith('\x1b[33mowner-repo@main\x1b[0m · '), JSON.stringify(main));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { dir, git } = gitRepo(root, 'owner-repo', 'main');
+  git('worktree', 'add', '-q', '-b', 'feat/77-x', join(root, 'owner-repo-77-x'));
+  mkdirSync(join(root, 'launch'));
+  const payload = { session_id: SID, tool_name: 'Write', tool_input: { file_path: join(root, 'owner-repo-77-x', 'new', 'file.mjs') } };
+  // the file's directory does not exist yet: the hook resolves upward
+  mkdirSync(join(root, 'owner-repo-77-x', 'new'));
+  const r = spawnHarness(HOOK, [], { input: JSON.stringify(payload), env: { CLAUDE_ACTIVE_REPO_DIR: active } });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  const env = { ...NOREG, CLAUDE_ACTIVE_REPO_DIR: active };
+  const row1 = render(at('no-rate-limits.json', join(root, 'launch')), env).split('\n')[0];
+  assert.ok(row1.startsWith('owner-repo@feat/77-x \x1b[2mwt\x1b[0m · '), JSON.stringify(row1));
+  // the primary checkout on main: yellow, no wt marker
+  record({ ...payload, tool_input: { file_path: join(dir, 'a.txt') } }, active);
+  const main = render(at('no-rate-limits.json', join(root, 'launch')), env).split('\n')[0];
+  assert.ok(main.startsWith('\x1b[33mowner-repo@main\x1b[0m · '), JSON.stringify(main));
 });
 
 test('active repo: no write outside git, for a bad session id, or without a path', () => {
   const root = tmp();
-  try {
-    mkdirSync(join(root, 'plain'));
-    assert.equal(record({ session_id: SID, tool_input: { file_path: join(root, 'plain', 'x') } }, join(root, 'a')), null);
-    assert.equal(record({ session_id: '../evil', tool_input: { file_path: SCRIPT } }, join(root, 'a')), null);
-    assert.equal(record({ session_id: SID, tool_input: {} }, join(root, 'a')), null);
-    assert.ok(!existsSync(join(root, 'a')));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  mkdirSync(join(root, 'plain'));
+  assert.equal(record({ session_id: SID, tool_input: { file_path: join(root, 'plain', 'x') } }, join(root, 'a')), null);
+  assert.equal(record({ session_id: '../evil', tool_input: { file_path: SCRIPT } }, join(root, 'a')), null);
+  assert.equal(record({ session_id: SID, tool_input: {} }, join(root, 'a')), null);
+  assert.ok(!existsSync(join(root, 'a')));
 });
 
 test('active repo: records older than a week are pruned on a new session\'s first write', () => {
   const root = tmp();
   const active = join(root, 'a');
-  try {
-    mkdirSync(active);
-    writeFileSync(join(active, 'old.json'), '{}');
-    const old = (Date.now() - 8 * 24 * 3600 * 1000) / 1000;
-    utimesSync(join(active, 'old.json'), old, old);
-    record({ session_id: SID, tool_input: { file_path: SCRIPT } }, active);
-    assert.ok(!existsSync(join(active, 'old.json')));
-    assert.ok(existsSync(join(active, `${SID}.json`)));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  mkdirSync(active);
+  writeFileSync(join(active, 'old.json'), '{}');
+  const old = (Date.now() - 8 * 24 * 3600 * 1000) / 1000;
+  utimesSync(join(active, 'old.json'), old, old);
+  record({ session_id: SID, tool_input: { file_path: SCRIPT } }, active);
+  assert.ok(!existsSync(join(active, 'old.json')));
+  assert.ok(existsSync(join(active, `${SID}.json`)));
 });
 
 /** A registry dir holding one session file plus an unrelated and a torn one. */
@@ -242,46 +215,29 @@ function registry(entry) {
 test('session name: a chosen name leads row 1 in bold', () => {
   for (const nameSource of ['user', 'peer']) {
     const dir = registry({ name: 'claude-config-77', nameSource });
-    try {
-      const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
-      assert.ok(out.startsWith('\x1b[1mclaude-config-77\x1b[0m · '), JSON.stringify(out));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
+    assert.ok(out.startsWith('\x1b[1mclaude-config-77\x1b[0m · '), JSON.stringify(out));
   }
 });
 
 test('session name: an auto title is dim, ~-marked and cut to 24', () => {
   const dir = registry({ name: 'Agent orchestration app naming', nameSource: 'auto' });
   const bare = registry({ name: '872d7dd5' }); // spare bg session: no nameSource
-  try {
-    assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith('\x1b[2m~Agent orchestration app…\x1b[0m · '));
-    assert.ok(plain(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: bare })).startsWith('~872d7dd5 · '));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(bare, { recursive: true, force: true });
-  }
+  assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith('\x1b[2m~Agent orchestration app…\x1b[0m · '));
+  assert.ok(plain(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: bare })).startsWith('~872d7dd5 · '));
 });
 
 test('session name: control and bidi bytes are stripped', () => {
   const dir = registry({ name: '\x1b[31mevil\x07\u009b2J\u202ename\n', nameSource: 'user' });
-  try {
-    const row1 = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).split('\n')[0];
-    assert.ok(row1.startsWith('\x1b[2m~[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const row1 = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).split('\n')[0];
+  assert.ok(row1.startsWith('\x1b[2m~[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
 });
 
 test('session name: a typed name is chosen whatever its nameSource, and renders as-is', () => {
   for (const entry of [{ name: 'ticket-claude-config-175', nameSource: 'auto' }, { name: 'director-harness' }, { name: 'claude-config-62', nameSource: 'user' }, { name: 'harness_claude-config_t264', nameSource: 'auto' }]) {
     const dir = registry(entry);
-    try {
-      const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
-      assert.ok(out.startsWith(`\x1b[1m${entry.name}\x1b[0m · `), JSON.stringify(out));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
+    assert.ok(out.startsWith(`\x1b[1m${entry.name}\x1b[0m · `), JSON.stringify(out));
   }
   const s = json('no-rate-limits.json');
   s.session_name = 'general-spend-review';
@@ -291,11 +247,7 @@ test('session name: a typed name is chosen whatever its nameSource, and renders 
 test('session name: a legacy-form name is dim unless user- or peer-set (derived names look like code-42)', () => {
   for (const entry of [{ name: 'claude-config-62', nameSource: 'auto' }, { name: 'code-42', nameSource: 'derived' }, { name: 'code-42' }]) {
     const dir = registry(entry);
-    try {
-      assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith(`\x1b[2m~${entry.name}\x1b[0m · `), JSON.stringify(entry));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith(`\x1b[2m~${entry.name}\x1b[0m · `), JSON.stringify(entry));
   }
   const s = json('no-rate-limits.json');
   s.session_name = 'code-42';
@@ -304,23 +256,15 @@ test('session name: a legacy-form name is dim unless user- or peer-set (derived 
 
 test('registryName: the registry entry for this sessionId, with its nameSource', () => {
   const dir = registry({ name: 'ticket-repo-5', nameSource: 'auto' });
-  try {
-    assert.deepEqual(registryName(SID, dir), { name: 'ticket-repo-5', source: 'auto' });
-    assert.equal(registryName('', dir), null);
-    assert.equal(registryName(SID, join(dir, 'missing')), null);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  assert.deepEqual(registryName(SID, dir), { name: 'ticket-repo-5', source: 'auto' });
+  assert.equal(registryName('', dir), null);
+  assert.equal(registryName(SID, join(dir, 'missing')), null);
 });
 
 test('session name: an untyped name (the general failsafe) is dim whatever its nameSource', () => {
   for (const entry of [{ name: 'code-4c', nameSource: 'auto' }, { name: 'some-other-name', nameSource: 'user' }, { name: 'some-other-name', nameSource: 'peer' }]) {
     const dir = registry(entry);
-    try {
-      assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith(`\x1b[2m~${entry.name}\x1b[0m · `), entry.nameSource);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.ok(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir }).startsWith(`\x1b[2m~${entry.name}\x1b[0m · `), entry.nameSource);
   }
 });
 
@@ -359,57 +303,45 @@ function projects(root) {
 
 test('spend: today\'s requests priced once each, across files and subagents', async () => {
   const root = tmp();
-  try {
-    const proj = projects(root);
-    const old = join(proj, 'old.jsonl');
-    writeFileSync(old, asst('r9', 10));
-    const t = (Date.now() - 48 * 3600 * 1000) / 1000;
-    utimesSync(old, t, t); // untouched today: never read
-    const r = await refresh({ root: join(root, 'projects'), dir: join(root, 'spend'), prices: PRICES });
-    const want = cost(50) + cost(20, 'claude-sonnet-5-5');
-    assert.ok(Math.abs(r.usd - want) < 1e-9, `${r.usd} vs ${want}`);
-    assert.equal(r.unpriced, 1);
-    assert.equal(r.files, 3);
-    const cache = JSON.parse(readFileSync(join(root, 'spend', `day-${localDay(new Date())}.json`), 'utf8'));
-    assert.ok(Math.abs(cache.usd - want) < 1e-9);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const proj = projects(root);
+  const old = join(proj, 'old.jsonl');
+  writeFileSync(old, asst('r9', 10));
+  const t = (Date.now() - 48 * 3600 * 1000) / 1000;
+  utimesSync(old, t, t); // untouched today: never read
+  const r = await refresh({ root: join(root, 'projects'), dir: join(root, 'spend'), prices: PRICES });
+  const want = cost(50) + cost(20, 'claude-sonnet-5-5');
+  assert.ok(Math.abs(r.usd - want) < 1e-9, `${r.usd} vs ${want}`);
+  assert.equal(r.unpriced, 1);
+  assert.equal(r.files, 3);
+  const cache = JSON.parse(readFileSync(join(root, 'spend', `day-${localDay(new Date())}.json`), 'utf8'));
+  assert.ok(Math.abs(cache.usd - want) < 1e-9);
 });
 
 test('spend: a refresh reads only appended bytes; a torn line waits for its newline', async () => {
   const root = tmp();
-  try {
-    const proj = projects(root);
-    const opts = { root: join(root, 'projects'), dir: join(root, 'spend'), prices: PRICES };
-    const base = (await refresh(opts)).usd;
-    const line = asst('r5', 30);
-    appendFileSync(join(proj, 'sess-b.jsonl'), line.slice(0, 40)); // torn
-    assert.ok(Math.abs((await refresh(opts)).usd - base) < 1e-9);
-    appendFileSync(join(proj, 'sess-b.jsonl'), line.slice(40));
-    assert.ok(Math.abs((await refresh(opts)).usd - (base + cost(30))) < 1e-9);
-    // an earlier day's files are pruned
-    writeFileSync(join(root, 'spend', 'day-2000-01-01.json'), '{}');
-    await refresh(opts);
-    assert.ok(!existsSync(join(root, 'spend', 'day-2000-01-01.json')));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const proj = projects(root);
+  const opts = { root: join(root, 'projects'), dir: join(root, 'spend'), prices: PRICES };
+  const base = (await refresh(opts)).usd;
+  const line = asst('r5', 30);
+  appendFileSync(join(proj, 'sess-b.jsonl'), line.slice(0, 40)); // torn
+  assert.ok(Math.abs((await refresh(opts)).usd - base) < 1e-9);
+  appendFileSync(join(proj, 'sess-b.jsonl'), line.slice(40));
+  assert.ok(Math.abs((await refresh(opts)).usd - (base + cost(30))) < 1e-9);
+  // an earlier day's files are pruned
+  writeFileSync(join(root, 'spend', 'day-2000-01-01.json'), '{}');
+  await refresh(opts);
+  assert.ok(!existsSync(join(root, 'spend', 'day-2000-01-01.json')));
 });
 
 test('spend: row 1 shows day $X from the cache, nothing before the first refresh', () => {
   const dir = tmp();
   const env = { ...NOREG, CLAUDE_SPEND_DIR: dir };
-  try {
-    assert.ok(!plain(render(json('no-rate-limits.json'), env)).includes('day $'));
-    const write = (usd) => writeFileSync(join(dir, `day-${localDay(new Date())}.json`), JSON.stringify({ usd, ts: Date.now() }));
-    write(4.5);
-    assert.ok(plain(render(json('no-rate-limits.json'), env)).split('\n')[0].endsWith(' · $3.13 · day $4.50'));
-    write(48.4);
-    assert.ok(plain(render(json('no-rate-limits.json'), env)).split('\n')[0].endsWith(' · day $48'));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  assert.ok(!plain(render(json('no-rate-limits.json'), env)).includes('day $'));
+  const write = (usd) => writeFileSync(join(dir, `day-${localDay(new Date())}.json`), JSON.stringify({ usd, ts: Date.now() }));
+  write(4.5);
+  assert.ok(plain(render(json('no-rate-limits.json'), env)).split('\n')[0].endsWith(' · $3.13 · day $4.50'));
+  write(48.4);
+  assert.ok(plain(render(json('no-rate-limits.json'), env)).split('\n')[0].endsWith(' · day $48'));
 });
 
 test('spend: a stale cache spawns the detached worker, which fills it and drops the lock', async () => {
@@ -437,49 +369,37 @@ test('spend: parallel renders past a stale cache start one worker per refresh wi
   for (const stale of [false, true]) {
     const home = tmp();
     const spend = join(home, 'spend');
-    try {
-      if (stale) {
-        mkdirSync(spend);
-        writeFileSync(spendLock(spend), '0');
-        utimesSync(spendLock(spend), new Date(0), new Date(0));
-      }
-      const body = `m.kickRefresh(${JSON.stringify(spend)}, {}, Date.now(), () => process.stdout.write('started'));`;
-      const outs = await raceHarness(8, SCRIPT, body, { home });
-      const started = outs.filter((o) => o === 'started').length;
-      assert.ok(started <= 1, `${stale ? 'stale lock' : 'no lock'}: ${started} of 8 parallel renders started a worker`);
-      // none started only when every racer backed off at a lease rollover; a later render retries
-      if (started) assert.ok(existsSync(spendLock(spend)), 'the lock is held for the worker');
-    } finally {
-      rmSync(home, { recursive: true, force: true });
+    if (stale) {
+      mkdirSync(spend);
+      writeFileSync(spendLock(spend), '0');
+      utimesSync(spendLock(spend), new Date(0), new Date(0));
     }
+    const body = `m.kickRefresh(${JSON.stringify(spend)}, {}, Date.now(), () => process.stdout.write('started'));`;
+    const outs = await raceHarness(8, SCRIPT, body, { home });
+    const started = outs.filter((o) => o === 'started').length;
+    assert.ok(started <= 1, `${stale ? 'stale lock' : 'no lock'}: ${started} of 8 parallel renders started a worker`);
+    // none started only when every racer backed off at a lease rollover; a later render retries
+    if (started) assert.ok(existsSync(spendLock(spend)), 'the lock is held for the worker');
   }
 });
 
 test('spend: a render holding a stale cache read starts no worker once a fast worker refreshed it (#216)', () => {
   const dir = tmp();
-  try {
-    const now = Date.now();
-    writeFileSync(join(dir, `day-${localDay(new Date(now))}.json`), JSON.stringify({ usd: 1, ts: now })); // lock already dropped
-    let started = 0;
-    assert.equal(kickRefresh(dir, {}, now, () => started++), false);
-    assert.equal(started, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const now = Date.now();
+  writeFileSync(join(dir, `day-${localDay(new Date(now))}.json`), JSON.stringify({ usd: 1, ts: now })); // lock already dropped
+  let started = 0;
+  assert.equal(kickRefresh(dir, {}, now, () => started++), false);
+  assert.equal(started, 0);
 });
 
 test('spend: a failed refresh keeps the lock, so renders back off instead of respawning', () => {
   const root = tmp();
   const spend = join(root, 'spend');
-  try {
-    mkdirSync(spend);
-    writeFileSync(spendLock(spend), String(Date.now()));
-    const r = spawnHarness(SPEND, [], { env: { CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'missing') } });
-    assert.equal(r.status, 0);
-    assert.ok(existsSync(spendLock(spend)), 'lock released on failure');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  mkdirSync(spend);
+  writeFileSync(spendLock(spend), String(Date.now()));
+  const r = spawnHarness(SPEND, [], { env: { CLAUDE_SPEND_DIR: spend, CLAUDE_PROJECTS_DIR: join(root, 'missing') } });
+  assert.equal(r.status, 0);
+  assert.ok(existsSync(spendLock(spend)), 'lock released on failure');
 });
 
 test('spend: a corrupt day cache counts as stale and kicks a refresh', async () => {
@@ -505,32 +425,24 @@ test('spend: a corrupt day cache counts as stale and kicks a refresh', async () 
 
 test('spend: chunked reads carry a line across chunk boundaries', () => {
   const dir = tmp();
-  try {
-    const f = join(dir, 'x.jsonl');
-    const lines = ['{"a":"é😀"}', '{"b":2}', '{"c":"' + 'x'.repeat(40) + '"}'];
-    writeFileSync(f, lines.join('\n') + '\n{"torn"');
-    const got = [];
-    const size = readFileSync(f).length;
-    const offset = readFrom(f, 0, size, (l) => got.push(l), 7);
-    assert.deepEqual(got, lines);
-    assert.equal(offset, size - '{"torn"'.length);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const f = join(dir, 'x.jsonl');
+  const lines = ['{"a":"é😀"}', '{"b":2}', '{"c":"' + 'x'.repeat(40) + '"}'];
+  writeFileSync(f, lines.join('\n') + '\n{"torn"');
+  const got = [];
+  const size = readFileSync(f).length;
+  const offset = readFrom(f, 0, size, (l) => got.push(l), 7);
+  assert.deepEqual(got, lines);
+  assert.equal(offset, size - '{"torn"'.length);
 });
 
 test('spend: a refresh keeps a later day\'s files (worker straddling midnight)', async () => {
   const root = tmp();
-  try {
-    projects(root);
-    const spend = join(root, 'spend');
-    mkdirSync(spend);
-    writeFileSync(join(spend, 'day-2999-01-01.json'), '{}');
-    await refresh({ root: join(root, 'projects'), dir: spend, prices: PRICES });
-    assert.ok(existsSync(join(spend, 'day-2999-01-01.json')));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  projects(root);
+  const spend = join(root, 'spend');
+  mkdirSync(spend);
+  writeFileSync(join(spend, 'day-2999-01-01.json'), '{}');
+  await refresh({ root: join(root, 'projects'), dir: spend, prices: PRICES });
+  assert.ok(existsSync(join(spend, 'day-2999-01-01.json')));
 });
 
 test('spend_limit renders when the payload carries it, dollars when present', () => {
@@ -548,23 +460,15 @@ test('stdin with a BOM still renders; a session_id that is not a plain id writes
   const sub = spawnHarness(SUBAGENT, [], { input: BOM + JSON.stringify({ tasks: [{ id: 'z', model: 'claude-haiku-4-5', label: 'l' }] }) });
   assert.ok(sub.stdout.includes('"id":"z"'));
   const hist = tmp();
-  try {
-    const s = { ...json('full.json'), session_id: '../../escaped' };
-    runScript(JSON.stringify(s), { CLAUDE_USAGE_HISTORY_DIR: join(hist, 'h'), CLAUDE_USAGE_THROTTLE_DIR: join(hist, 'a', 'b') });
-    assert.ok(!existsSync(join(hist, 'escaped.txt')) && !existsSync(join(hist, 'h')));
-  } finally {
-    rmSync(hist, { recursive: true, force: true });
-  }
+  const s = { ...json('full.json'), session_id: '../../escaped' };
+  runScript(JSON.stringify(s), { CLAUDE_USAGE_HISTORY_DIR: join(hist, 'h'), CLAUDE_USAGE_THROTTLE_DIR: join(hist, 'a', 'b') });
+  assert.ok(!existsSync(join(hist, 'escaped.txt')) && !existsSync(join(hist, 'h')));
 });
 
 test('auto-title cut never splits a surrogate pair', () => {
   const dir = registry({ name: 'x'.repeat(22) + '😀😀😀', nameSource: 'auto' });
-  try {
-    const name = plain(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir })).split(' · ')[0];
-    assert.equal(name, '~' + 'x'.repeat(22) + '😀…');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const name = plain(render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir })).split(' · ')[0];
+  assert.equal(name, '~' + 'x'.repeat(22) + '😀…');
 });
 
 // ---- subagent rows ----------------------------------------------------------------
@@ -607,28 +511,23 @@ test('history: one schema-complete sample, throttled per session', () => {
   const hist = tmp();
   const thr = tmp();
   const env = { CLAUDE_USAGE_HISTORY_DIR: hist, CLAUDE_USAGE_THROTTLE_DIR: thr };
-  try {
-    assert.equal(runScript(fixture('full.json'), env).code, 0);
-    runScript(fixture('full.json'), env); // within 60 s → suppressed
-    const now = new Date();
-    const log = join(hist, `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}.jsonl`);
-    const lines = readFileSync(log, 'utf8').trim().split('\n');
-    assert.equal(lines.length, 1);
-    const s = JSON.parse(lines[0]);
-    assert.equal(s.session_id, '4ebbd908-ff44-4647-a06b-2f807203d3b8');
-    assert.equal(s.context_window_size, 1000000);
-    assert.equal(s.five_hour_pct, 22);
-    assert.equal(s.cache_read_tokens, 99099);
-    assert.equal(s.cache_miss_cause, null);
-    assert.ok(existsSync(join(thr, 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt')));
-    // a 120 s-old throttle stamp allows the next sample
-    writeFileSync(join(thr, 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt'), String(Math.floor(Date.now() / 1000) - 120));
-    runScript(fixture('full.json'), env);
-    assert.equal(readFileSync(log, 'utf8').trim().split('\n').length, 2);
-  } finally {
-    rmSync(hist, { recursive: true, force: true });
-    rmSync(thr, { recursive: true, force: true });
-  }
+  assert.equal(runScript(fixture('full.json'), env).code, 0);
+  runScript(fixture('full.json'), env); // within 60 s → suppressed
+  const now = new Date();
+  const log = join(hist, `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}.jsonl`);
+  const lines = readFileSync(log, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1);
+  const s = JSON.parse(lines[0]);
+  assert.equal(s.session_id, '4ebbd908-ff44-4647-a06b-2f807203d3b8');
+  assert.equal(s.context_window_size, 1000000);
+  assert.equal(s.five_hour_pct, 22);
+  assert.equal(s.cache_read_tokens, 99099);
+  assert.equal(s.cache_miss_cause, null);
+  assert.ok(existsSync(join(thr, 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt')));
+  // a 120 s-old throttle stamp allows the next sample
+  writeFileSync(join(thr, 'claude-usage-throttle-4ebbd908-ff44-4647-a06b-2f807203d3b8.txt'), String(Math.floor(Date.now() / 1000) - 120));
+  runScript(fixture('full.json'), env);
+  assert.equal(readFileSync(log, 'utf8').trim().split('\n').length, 2);
 });
 
 test('history sample: absent fields are null, never missing', () => {

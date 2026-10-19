@@ -3,9 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { execHarness, isolatedEnv } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execHarness, isolatedEnv, tempDir } from './_spawn.mjs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,7 +13,7 @@ const guard = join(hooksDir, 'agent-model-guard.mjs');
 const grant = join(hooksDir, 'fable-clearance-grant.mjs');
 
 function home() {
-  const h = mkdtempSync(join(tmpdir(), 'amg-'));
+  const h = tempDir('amg-');
   mkdirSync(join(h, '.claude'), { recursive: true });
   return h;
 }

@@ -2,16 +2,15 @@
 // transcript and two tiny fake checkouts whose staticCheck differs on one command.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execHarness, tempDir } from './_spawn.mjs';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'guard-replay.mjs');
 
 function checkout(staticBody, approving = 'true', extra = '', { gated = '() => []', browser = '() => null' } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'gr-co-'));
+  const dir = tempDir('gr-co-');
   mkdirSync(join(dir, 'hooks'));
   writeFileSync(
     join(dir, 'hooks', 'bash-guard.mjs'),
@@ -30,7 +29,7 @@ const bash = (command, name = 'Bash') => ({ type: 'assistant', message: { conten
 const answer = (a) => ({ type: 'user', uuid: 'u', toolUseResult: { answers: a } });
 
 function config(files) {
-  const cfg = mkdtempSync(join(tmpdir(), 'gr-cfg-'));
+  const cfg = tempDir('gr-cfg-');
   mkdirSync(join(cfg, 'projects', 'p'), { recursive: true });
   for (const [name, rows] of Object.entries(files)) {
     writeFileSync(join(cfg, 'projects', 'p', name), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
@@ -116,7 +115,7 @@ test('env-assignment secrets are redacted in printed commands', () => {
 
 test('a missing projects root reports zero files rather than failing', () => {
   const co = checkout('return null;');
-  assert.match(run(mkdtempSync(join(tmpdir(), 'gr-empty-')), co, co).trim(), /^summary: 0 changed; 0 commands, 0 answers from 0 files$/);
+  assert.match(run(tempDir('gr-empty-'), co, co).trim(), /^summary: 0 changed; 0 commands, 0 answers from 0 files$/);
 });
 
 test('more secret shapes are redacted; ordinary names and flags are kept', () => {

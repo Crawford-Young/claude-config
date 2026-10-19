@@ -1,9 +1,8 @@
 // node --test scripts/test/board.test.mjs — gh is stubbed via BOARD_GH; never the network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnHarness } from './_spawn.mjs';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawnHarness, tempDir } from './_spawn.mjs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deriveStatus, parseRef, STATUS } from '../board.mjs';
@@ -69,7 +68,7 @@ test('STATUS carries the five board options with their ids', () => {
  * and graphql pages by kind, served in call order.
  */
 function ghStub(fx) {
-  const dir = mkdtempSync(join(tmpdir(), 'board-gh-'));
+  const dir = tempDir('board-gh-');
   const files = { fx: join(dir, 'fx.json'), log: join(dir, 'calls.jsonl'), state: join(dir, 'state.json') };
   writeFileSync(files.fx, JSON.stringify(fx));
   writeFileSync(files.state, JSON.stringify({ pages: {}, option: null }));
@@ -322,7 +321,7 @@ test('a hung board sweep times out into the same one-line warning', () => {
 // --kill-port shares the same flag guard; it is not run here because a real port kill is not test-safe.
 test('cleanup with a flag (--remove-worktree) does not sweep the board', () => {
   const stub = ghStub(sweepFx());
-  const dir = mkdtempSync(join(tmpdir(), 'board-wt-'));
+  const dir = tempDir('board-wt-');
   spawnHarness(join(scripts, 'cleanup.mjs'), ['--remove-worktree', join(dir, 'no-such-worktree')], { env: stub.env });
   assert.deepEqual(stub.calls(), []);
 });

@@ -1,29 +1,20 @@
 // node --test scripts/test/main-guard.test.mjs
 // #129: the main guard must hold when a script is invoked through a junction or symlink.
-import test, { after } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnHarness } from './_spawn.mjs';
+import { spawnHarness, tempDir } from './_spawn.mjs';
 import { isMain } from '../lib.mjs';
 
 const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const made = [];
-after(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true });
-});
-const tmp = (prefix) => {
-  const d = mkdtempSync(join(tmpdir(), prefix));
-  made.push(d);
-  return d;
-};
 
 test('qa.mjs --list still lists gates when invoked through a junction/symlink to scripts/', () => {
-  const link = join(tmp('main-guard-'), 'linked-scripts');
+  const link = join(tempDir('main-guard-'), 'linked-scripts');
   symlinkSync(scriptsDir, link, process.platform === 'win32' ? 'junction' : 'dir');
-  const repo = tmp('main-guard-repo-');
+  const repo = tempDir('main-guard-repo-');
   for (const f of ['.git', 'scripts/test/a.test.mjs', 'scripts/verify-frontmatter.mjs', 'scripts/harness-map.mjs']) {
     mkdirSync(join(repo, f, '..'), { recursive: true });
     writeFileSync(join(repo, f), '');

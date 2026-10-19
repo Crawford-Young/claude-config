@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { execHarness, spawnHarness } from './_spawn.mjs';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execHarness, spawnHarness, tempDir } from './_spawn.mjs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -257,7 +257,7 @@ const hookPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hook
 
 /** A throwaway HOME so the marker and dispatch log are never the real ones. */
 function tmpHome() {
-  const h = mkdtempSync(join(tmpdir(), 'bg-'));
+  const h = tempDir('bg-');
   mkdirSync(join(h, '.claude'), { recursive: true });
   return h;
 }
@@ -1212,7 +1212,7 @@ function transcriptWith(dir, answers, { uuid = 'uuid-1', timestamp = new Date().
 }
 
 function pushGateTmp() {
-  const h = mkdtempSync(join(tmpdir(), 'pg-'));
+  const h = tempDir('pg-');
   return { h, stateFile: join(h, 'state.json') };
 }
 

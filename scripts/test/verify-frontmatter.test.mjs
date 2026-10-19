@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnHarness, tempDir } from './_spawn.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +44,7 @@ function skillsRootWith(name, contents) {
  * listing all of them is written too unless `index` overrides it (`null` = no INDEX.md).
  */
 function multiSkillsRootWith(files, index = indexFor(Object.keys(files))) {
-  const root = mkdtempSync(join(tmpdir(), 'skills-'));
+  const root = tempDir('skills-');
   for (const [name, contents] of Object.entries(files)) {
     mkdirSync(join(root, name));
     writeFileSync(join(root, name, 'SKILL.md'), contents, 'utf8');
@@ -65,7 +65,7 @@ function skillWithDescriptionBytes(bytes) {
 
 /** Build a throwaway agents root holding flat `<name>.md` files (the real agents/ layout). */
 function agentsRootWith(files) {
-  const root = mkdtempSync(join(tmpdir(), 'agents-'));
+  const root = tempDir('agents-');
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(root, name), contents, 'utf8');
   }
@@ -108,7 +108,7 @@ function run(skillsRoot, agentsRoot, workspaceRoot, synced = {}) {
 
 /** Build a throwaway workspace root with the four CLAUDE.md files the resident caps cover. */
 function workspaceRootWith(files) {
-  const root = mkdtempSync(join(tmpdir(), 'workspace-'));
+  const root = tempDir('workspace-');
   for (const [rel, contents] of Object.entries(files)) {
     const file = join(root, rel);
     mkdirSync(dirname(file), { recursive: true });
@@ -131,42 +131,25 @@ function validWorkspaceRoot() {
 function runWorkspaceCheck(workspaceRoot) {
   const skillsRoot = validSkillsRoot();
   const agentsRoot = validAgentsRoot();
-  try {
-    return run(skillsRoot, agentsRoot, workspaceRoot);
-  } finally {
-    rmSync(skillsRoot, { recursive: true, force: true });
-    rmSync(agentsRoot, { recursive: true, force: true });
-  }
+  return run(skillsRoot, agentsRoot, workspaceRoot);
 }
 
 /** Run with a fixed valid agents root, varying only the skills root under test. */
 function runSkillsCheck(skillsRoot) {
   const agentsRoot = validAgentsRoot();
-  try {
-    return run(skillsRoot, agentsRoot);
-  } finally {
-    rmSync(agentsRoot, { recursive: true, force: true });
-  }
+  return run(skillsRoot, agentsRoot);
 }
 
 /** Run with a fixed valid skills root, varying only the agents root under test. */
 function runAgentsCheck(agentsRoot) {
   const skillsRoot = validSkillsRoot();
-  try {
-    return run(skillsRoot, agentsRoot);
-  } finally {
-    rmSync(skillsRoot, { recursive: true, force: true });
-  }
+  return run(skillsRoot, agentsRoot);
 }
 
 test('a well-formed SKILL.md passes', () => {
   const root = skillsRootWith('demo-skill', VALID);
-  try {
-    const { status } = runSkillsCheck(root);
-    assert.equal(status, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status } = runSkillsCheck(root);
+  assert.equal(status, 0);
 });
 
 // The regression test for the bug this checker exists to catch. In an unquoted YAML scalar
@@ -178,13 +161,9 @@ test('a colon-space inside an unquoted description is a failure, not a pass', ()
     'demo-skill',
     VALID.replace('covers the thing', 'note: covers the thing'),
   );
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /colon/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /colon/i);
 });
 
 test('a quoted description may contain a colon-space', () => {
@@ -195,23 +174,15 @@ test('a quoted description may contain a colon-space', () => {
       'description: "Use when doing a thing: covers the thing."',
     ),
   );
-  try {
-    const { status } = runSkillsCheck(root);
-    assert.equal(status, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status } = runSkillsCheck(root);
+  assert.equal(status, 0);
 });
 
 test('a missing description key fails', () => {
   const root = skillsRootWith('demo-skill', VALID.split('\n').filter((l) => !l.startsWith('description:')).join('\n'));
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /description/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /description/i);
 });
 
 test('an empty description fails', () => {
@@ -219,22 +190,14 @@ test('an empty description fails', () => {
     'demo-skill',
     VALID.replace('description: Use when doing a thing — covers the thing and its neighbours.', 'description:   '),
   );
-  try {
-    const { status } = runSkillsCheck(root);
-    assert.equal(status, 1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status } = runSkillsCheck(root);
+  assert.equal(status, 1);
 });
 
 test('frontmatter with no closing delimiter fails', () => {
   const root = skillsRootWith('demo-skill', VALID.replace(/^---\n/m, '').replace('---\n\n# Demo', '\n# Demo'));
-  try {
-    const { status } = runSkillsCheck(root);
-    assert.equal(status, 1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status } = runSkillsCheck(root);
+  assert.equal(status, 1);
 });
 
 // Same exit contract as verify-relocation.mjs: 0 pass, 1 a real problem, 2 could not run.
@@ -246,25 +209,17 @@ test('a missing skills root exits 2, not 0 and not 1', () => {
 
 test('a well-formed agent .md passes', () => {
   const root = agentsRootWith({ 'demo-agent.md': VALID_AGENT });
-  try {
-    const { status } = runAgentsCheck(root);
-    assert.equal(status, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status } = runAgentsCheck(root);
+  assert.equal(status, 0);
 });
 
 test('a colon-space inside an unquoted agent description is a failure, not a pass', () => {
   const root = agentsRootWith({
     'demo-agent.md': VALID_AGENT.replace('dispatched with', 'note: dispatched with'),
   });
-  try {
-    const { status, out } = runAgentsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /colon/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /colon/i);
 });
 
 // The agents/ layout is flat `<name>.md` files, not `<dir>/SKILL.md` subdirectories. An
@@ -279,13 +234,9 @@ test('a flat directory of agent .md files is actually enumerated, not silently s
     'two-agent.md': VALID_AGENT.replace('demo-agent', 'two-agent'),
     'three-agent.md': VALID_AGENT.replace('demo-agent', 'three-agent'),
   });
-  try {
-    const { status, out } = runAgentsCheck(root);
-    assert.equal(status, 0);
-    assert.match(out, /agents checked: 3\b/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 0);
+  assert.match(out, /agents checked: 3\b/);
 });
 
 // agents/ROUTING.md is a declared exclusion (NON_AGENT_DOCS), not an inference from its
@@ -295,13 +246,9 @@ test('a file on the declared non-agent-doc exclusion list is skipped, not failed
     'demo-agent.md': VALID_AGENT,
     'ROUTING.md': '# Model Routing\n\nSome reference table, no frontmatter at all.\n',
   });
-  try {
-    const { status, out } = runAgentsCheck(root);
-    assert.equal(status, 0);
-    assert.match(out, /agents checked: 1\b/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 0);
+  assert.match(out, /agents checked: 1\b/);
 });
 
 // The critical regression this checker must never reintroduce: a real agent definition
@@ -314,38 +261,26 @@ test('a real agent def that loses its frontmatter is counted and fails, not sile
     'demo-agent.md': VALID_AGENT,
     'implementer.md': VALID_AGENT.split('\n').slice(6).join('\n'), // strips the whole --- block
   });
-  try {
-    const { status, out } = runAgentsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /agents checked: 2\b/);
-    assert.match(out, /implementer\.md: no frontmatter/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /agents checked: 2\b/);
+  assert.match(out, /implementer\.md: no frontmatter/);
 });
 
 test('an agents root that yields zero checked files is a checker failure, not a clean pass', () => {
   const root = agentsRootWith({
     'ROUTING.md': '# Model Routing\n\nNo frontmatter here either.\n',
   });
-  try {
-    const { status, out } = runAgentsCheck(root);
-    assert.equal(status, 2);
-    assert.match(out, /agents enumerator/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 2);
+  assert.match(out, /agents enumerator/i);
 });
 
 test('a skills root that yields zero checked files is a checker failure, not a clean pass', () => {
-  const root = mkdtempSync(join(tmpdir(), 'skills-'));
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 2);
-    assert.match(out, /skills enumerator/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = tempDir('skills-');
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 2);
+  assert.match(out, /skills enumerator/i);
 });
 
 test('a missing agents root exits 2, not 0 and not 1', () => {
@@ -357,40 +292,28 @@ test('a missing agents root exits 2, not 0 and not 1', () => {
 
 test('a description under the per-description cap passes', () => {
   const root = skillsRootWith('demo-skill', skillWithDescriptionBytes(400));
-  try {
-    const { status } = runSkillsCheck(root);
-    assert.equal(status, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status } = runSkillsCheck(root);
+  assert.equal(status, 0);
 });
 
 test('a single description over the per-description cap fails, not silently truncated', () => {
   const root = skillsRootWith('demo-skill', skillWithDescriptionBytes(600));
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /demo-skill\/SKILL\.md: description is 600 B, over the per-description cap of 512 B/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /demo-skill\/SKILL\.md: description is 600 B, over the per-description cap of 512 B/);
 });
 
 test('descriptions each under the per-item cap can still blow the combined total cap', () => {
   const files = {};
   for (let i = 0; i < 4; i++) files[`skill-${i}`] = skillWithDescriptionBytes(500);
   const root = multiSkillsRootWith(files);
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    // 4 skill descriptions * 500 B + the fixed valid agent fixture's description, over the
-    // 1024 B total cap, with every individual description still under the 512 B per-item cap
-    // — this must be the ONLY class of failure.
-    assert.match(out, /all descriptions combined: \d+ B, over the total cap of 1024 B/);
-    assert.doesNotMatch(out, /over the per-description cap/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  // 4 skill descriptions * 500 B + the fixed valid agent fixture's description, over the
+  // 1024 B total cap, with every individual description still under the 512 B per-item cap
+  // — this must be the ONLY class of failure.
+  assert.match(out, /all descriptions combined: \d+ B, over the total cap of 1024 B/);
+  assert.doesNotMatch(out, /over the per-description cap/);
 });
 
 // --- Skill index + disable-model-invocation (issue #64) --------------------------------------
@@ -400,70 +323,46 @@ test('flagged skills drop out of the resident description total and per-item cap
   for (let i = 0; i < 4; i++) files[`skill-${i}`] = flagged(skillWithDescriptionBytes(500));
   files['big-flagged'] = flagged(skillWithDescriptionBytes(600));
   const root = multiSkillsRootWith(files);
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 0, out);
-    // only the agent fixture's description is resident
-    assert.match(out, /descriptions measured: 1 \(/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 0, out);
+  // only the agent fixture's description is resident
+  assert.match(out, /descriptions measured: 1 \(/);
 });
 
 test('a flagged skill still has to publish its description, which feeds the / menu', () => {
   const root = skillsRootWith('demo-skill', flagged(VALID.replace('covers the thing', 'note: covers the thing')));
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /colon/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /colon/i);
 });
 
 test('a skills root with no INDEX.md fails — session-start would inject no skill routing at all', () => {
   const root = multiSkillsRootWith({ 'demo-skill': VALID }, null);
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /INDEX\.md: missing/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /INDEX\.md: missing/);
 });
 
 test('a skill whose SKILL.md path is absent from INDEX.md fails as unroutable', () => {
   const root = multiSkillsRootWith({ 'demo-skill': VALID, 'lost-skill': VALID }, indexFor(['demo-skill']));
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /INDEX\.md: lost-skill\/SKILL\.md is not listed/);
-    assert.doesNotMatch(out, /demo-skill\/SKILL\.md is not listed/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /INDEX\.md: lost-skill\/SKILL\.md is not listed/);
+  assert.doesNotMatch(out, /demo-skill\/SKILL\.md is not listed/);
 });
 
 test('an INDEX.md over its byte cap fails', () => {
   const root = multiSkillsRootWith({ 'demo-skill': VALID }, `${indexFor(['demo-skill'])}${'a'.repeat(1024)}\n`);
-  try {
-    const { status, out } = runSkillsCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /INDEX\.md: \d+ B, over the cap of 1024 B/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runSkillsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /INDEX\.md: \d+ B, over the cap of 1024 B/);
 });
 
 test('a CLAUDE.md under its cap passes', () => {
   const root = validWorkspaceRoot();
-  try {
-    const { status, out } = runWorkspaceCheck(root);
-    assert.equal(status, 0);
-    assert.match(out, /workspace\/CLAUDE\.md: \d+ B \(cap 7040 B\)/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 0);
+  assert.match(out, /workspace\/CLAUDE\.md: \d+ B \(cap 7040 B\)/);
 });
 
 test('a CLAUDE.md over its cap fails', () => {
@@ -473,13 +372,9 @@ test('a CLAUDE.md over its cap fails', () => {
     'workspace/games/CLAUDE.md': 'games claude md\n',
     'workspace/apps/CLAUDE.md': 'apps claude md\n',
   });
-  try {
-    const { status, out } = runWorkspaceCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /workspace\/CLAUDE\.md: 7042 B, over the cap of 7040 B/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /workspace\/CLAUDE\.md: 7042 B, over the cap of 7040 B/);
 });
 
 test('CRLF line endings are normalized before measuring, so Windows and CI agree', () => {
@@ -492,13 +387,9 @@ test('CRLF line endings are normalized before measuring, so Windows and CI agree
     'workspace/games/CLAUDE.md': 'games claude md\n',
     'workspace/apps/CLAUDE.md': 'apps claude md\n',
   });
-  try {
-    const { status, out } = runWorkspaceCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /workspace\/CLAUDE\.md: 7042 B, over the cap of 7040 B/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /workspace\/CLAUDE\.md: 7042 B, over the cap of 7040 B/);
 });
 
 test('a missing CLAUDE.md file is a failure, not a silent skip', () => {
@@ -508,13 +399,9 @@ test('a missing CLAUDE.md file is a failure, not a silent skip', () => {
     'workspace/games/CLAUDE.md': 'games claude md\n',
     // workspace/apps/CLAUDE.md intentionally absent
   });
-  try {
-    const { status, out } = runWorkspaceCheck(root);
-    assert.equal(status, 1);
-    assert.match(out, /workspace\/apps\/CLAUDE\.md: expected at .*, but it does not exist/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /workspace\/apps\/CLAUDE\.md: expected at .*, but it does not exist/);
 });
 
 test('a new workspace/<domain>/CLAUDE.md with no CAPS entry fails, not silently uncapped', () => {
@@ -527,16 +414,12 @@ test('a new workspace/<domain>/CLAUDE.md with no CAPS entry fails, not silently 
     // moment the file exists, not only once someone remembers to add a cap for it.
     'workspace/robots/CLAUDE.md': 'robots claude md\n',
   });
-  try {
-    const { status, out } = runWorkspaceCheck(root);
-    assert.equal(status, 1);
-    assert.match(
-      out,
-      /workspace\/robots\/CLAUDE\.md: found on disk with no cap in CAPS\.claudeMd — add a cap for workspace\/robots\/CLAUDE\.md/,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1);
+  assert.match(
+    out,
+    /workspace\/robots\/CLAUDE\.md: found on disk with no cap in CAPS\.claudeMd — add a cap for workspace\/robots\/CLAUDE\.md/,
+  );
 });
 
 test('the live repo itself passes every resident-byte cap with its real skills, agents and CLAUDE.md files', () => {
@@ -555,8 +438,8 @@ function syncedSkill(descriptionLine, extra = '') {
 
 /** Fixture mirroring both real layouts: skills/synced/<bucket>/<skill>/ and plugins/synced/<bucket>/<plugin>~g2/skills/<skill>/. */
 function syncedFixture() {
-  const skills = mkdtempSync(join(tmpdir(), 'synced-skills-'));
-  const plugins = mkdtempSync(join(tmpdir(), 'synced-plugins-'));
+  const skills = tempDir('synced-skills-');
+  const plugins = tempDir('synced-plugins-');
   const put = (root, rel, contents) => {
     const file = join(root, rel);
     mkdirSync(dirname(file), { recursive: true });
@@ -578,19 +461,15 @@ test('synced skills and plugin skills report description bytes, exit stays 0', (
   const synced = syncedFixture();
   const skillsRoot = validSkillsRoot();
   const agentsRoot = validAgentsRoot();
-  try {
-    const { status, out } = run(skillsRoot, agentsRoot, undefined, synced);
-    assert.equal(status, 0, out);
-    assert.match(out, /synced skills \(.*\): 2 descriptions, 12 B/);
-    assert.match(out, /synced plugins \(.*\): 2 descriptions, 7 B/);
-    assert.match(out, /synced listing total: 19 B \(report only, no cap\)/);
-  } finally {
-    for (const d of [synced.skills, synced.plugins, skillsRoot, agentsRoot]) rmSync(d, { recursive: true, force: true });
-  }
+  const { status, out } = run(skillsRoot, agentsRoot, undefined, synced);
+  assert.equal(status, 0, out);
+  assert.match(out, /synced skills \(.*\): 2 descriptions, 12 B/);
+  assert.match(out, /synced plugins \(.*\): 2 descriptions, 7 B/);
+  assert.match(out, /synced listing total: 19 B \(report only, no cap\)/);
 });
 
 test('without the synced flags, the roots default to <home>/.claude/{skills,plugins}/synced', () => {
-  const home = mkdtempSync(join(tmpdir(), 'synced-home-'));
+  const home = tempDir('synced-home-');
   const skillsRoot = validSkillsRoot();
   const agentsRoot = validAgentsRoot();
   const put = (rel, contents) => {
@@ -600,29 +479,20 @@ test('without the synced flags, the roots default to <home>/.claude/{skills,plug
   };
   put('skills/synced/bucket/alpha/SKILL.md', syncedSkill('description: aaaaa'));
   put('plugins/synced/bucket/plug~g2/skills/delta/SKILL.md', syncedSkill('description: "ddd"'));
-  try {
-    const r = spawnHarness(CHECK, ['--skills', skillsRoot, '--agents', agentsRoot], { home });
-    const out = `${r.stdout}${r.stderr}`;
-    assert.equal(r.status, 0, out);
-    assert.match(out, /synced skills \(.*\): 1 descriptions, 5 B/);
-    assert.match(out, /synced plugins \(.*\): 1 descriptions, 3 B/);
-    assert.match(out, /synced listing total: 8 B/);
-  } finally {
-    for (const d of [home, skillsRoot, agentsRoot]) rmSync(d, { recursive: true, force: true });
-  }
+  const r = spawnHarness(CHECK, ['--skills', skillsRoot, '--agents', agentsRoot], { home });
+  const out = `${r.stdout}${r.stderr}`;
+  assert.equal(r.status, 0, out);
+  assert.match(out, /synced skills \(.*\): 1 descriptions, 5 B/);
+  assert.match(out, /synced plugins \(.*\): 1 descriptions, 3 B/);
+  assert.match(out, /synced listing total: 8 B/);
 });
 
 test('a missing synced dir prints not present and exit stays 0', () => {
   const skillsRoot = validSkillsRoot();
   const agentsRoot = validAgentsRoot();
-  try {
-    const { status, out } = run(skillsRoot, agentsRoot);
-    assert.equal(status, 0, out);
-    assert.match(out, /synced skills \(.*\): not present/);
-    assert.match(out, /synced plugins \(.*\): not present/);
-    assert.match(out, /synced listing total: 0 B \(report only, no cap\)/);
-  } finally {
-    rmSync(skillsRoot, { recursive: true, force: true });
-    rmSync(agentsRoot, { recursive: true, force: true });
-  }
+  const { status, out } = run(skillsRoot, agentsRoot);
+  assert.equal(status, 0, out);
+  assert.match(out, /synced skills \(.*\): not present/);
+  assert.match(out, /synced plugins \(.*\): not present/);
+  assert.match(out, /synced listing total: 0 B \(report only, no cap\)/);
 });

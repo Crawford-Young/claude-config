@@ -1,9 +1,8 @@
 // node --test scripts/test/context-gauge.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness, raceHarness } from './_spawn.mjs';
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execHarness, raceHarness, tempDir } from './_spawn.mjs';
+import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -39,7 +38,7 @@ const sample = (session_id, context_window_size, extra = {}) =>
 
 /** Temp dir shaped like a home dir with ~/.claude inside it. */
 function claudeHome({ settings, history, month = '2026-09' } = {}) {
-  const home = mkdtempSync(join(tmpdir(), 'ctxgauge-home-'));
+  const home = tempDir('ctxgauge-home-');
   const dir = join(home, '.claude');
   mkdirSync(dir, { recursive: true });
   if (settings !== undefined) writeFileSync(join(dir, 'settings.json'), settings);
@@ -77,111 +76,74 @@ test('a transcript with no usage yields null, and null classifies as unknown', (
 test('the window comes from the usage-history log the statusline writes', () => {
   // The bug this guards: a hardcoded 250k window made every band and every
   // message wrong on a session whose real window is 1M.
-  const { home, dir } = claudeHome({
+  const { dir } = claudeHome({
     history: [sample('other', 200_000), sample('mine', 1_000_000)].join('\n'),
   });
-  try {
-    assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
 });
 
 test('the session own record wins over a newer record from another session', () => {
-  const { home, dir } = claudeHome({
+  const { dir } = claudeHome({
     history: [sample('mine', 1_000_000), sample('other', 200_000)].join('\n'),
   });
-  try {
-    assert.equal(contextWindow({ dir, env: {}, sessionId: 'mine' }), 1_000_000);
-    assert.equal(contextWindow({ dir, env: {}, sessionId: 'unseen' }), 200_000); // newest overall
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.equal(contextWindow({ dir, env: {}, sessionId: 'mine' }), 1_000_000);
+  assert.equal(contextWindow({ dir, env: {}, sessionId: 'unseen' }), 200_000); // newest overall
 });
 
 test('the newest month file is the one read, and junk records are skipped', () => {
-  const { home, dir } = claudeHome({ month: '2026-08', history: sample('a', 200_000) });
-  try {
-    writeFileSync(
-      join(dir, 'usage-history', '2026-09.jsonl'),
-      [sample('a', null), '{ not json', sample('a', 0), sample('a', 1_000_000), ''].join('\n'),
-    );
-    assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const { dir } = claudeHome({ month: '2026-08', history: sample('a', 200_000) });
+  writeFileSync(
+    join(dir, 'usage-history', '2026-09.jsonl'),
+    [sample('a', null), '{ not json', sample('a', 0), sample('a', 1_000_000), ''].join('\n'),
+  );
+  assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
 });
 
 test('a contextGaugeWindow settings key overrides the history log', () => {
-  const { home, dir } = claudeHome({
+  const { dir } = claudeHome({
     settings: JSON.stringify({ contextGaugeWindow: 500_000 }),
     history: sample('a', 1_000_000),
   });
-  try {
-    assert.equal(contextWindow({ dir, env: {} }), 500_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.equal(contextWindow({ dir, env: {} }), 500_000);
 });
 
 test('settings that are absent, unreadable, or carry a junk key fall through to history', () => {
   // The settings key does not exist on this machine today, so the fall-through
   // is the live path, not the exotic one.
-  const { home, dir } = claudeHome({ settings: '{ not json', history: sample('a', 1_000_000) });
-  try {
-    assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ contextGaugeWindow: 'lots' }));
-    assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ model: 'opus' }));
-    assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const { dir } = claudeHome({ settings: '{ not json', history: sample('a', 1_000_000) });
+  assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ contextGaugeWindow: 'lots' }));
+  assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({ model: 'opus' }));
+  assert.equal(contextWindow({ dir, env: {} }), 1_000_000);
 });
 
 test('CLAUDE_CTX_WINDOW overrides every other source', () => {
-  const { home, dir } = claudeHome({
+  const { dir } = claudeHome({
     settings: JSON.stringify({ contextGaugeWindow: 500_000 }),
     history: sample('a', 1_000_000),
   });
-  try {
-    assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: '300000' } }), 300_000);
-    assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: 'nope' } }), 500_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: '300000' } }), 300_000);
+  assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: 'nope' } }), 500_000);
 });
 
 test('CLAUDE_USAGE_HISTORY_DIR relocates the log, as it does for the statusline', () => {
-  const { home, dir } = claudeHome({});
-  const alt = mkdtempSync(join(tmpdir(), 'ctxgauge-hist-'));
-  try {
-    writeFileSync(join(alt, '2026-09.jsonl'), sample('a', 1_000_000));
-    assert.equal(contextWindow({ dir, env: { CLAUDE_USAGE_HISTORY_DIR: alt } }), 1_000_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(alt, { recursive: true, force: true });
-  }
+  const { dir } = claudeHome({});
+  const alt = tempDir('ctxgauge-hist-');
+  writeFileSync(join(alt, '2026-09.jsonl'), sample('a', 1_000_000));
+  assert.equal(contextWindow({ dir, env: { CLAUDE_USAGE_HISTORY_DIR: alt } }), 1_000_000);
 });
 
 test('with no source at all the window is null — the gauge never invents one', () => {
-  const { home, dir } = claudeHome({});
-  try {
-    assert.equal(contextWindow({ dir, env: {} }), null);
-    assert.equal(contextWindow({ dir: join(dir, 'nope'), env: {} }), null);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const { dir } = claudeHome({});
+  assert.equal(contextWindow({ dir, env: {} }), null);
+  assert.equal(contextWindow({ dir: join(dir, 'nope'), env: {} }), null);
 });
 
 test('skipHistory keeps the 128 KB history tail unread', () => {
-  const { home, dir } = claudeHome({ history: sample('a', 1_000_000) });
-  try {
-    assert.equal(contextWindow({ dir, env: {}, skipHistory: true }), null);
-    assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: '300000' }, skipHistory: true }), 300_000);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const { dir } = claudeHome({ history: sample('a', 1_000_000) });
+  assert.equal(contextWindow({ dir, env: {}, skipHistory: true }), null);
+  assert.equal(contextWindow({ dir, env: { CLAUDE_CTX_WINDOW: '300000' }, skipHistory: true }), 300_000);
 });
 
 // --- absolute bands, the window only a floor ---
@@ -267,16 +229,12 @@ test('bands fire once and only escalate', () => {
 });
 
 test('readTail returns the end of a file larger than the window', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ctxgauge-'));
-  try {
-    const f = join(dir, 'big.jsonl');
-    writeFileSync(f, `${'x'.repeat(5000)}\n${line(usage(0, 150_000))}`);
-    const tail = readTail(f, 1024);
-    assert.ok(tail.length <= 1024);
-    assert.equal(contextTokens(tail), 150_000);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const dir = tempDir('ctxgauge-');
+  const f = join(dir, 'big.jsonl');
+  writeFileSync(f, `${'x'.repeat(5000)}\n${line(usage(0, 150_000))}`);
+  const tail = readTail(f, 1024);
+  assert.ok(tail.length <= 1024);
+  assert.equal(contextTokens(tail), 150_000);
 });
 
 // --- end-to-end: pipe a payload to the hook, same contract as the others ---
@@ -292,8 +250,6 @@ function spawnGauge(payloadExtra, transcript, { window, env = {}, home: given, s
     return { code: 0, stdout, stderr: '' };
   } catch (e) {
     return { code: e.status, stdout: e.stdout || '', stderr: e.stderr || '' };
-  } finally {
-    if (!given) rmSync(home, { recursive: true, force: true });
   }
 }
 
@@ -375,25 +331,17 @@ test('PostToolUse skips subagent tool calls (agent_id)', () => {
 
 test('PostToolUse fires each band once per session', () => {
   const home = sharedHome();
-  try {
-    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
-    assert.equal(runPost(line(usage(0, 165_000)), { home }).stdout.trim(), '');
-    assert.match(runPost(line(usage(0, 210_000)), { home }).stdout, /continuation/);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
+  assert.equal(runPost(line(usage(0, 165_000)), { home }).stdout.trim(), '');
+  assert.match(runPost(line(usage(0, 210_000)), { home }).stdout, /continuation/);
 });
 
 test('state is shared: a nudge on PostToolUse does not re-fire on UserPromptSubmit, and vice versa', () => {
   const home = sharedHome();
-  try {
-    assert.match(runPost(line(usage(0, 160_000)), { home, sid: 'a' }).stdout, /next green commit/);
-    assert.equal(runHook('go on', line(usage(0, 165_000)), { home, sid: 'a' }).stdout.trim(), '');
-    assert.match(runHook('go on', line(usage(0, 210_000)), { home, sid: 'b' }).stdout, /continuation/);
-    assert.equal(runPost(line(usage(0, 215_000)), { home, sid: 'b' }).stdout.trim(), '');
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.match(runPost(line(usage(0, 160_000)), { home, sid: 'a' }).stdout, /next green commit/);
+  assert.equal(runHook('go on', line(usage(0, 165_000)), { home, sid: 'a' }).stdout.trim(), '');
+  assert.match(runHook('go on', line(usage(0, 210_000)), { home, sid: 'b' }).stdout, /continuation/);
+  assert.equal(runPost(line(usage(0, 215_000)), { home, sid: 'b' }).stdout.trim(), '');
 });
 
 // Sized to reproduce the pre-#139 duplicate without starving other test files on a small CI runner.
@@ -403,86 +351,66 @@ const RACE_TRIALS = 2;
 test('parallel PostToolUse calls crossing a band together announce it once, and a lost race still announces next call (#139)', async () => {
   for (let trial = 0; trial < RACE_TRIALS; trial++) {
     const home = sharedHome();
-    try {
-      const transcript = join(home, 'transcript.jsonl');
-      writeFileSync(transcript, line(usage(0, 160_000)));
-      const payload = { hook_event_name: 'PostToolUse', tool_name: 'Bash', session_id: 'race', transcript_path: transcript };
-      const env = { CLAUDE_CTX_WINDOW: '', CLAUDE_CTX_NUDGE: '', CLAUDE_CTX_WARN: '', CLAUDE_CTX_BLOCK: '' };
-      const outs = await raceHarness(RACERS, HOOK, `m.main(${JSON.stringify(payload)});`, { home, env });
-      const announced = outs.filter((o) => /next green commit/.test(o)).length;
-      assert.ok(announced <= 1, `trial ${trial}: ${announced} of ${RACERS} parallel calls announced the nudge`);
-      const next = runPost(line(usage(0, 160_000)), { home, sid: 'race', env }).stdout;
-      assert.equal(announced + (/next green commit/.test(next) ? 1 : 0), 1, `trial ${trial}: the band is announced exactly once`);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
+    const transcript = join(home, 'transcript.jsonl');
+    writeFileSync(transcript, line(usage(0, 160_000)));
+    const payload = { hook_event_name: 'PostToolUse', tool_name: 'Bash', session_id: 'race', transcript_path: transcript };
+    const env = { CLAUDE_CTX_WINDOW: '', CLAUDE_CTX_NUDGE: '', CLAUDE_CTX_WARN: '', CLAUDE_CTX_BLOCK: '' };
+    const outs = await raceHarness(RACERS, HOOK, `m.main(${JSON.stringify(payload)});`, { home, env });
+    const announced = outs.filter((o) => /next green commit/.test(o)).length;
+    assert.ok(announced <= 1, `trial ${trial}: ${announced} of ${RACERS} parallel calls announced the nudge`);
+    const next = runPost(line(usage(0, 160_000)), { home, sid: 'race', env }).stdout;
+    assert.equal(announced + (/next green commit/.test(next) ? 1 : 0), 1, `trial ${trial}: the band is announced exactly once`);
   }
 });
 
 test('while a PostToolUse holds the claim, UserPromptSubmit still blocks and still records CONTEXT OK (#139)', async () => {
   const { claimFile, CLAIM_LEASE_MS } = await import('../../hooks/_hooklib.mjs');
   const home = sharedHome();
-  try {
-    const base = join(home, '.claude', 'context-gauge', 'e2e-sid.json');
-    mkdirSync(join(home, '.claude', 'context-gauge'), { recursive: true });
-    const e = Math.floor(Date.now() / CLAIM_LEASE_MS);
-    for (const k of [e - 1, e, e + 1, e + 2]) writeFileSync(claimFile(base, k), ''); // held across any rollover mid-test
-    assert.equal(runHook('keep building', line(usage(0, 262_000)), { home }).code, 2, 'the block is never gated by the claim');
-    assert.equal(runHook('CONTEXT OK', line(usage(0, 262_000)), { home }).code, 0);
-    for (const k of [e - 1, e, e + 1, e + 2]) rmSync(claimFile(base, k));
-    assert.equal(runHook('keep building', line(usage(0, 262_000)), { home }).code, 0, 'the bypass was recorded despite the held claim');
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const base = join(home, '.claude', 'context-gauge', 'e2e-sid.json');
+  mkdirSync(join(home, '.claude', 'context-gauge'), { recursive: true });
+  const e = Math.floor(Date.now() / CLAIM_LEASE_MS);
+  for (const k of [e - 1, e, e + 1, e + 2]) writeFileSync(claimFile(base, k), ''); // held across any rollover mid-test
+  assert.equal(runHook('keep building', line(usage(0, 262_000)), { home }).code, 2, 'the block is never gated by the claim');
+  assert.equal(runHook('CONTEXT OK', line(usage(0, 262_000)), { home }).code, 0);
+  for (const k of [e - 1, e, e + 1, e + 2]) rmSync(claimFile(base, k));
+  assert.equal(runHook('keep building', line(usage(0, 262_000)), { home }).code, 0, 'the bypass was recorded despite the held claim');
 });
 
 test('a block announced on PostToolUse is announced once, and UserPromptSubmit still exits 2', () => {
   const home = sharedHome();
-  try {
-    assert.match(runPost(line(usage(0, 260_000)), { home }).stdout, /additionalContext/);
-    assert.equal(runPost(line(usage(0, 262_000)), { home }).stdout.trim(), '');
-    const prompt = runHook('keep building', line(usage(0, 262_000)), { home });
-    assert.equal(prompt.code, 2);
-    assert.match(prompt.stderr, /\/exit/);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.match(runPost(line(usage(0, 260_000)), { home }).stdout, /additionalContext/);
+  assert.equal(runPost(line(usage(0, 262_000)), { home }).stdout.trim(), '');
+  const prompt = runHook('keep building', line(usage(0, 262_000)), { home });
+  assert.equal(prompt.code, 2);
+  assert.match(prompt.stderr, /\/exit/);
 });
 
 test('dropping under the nudge line re-arms the bands for both triggers', () => {
   const home = sharedHome();
-  try {
-    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
-    assert.equal(runPost(line(usage(0, 20_000)), { home }).stdout.trim(), '');
-    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
+  assert.equal(runPost(line(usage(0, 20_000)), { home }).stdout.trim(), '');
+  assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
 });
 
 test('a write prunes week-old sessions and their sidecars, and the legacy inline-edit-nudge lock (#217)', () => {
   const home = sharedHome();
-  try {
-    const dir = join(home, '.claude', 'context-gauge');
-    mkdirSync(dir, { recursive: true });
-    const touch = (name, daysAgo) => {
-      const p = join(dir, name);
-      writeFileSync(p, '{}');
-      const t = new Date(Date.now() - daysAgo * 24 * 3600 * 1000);
-      utimesSync(p, t, t);
-    };
-    for (const f of ['dead.json', 'dead.json.lock.123', 'dead.json.4242.tmp']) touch(f, 8);
-    touch('recent.json', 6);
-    const legacy = join(home, '.claude', 'inline-edit-nudge.json.lock');
-    writeFileSync(legacy, '');
-    assert.equal(runPost(line(usage(0, 20_000)), { home }).stdout.trim(), '', 'under the nudge line nothing is written');
-    assert.equal(readdirSync(dir).length, 4, 'only a write prunes');
-    assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
-    assert.deepEqual(readdirSync(dir).sort(), ['e2e-sid.json', 'recent.json']);
-    assert.ok(!existsSync(legacy), 'the legacy lock is removed');
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
+  const dir = join(home, '.claude', 'context-gauge');
+  mkdirSync(dir, { recursive: true });
+  const touch = (name, daysAgo) => {
+    const p = join(dir, name);
+    writeFileSync(p, '{}');
+    const t = new Date(Date.now() - daysAgo * 24 * 3600 * 1000);
+    utimesSync(p, t, t);
+  };
+  for (const f of ['dead.json', 'dead.json.lock.123', 'dead.json.4242.tmp']) touch(f, 8);
+  touch('recent.json', 6);
+  const legacy = join(home, '.claude', 'inline-edit-nudge.json.lock');
+  writeFileSync(legacy, '');
+  assert.equal(runPost(line(usage(0, 20_000)), { home }).stdout.trim(), '', 'under the nudge line nothing is written');
+  assert.equal(readdirSync(dir).length, 4, 'only a write prunes');
+  assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
+  assert.deepEqual(readdirSync(dir).sort(), ['e2e-sid.json', 'recent.json']);
+  assert.ok(!existsSync(legacy), 'the legacy lock is removed');
 });
 
 test('a broken transcript path fails open rather than wedging the session', () => {

@@ -1,22 +1,16 @@
 // node --test scripts/test/qa.test.mjs
-import test, { after } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnHarness } from './_spawn.mjs';
+import { spawnHarness, tempDir } from './_spawn.mjs';
 import { discoverGates, gateVerdict } from '../qa.mjs';
 
 const qaScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'qa.mjs');
-const made = [];
-after(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true });
-});
 
 function repo(files) {
-  const r = mkdtempSync(join(tmpdir(), 'qa-'));
-  made.push(r);
+  const r = tempDir('qa-');
   for (const [f, body] of Object.entries(files)) {
     mkdirSync(join(r, f, '..'), { recursive: true });
     writeFileSync(join(r, f), body);

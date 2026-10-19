@@ -3,9 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { execHarness, spawnHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execHarness, spawnHarness, tempDir } from './_spawn.mjs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,7 +15,7 @@ function sh(cwd, cmd, cmdArgs, input) {
 }
 
 test('start lands only the named path in an ephemeral worktree', () => {
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const origin = join(root, 'origin.git');
   mkdirSync(origin);
   sh(root, 'git', ['init', '--bare', origin]);
@@ -110,7 +109,7 @@ function initOrigin(root) {
 }
 
 test('finish deletes a rebase-merged branch locally and on the remote', () => {
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const { origin, cfg } = initOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
@@ -124,7 +123,7 @@ test('finish deletes a rebase-merged branch locally and on the remote', () => {
 
   // Simulate GitHub's "Rebase and merge": land the SAME patch on main as a
   // brand-new commit, from a throwaway clone — never through chore/demo itself.
-  const up = mkdtempSync(join(root, 'up-'));
+  const up = tempDir('up-', root);
   sh(root, 'git', ['clone', '--branch', 'main', origin, up]);
   sh(up, 'git', ['config', 'user.email', 't@t']);
   sh(up, 'git', ['config', 'user.name', 't']);
@@ -147,7 +146,7 @@ test('finish deletes a rebase-merged branch locally and on the remote', () => {
 });
 
 test('finish keeps an unmerged branch, locally and on the remote, and says so', () => {
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const { cfg } = initOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
@@ -177,7 +176,7 @@ test('finish removes a leftover worktree directory that got unregistered without
   // Reproduces PR #50: `git worktree remove` (or a manual prune) can drop the
   // registration in .git/worktrees/<name> while the directory on disk survives.
   // finish must clean that up rather than refuse.
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const { cfg } = initOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
@@ -207,7 +206,7 @@ test('finish carries on to the branch steps when a locked worktree dir survives 
   // it and then fails deleting it, so the --force retry dies with "not a
   // working tree". finish must re-check registration and carry on. Off
   // Windows, cwd does not lock and this exercises the normal remove.
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const { cfg } = initOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_CONFIG_REPO: cfg, CLAUDE_LAND_NO_GH: '1' };
 
@@ -232,7 +231,6 @@ test('finish carries on to the branch steps when a locked worktree dir survives 
   assert.match(res.stdout, /kept local branch chore\/locked/, 'reached the branch steps');
   assert.doesNotMatch(sh(cfg, 'git', ['worktree', 'list']), /claude-config-locked/);
   if (existsSync(wt)) assert.match(res.stdout + res.stderr, /still locked/i, 'says the dir survived');
-  rmSync(wt, { recursive: true, force: true });
 });
 
 function git_showref(repo, ref) {
@@ -245,7 +243,7 @@ function git_showref(repo, ref) {
 }
 
 test('start refuses when the main checkout is off main', () => {
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const origin = join(root, 'origin.git');
   mkdirSync(origin);
   sh(root, 'git', ['init', '--bare', origin]);
@@ -277,7 +275,7 @@ test('start refuses when the main checkout is off main', () => {
 // on byte-identical content misses that, so these fixtures configure both.
 
 function scratchRepo(seedFiles = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'land-'));
+  const root = tempDir('land-');
   const origin = join(root, 'origin.git');
   mkdirSync(origin);
   sh(root, 'git', ['init', '--bare', origin]);
@@ -316,7 +314,7 @@ function scratchRepo(seedFiles = {}) {
  * A `null` content deletes the path.
  */
 function pushUpstream(root, origin, files, msg) {
-  const up = mkdtempSync(join(root, 'up-'));
+  const up = tempDir('up-', root);
   // --branch main explicitly: the bare repo's HEAD is an unborn `master`, so a
   // default clone lands on an empty branch and the push is rejected as behind.
   sh(root, 'git', ['clone', '--branch', 'main', origin, up]);

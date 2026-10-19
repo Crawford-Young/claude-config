@@ -2,9 +2,8 @@
 // through the real hook process (payload on stdin, exit code out).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness } from './_spawn.mjs';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { execHarness, tempDir } from './_spawn.mjs';
+import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isGatedBrowserTool } from '../../hooks/browser-gate.mjs';
@@ -13,7 +12,7 @@ import { isBrowserApproving } from '../../hooks/_hooklib.mjs';
 const hookPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'browser-gate.mjs');
 
 function tmp() {
-  const h = mkdtempSync(join(tmpdir(), 'bgate-'));
+  const h = tempDir('bgate-');
   return { h, state: join(h, 'browser.json') };
 }
 

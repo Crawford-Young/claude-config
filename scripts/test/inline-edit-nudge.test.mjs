@@ -1,8 +1,8 @@
 // node --test scripts/test/inline-edit-nudge.test.mjs — #99's main-session nudge.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execHarness, raceHarness } from './_spawn.mjs';
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { execHarness, raceHarness, tempDir } from './_spawn.mjs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,7 @@ const use = (name, input, id = `t${Math.random()}`) =>
 const edit = (f) => use('Edit', { file_path: f });
 
 function setup(lines) {
-  const h = mkdtempSync(join(tmpdir(), 'nudge-'));
+  const h = tempDir('nudge-');
   mkdirSync(join(h, '.claude'), { recursive: true });
   const transcript = join(h, 't.jsonl');
   writeFileSync(transcript, lines.join('\n') + '\n');

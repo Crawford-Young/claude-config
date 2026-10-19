@@ -2,9 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { spawnHarness } from './_spawn.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawnHarness, tempDir } from './_spawn.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,7 +16,7 @@ const window = (id, day, title) => lines(
 );
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'reflect-gather-'));
+  const dir = tempDir('reflect-gather-');
   const proj = join(dir, 'projects', 'C--proj');
   mkdirSync(proj, { recursive: true });
   writeFileSync(join(proj, 'w1.jsonl'), window('w1', '2026-10-03', 'repo-7'));
@@ -42,35 +41,27 @@ function fixture() {
 
 test('gathers every window of the unit through the audit filter, with repo activity since its first window', () => {
   const f = fixture();
-  try {
-    const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /## Per session name[\s\S]*\| ticket-repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
-    assert.match(r.stdout, /## Audit — 2 window\(s\) named ticket-repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
-    assert.match(r.stdout, /## Time[\s\S]*\*\*Per session name\*\*[\s\S]*\| ticket-repo-7 \| 2 \|/);
-    assert.doesNotMatch(r.stdout, /other-1/);
-    assert.match(r.stdout, /## Repo activity since 2026-10-03/);
-    assert.match(r.stdout, /feat: unit work/, 'a commit on the first window\'s own UTC day is in the window');
-    assert.doesNotMatch(r.stdout, /chore: before the unit/);
-    assert.doesNotMatch(r.stdout, /another unit, same day/, 'a same-day commit naming another issue is not the unit\'s');
-    assert.match(r.stdout, /1 file changed/, 'the diffstat covers only the unit\'s commit');
-    assert.doesNotMatch(r.stdout, /checklist/i);
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Per session name[\s\S]*\| ticket-repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
+  assert.match(r.stdout, /## Audit — 2 window\(s\) named ticket-repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
+  assert.match(r.stdout, /## Time[\s\S]*\*\*Per session name\*\*[\s\S]*\| ticket-repo-7 \| 2 \|/);
+  assert.doesNotMatch(r.stdout, /other-1/);
+  assert.match(r.stdout, /## Repo activity since 2026-10-03/);
+  assert.match(r.stdout, /feat: unit work/, 'a commit on the first window\'s own UTC day is in the window');
+  assert.doesNotMatch(r.stdout, /chore: before the unit/);
+  assert.doesNotMatch(r.stdout, /another unit, same day/, 'a same-day commit naming another issue is not the unit\'s');
+  assert.match(r.stdout, /1 file changed/, 'the diffstat covers only the unit\'s commit');
+  assert.doesNotMatch(r.stdout, /checklist/i);
 });
 
 test('a renamed window with no priced requests reports, not crashes', () => {
   const f = fixture();
-  try {
-    writeFileSync(join(f.proj, 'w4.jsonl'), lines({ type: 'custom-title', sessionId: 'w4', customTitle: 'repo-9' }));
-    const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.doesNotMatch(r.stderr, /TypeError/);
-    assert.match(r.stdout, /no priced requests in windows named ticket-repo-9/);
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  writeFileSync(join(f.proj, 'w4.jsonl'), lines({ type: 'custom-title', sessionId: 'w4', customTitle: 'repo-9' }));
+  const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /TypeError/);
+  assert.match(r.stdout, /no priced requests in windows named ticket-repo-9/);
 });
 
 test('auditFailure: a failed spawn (null stderr) still yields text and a non-zero code', async () => {
@@ -131,17 +122,13 @@ test('fetchDebt: passes a timeout to gh and flags a list at the limit as possibl
 test('debtSection: files the fixture repo committed reach matchDebt, so the matching issue prints', async () => {
   const { debtSection } = await import('../reflect-gather.mjs');
   const f = fixture();
-  try {
-    const issues = [
-      { number: 11, title: 'f.txt is a mess', body: '' },
-      { number: 12, title: 'old.txt predates the unit', body: '' },
-      { number: 13, title: 'elsewhere', body: 'nothing here' },
-    ];
-    const out = debtSection(f.repo, ['f.txt'], () => ({ status: 0, stdout: JSON.stringify(issues) }));
-    assert.equal(out, '- #11 f.txt is a mess (f.txt)\n2 other open debt issue(s) not naming touched files');
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  const issues = [
+    { number: 11, title: 'f.txt is a mess', body: '' },
+    { number: 12, title: 'old.txt predates the unit', body: '' },
+    { number: 13, title: 'elsewhere', body: 'nothing here' },
+  ];
+  const out = debtSection(f.repo, ['f.txt'], () => ({ status: 0, stdout: JSON.stringify(issues) }));
+  assert.equal(out, '- #11 f.txt is a mess (f.txt)\n2 other open debt issue(s) not naming touched files');
 });
 
 test('parseUnit / namesIssue: a ticket or epic name (typed or legacy) gives the issue; (#N) and <prefix>#N match on a boundary', async () => {
@@ -180,76 +167,60 @@ test('namesIssue: a body trailer line (Refs #N, Closes #M, #N) names the issue; 
 test('a commit naming the issue only in its body trailer is the unit\'s, and its files feed the diffstat and debt match', async () => {
   const { parseUnit, unitCommits, commitChanges } = await import('../reflect-gather.mjs');
   const f = fixture();
-  try {
-    const when = '2026-10-04T09:00:00Z';
-    const env = { ...process.env, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when };
-    writeFileSync(join(f.repo, 'h.txt'), 'x');
-    spawnSync('git', ['-C', f.repo, 'add', '.'], { env });
-    spawnSync('git', ['-C', f.repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'feat: trailer-only work', '-m', 'What: h\nRefs #7'], { env });
-    const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /feat: trailer-only work/);
-    assert.match(r.stdout, /feat: unit work \(#7\)/);
-    assert.match(r.stdout, /2 files changed/);
-    assert.doesNotMatch(r.stdout, /no commits naming #7/);
-    const { commits, other } = unitCommits(f.repo, '2026-10-03T00:00:00Z', parseUnit('repo-7'));
-    assert.equal(other, 1, 'the (#8) commit stays out');
-    assert.deepEqual(commitChanges(f.repo, commits).files.sort(), ['f.txt', 'h.txt'], 'the debt match runs over the trailer commit\'s files too');
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  const when = '2026-10-04T09:00:00Z';
+  const env = { ...process.env, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when };
+  writeFileSync(join(f.repo, 'h.txt'), 'x');
+  spawnSync('git', ['-C', f.repo, 'add', '.'], { env });
+  spawnSync('git', ['-C', f.repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'feat: trailer-only work', '-m', 'What: h\nRefs #7'], { env });
+  const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /feat: trailer-only work/);
+  assert.match(r.stdout, /feat: unit work \(#7\)/);
+  assert.match(r.stdout, /2 files changed/);
+  assert.doesNotMatch(r.stdout, /no commits naming #7/);
+  const { commits, other } = unitCommits(f.repo, '2026-10-03T00:00:00Z', parseUnit('repo-7'));
+  assert.equal(other, 1, 'the (#8) commit stays out');
+  assert.deepEqual(commitChanges(f.repo, commits).files.sort(), ['f.txt', 'h.txt'], 'the debt match runs over the trailer commit\'s files too');
 });
 
 test('a legacy-named window and a typed-name window of one unit gather together', () => {
   const f = fixture();
-  try {
-    writeFileSync(join(f.proj, 'w7.jsonl'), window('w7', '2026-10-04', 'ticket-repo-7'));
-    for (const name of ['ticket-repo-7', 'repo-7']) {
-      const r = spawnHarness(cli, [name, '--root', f.root, '--repo', f.repo]);
-      assert.equal(r.status, 0, r.stderr);
-      assert.match(r.stdout, /## Audit — 3 window\(s\) named ticket-repo-7, 3 transcripts/, name);
-      assert.match(r.stdout, /## Repo activity since 2026-10-03/, name);
-      assert.match(r.stdout, /feat: unit work \(#7\)/, name);
-      assert.doesNotMatch(r.stdout, /another unit, same day/, name);
-    }
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
+  writeFileSync(join(f.proj, 'w7.jsonl'), window('w7', '2026-10-04', 'ticket-repo-7'));
+  for (const name of ['ticket-repo-7', 'repo-7']) {
+    const r = spawnHarness(cli, [name, '--root', f.root, '--repo', f.repo]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /## Audit — 3 window\(s\) named ticket-repo-7, 3 transcripts/, name);
+    assert.match(r.stdout, /## Repo activity since 2026-10-03/, name);
+    assert.match(r.stdout, /feat: unit work \(#7\)/, name);
+    assert.doesNotMatch(r.stdout, /another unit, same day/, name);
   }
 });
 
 test('a repo with no commit naming the issue says so and counts the window\'s other commits; no debt matches', () => {
   const f = fixture();
-  try {
-    writeFileSync(join(f.proj, 'w5.jsonl'), window('w5', '2026-10-03', 'repo-9'));
-    const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /no commits naming #9 since 2026-10-03 \(2 other commit\(s\) in the window\)/);
-    assert.match(r.stdout, /### .*repo\n\(no commits naming #9, so no debt matched\)/);
-    const bounded = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo, '--since', '2026-10-09']);
-    assert.match(bounded.stdout, /no commits naming #7 since 2026-10-09 \(0 other commit\(s\) in the window\)/, 'an explicit --since bounds the window');
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  writeFileSync(join(f.proj, 'w5.jsonl'), window('w5', '2026-10-03', 'repo-9'));
+  const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /no commits naming #9 since 2026-10-03 \(2 other commit\(s\) in the window\)/);
+  assert.match(r.stdout, /### .*repo\n\(no commits naming #9, so no debt matched\)/);
+  const bounded = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo, '--since', '2026-10-09']);
+  assert.match(bounded.stdout, /no commits naming #7 since 2026-10-09 \(0 other commit\(s\) in the window\)/, 'an explicit --since bounds the window');
 });
 
 test('--issue attributes commits to that issue whatever the session name ends in; a bad value fails', () => {
   const f = fixture();
-  try {
-    writeFileSync(join(f.proj, 'w6.jsonl'), window('w6', '2026-10-03', 'repo-queue'));
-    const r = spawnHarness(cli, ['repo-queue', '--issue', '8', '--root', f.root, '--repo', f.repo]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /fix: another unit, same day \(#8\)/);
-    assert.doesNotMatch(r.stdout, /feat: unit work/);
-    assert.match(r.stdout, /\(1 other commit\(s\) in the window, not naming #8\)/);
-    const over = spawnHarness(cli, ['repo-7', '--issue', '8', '--root', f.root, '--repo', f.repo]);
-    assert.match(over.stdout, /fix: another unit, same day \(#8\)/, '--issue overrides the trailing number');
-    assert.doesNotMatch(over.stdout, /feat: unit work/);
-    const bad = spawnHarness(cli, ['repo-queue', '--issue', 'abc', '--root', f.root, '--repo', f.repo]);
-    assert.equal(bad.status, 1);
-    assert.match(bad.stderr, /--issue/);
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  writeFileSync(join(f.proj, 'w6.jsonl'), window('w6', '2026-10-03', 'repo-queue'));
+  const r = spawnHarness(cli, ['repo-queue', '--issue', '8', '--root', f.root, '--repo', f.repo]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /fix: another unit, same day \(#8\)/);
+  assert.doesNotMatch(r.stdout, /feat: unit work/);
+  assert.match(r.stdout, /\(1 other commit\(s\) in the window, not naming #8\)/);
+  const over = spawnHarness(cli, ['repo-7', '--issue', '8', '--root', f.root, '--repo', f.repo]);
+  assert.match(over.stdout, /fix: another unit, same day \(#8\)/, '--issue overrides the trailing number');
+  assert.doesNotMatch(over.stdout, /feat: unit work/);
+  const bad = spawnHarness(cli, ['repo-queue', '--issue', 'abc', '--root', f.root, '--repo', f.repo]);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /--issue/);
 });
 
 test('fetchDebt: parses gh JSON, and turns every failure into an error string instead of throwing', async () => {
@@ -274,40 +245,28 @@ test('renderDebt: lists matches with paths and counts the rest; reports the empt
 
 test('the gather prints the debt section per repo whatever gh answers, and still exits 0', () => {
   const f = fixture();
-  try {
-    const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /## Open debt in touched code\n[\s\S]*### .*repo\n(- #|\(|\d+ other)/);
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Open debt in touched code\n[\s\S]*### .*repo\n(- #|\(|\d+ other)/);
 });
 
 test('an unknown session name fails with the audit filter\'s message', () => {
   const f = fixture();
-  try {
-    const r = spawnHarness(cli, ['repo-404', '--root', f.root]);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /no session named repo-404/);
-  } finally {
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  const r = spawnHarness(cli, ['repo-404', '--root', f.root]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /no session named repo-404/);
 });
 
 test('commitChanges lists a renamed file under its new path, so a debt issue naming it still matches', async () => {
   const { commitChanges } = await import('../reflect-gather.mjs');
-  const repo = mkdtempSync(join(tmpdir(), 'reflect-gather-mv-'));
+  const repo = tempDir('reflect-gather-mv-');
   const g = (...a) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a]);
-  try {
-    g('init', '-q');
-    writeFileSync(join(repo, 'old.mjs'), 'export const a = 1;\n'.repeat(20));
-    g('add', '.'); g('commit', '-qm', 'base');
-    g('mv', 'old.mjs', 'new.mjs'); g('commit', '-qm', 'move (#7)');
-    const sha = g('rev-parse', '--short', 'HEAD').stdout.toString().trim();
-    const { files } = commitChanges(repo, [{ sha }]);
-    assert.ok(files.includes('new.mjs'), `files: ${JSON.stringify(files)}`);
-    assert.ok(!files.some((f) => f.includes('=>')), 'no rename arrows');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
+  g('init', '-q');
+  writeFileSync(join(repo, 'old.mjs'), 'export const a = 1;\n'.repeat(20));
+  g('add', '.'); g('commit', '-qm', 'base');
+  g('mv', 'old.mjs', 'new.mjs'); g('commit', '-qm', 'move (#7)');
+  const sha = g('rev-parse', '--short', 'HEAD').stdout.toString().trim();
+  const { files } = commitChanges(repo, [{ sha }]);
+  assert.ok(files.includes('new.mjs'), `files: ${JSON.stringify(files)}`);
+  assert.ok(!files.some((f) => f.includes('=>')), 'no rename arrows');
 });

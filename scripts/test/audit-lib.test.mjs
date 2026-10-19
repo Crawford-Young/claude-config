@@ -1,10 +1,10 @@
 // scripts/test/audit-lib.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkStamps, commandHead, createCollector, currentGenerations, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, staleStamps, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
+import { tempDir } from './_spawn.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
 const PRICES = {
@@ -363,7 +363,7 @@ const jsonl = (...r) => r.map((x) => JSON.stringify(x)).join('\n') + '\n';
 /** f: a late-titled a, a repeat a, then b and c mid-file; g: a carried-name prelude (b) then d;
  *  subagent x starts while b is live, subagent y has no timestamp. */
 function windowFixture() {
-  const root = mkdtempSync(join(tmpdir(), 'audit-win-'));
+  const root = tempDir('audit-win-');
   const proj = join(root, 'C--proj');
   mkdirSync(join(proj, 'f', 'subagents'), { recursive: true });
   writeFileSync(join(proj, 'f.jsonl'), jsonl(
@@ -410,90 +410,74 @@ async function windowShape(root) {
 
 test('transcriptWindows: one session row per window, titled by its name; subagents join the window live at their earliest stamp', async () => {
   const root = windowFixture();
-  try {
-    const r = await auditRoot(root);
-    const rows = r.sessions.map((s) => [s.sessionId, s.title, s.requests, s.usd, s.subagentUsd]).sort((x, y) => x[0].localeCompare(y[0]));
-    assert.deepEqual(rows, [
-      ['f', 'a', 2, 10, 0],
-      ['f#2', 'b', 2, 11, 1],
-      ['f#3', 'c', 2, 6, 1],
-      ['g', 'd', 1, 5, 0],
-      ['h', 'auto h', 1, 5, 0],
-    ]);
-    assert.deepEqual(r.names.map((g) => [g.name, g.windows, g.requests, g.usd]).sort(), [['a', 1, 2, 10], ['b', 1, 2, 11], ['c', 1, 2, 6], ['d', 1, 1, 5]]);
-    assert.deepEqual(r.time.names.map((g) => [g.name, g.windows]).sort(), [['a', 1], ['b', 1], ['c', 1], ['d', 1]]);
-    assert.deepEqual(r.time.agentRuns.map((a) => [a.id, a.sessionId]), [['x', 'f#2']]);
-    // cost-state stays per transcript file: f's reported total against the sum of its windows
-    assert.deepEqual(r.costState, { files: 1, reportedUsd: 27, computedUsd: 27 });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const r = await auditRoot(root);
+  const rows = r.sessions.map((s) => [s.sessionId, s.title, s.requests, s.usd, s.subagentUsd]).sort((x, y) => x[0].localeCompare(y[0]));
+  assert.deepEqual(rows, [
+    ['f', 'a', 2, 10, 0],
+    ['f#2', 'b', 2, 11, 1],
+    ['f#3', 'c', 2, 6, 1],
+    ['g', 'd', 1, 5, 0],
+    ['h', 'auto h', 1, 5, 0],
+  ]);
+  assert.deepEqual(r.names.map((g) => [g.name, g.windows, g.requests, g.usd]).sort(), [['a', 1, 2, 10], ['b', 1, 2, 11], ['c', 1, 2, 6], ['d', 1, 1, 5]]);
+  assert.deepEqual(r.time.names.map((g) => [g.name, g.windows]).sort(), [['a', 1], ['b', 1], ['c', 1], ['d', 1]]);
+  assert.deepEqual(r.time.agentRuns.map((a) => [a.id, a.sessionId]), [['x', 'f#2']]);
+  // cost-state stays per transcript file: f's reported total against the sum of its windows
+  assert.deepEqual(r.costState, { files: 1, reportedUsd: 27, computedUsd: 27 });
 });
 
 test('transcriptWindows: ctx carries the window key and name; a subagent before every window joins the first, one stamped at a window\'s start joins it; one with no parent transcript stays unnamed', async () => {
   const root = windowFixture();
-  try {
-    mkdirSync(join(root, 'C--proj', 'orphan', 'subagents'), { recursive: true });
-    writeFileSync(join(root, 'C--proj', 'orphan', 'subagents', 'agent-z.jsonl'), jsonl(asst('z1', usage(), { ts: T(50) })));
-    writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-early.jsonl'), jsonl(asst('e1', usage(), { ts: '2026-10-05T09:59:00Z' })));
-    writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-at.jsonl'), jsonl(asst('t1', usage(), { ts: T(10) }))); // b's first stamp
-    assert.deepEqual(await windowShape(root), [
-      ['agent-at.jsonl', 'f#2', 'b', 1],
-      ['agent-early.jsonl', 'f', 'a', 1],
-      ['agent-x.jsonl', 'f#2', 'b', 1],
-      ['agent-y.jsonl', 'f#3', 'c', 1],
-      ['agent-z.jsonl', 'orphan', undefined, 1],
-      ['f.jsonl', 'f', 'a', 5],
-      ['f.jsonl', 'f#2', 'b', 3],
-      ['f.jsonl', 'f#3', 'c', 3],
-      ['g.jsonl', 'g', 'd', 4],
-      ['h.jsonl', 'h', undefined, 2],
-    ]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  mkdirSync(join(root, 'C--proj', 'orphan', 'subagents'), { recursive: true });
+  writeFileSync(join(root, 'C--proj', 'orphan', 'subagents', 'agent-z.jsonl'), jsonl(asst('z1', usage(), { ts: T(50) })));
+  writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-early.jsonl'), jsonl(asst('e1', usage(), { ts: '2026-10-05T09:59:00Z' })));
+  writeFileSync(join(root, 'C--proj', 'f', 'subagents', 'agent-at.jsonl'), jsonl(asst('t1', usage(), { ts: T(10) }))); // b's first stamp
+  assert.deepEqual(await windowShape(root), [
+    ['agent-at.jsonl', 'f#2', 'b', 1],
+    ['agent-early.jsonl', 'f', 'a', 1],
+    ['agent-x.jsonl', 'f#2', 'b', 1],
+    ['agent-y.jsonl', 'f#3', 'c', 1],
+    ['agent-z.jsonl', 'orphan', undefined, 1],
+    ['f.jsonl', 'f', 'a', 5],
+    ['f.jsonl', 'f#2', 'b', 3],
+    ['f.jsonl', 'f#3', 'c', 3],
+    ['g.jsonl', 'g', 'd', 4],
+    ['h.jsonl', 'h', undefined, 2],
+  ]);
 });
 
 test('transcriptWindows: a resumed file\'s replayed records stay with the transcript that holds them first, out of its split and its records (strate parity)', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'audit-replay-'));
-  try {
-    const proj = join(root, 'C--proj');
-    mkdirSync(proj, { recursive: true });
-    const original = [{ type: 'user', uuid: 'a-u0', timestamp: T(0), message: { content: 'go' } }, asst('a1', usage({ input_tokens: 1e6 }), { ts: T(1) })];
-    writeFileSync(join(proj, 'a.jsonl'), jsonl(...original, title('a')));
-    // the resume replays a's records (same uuids) under the carried name, then renames
-    writeFileSync(join(proj, 'b.jsonl'), jsonl(...original, title('a'), title('b'),
-      { type: 'user', uuid: 'b-u0', timestamp: T(10), message: { content: 'resumed' } }, asst('b1', usage({ input_tokens: 1e6 }), { ts: T(11) })));
-    assert.deepEqual(await windowShape(root), [['a.jsonl', 'a', 'a', 3], ['b.jsonl', 'b', 'b', 4]]);
-    const r = await auditRoot(root);
-    assert.deepEqual(r.sessions.map((s) => [s.sessionId, s.title, s.requests]).sort(), [['a', 'a', 1], ['b', 'b', 1]]);
-    assert.deepEqual(r.time.sessions.map((s) => [s.sessionId, s.wallMs / 60e3]).sort(), [['a', 1], ['b', 1]]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = tempDir('audit-replay-');
+  const proj = join(root, 'C--proj');
+  mkdirSync(proj, { recursive: true });
+  const original = [{ type: 'user', uuid: 'a-u0', timestamp: T(0), message: { content: 'go' } }, asst('a1', usage({ input_tokens: 1e6 }), { ts: T(1) })];
+  writeFileSync(join(proj, 'a.jsonl'), jsonl(...original, title('a')));
+  // the resume replays a's records (same uuids) under the carried name, then renames
+  writeFileSync(join(proj, 'b.jsonl'), jsonl(...original, title('a'), title('b'),
+    { type: 'user', uuid: 'b-u0', timestamp: T(10), message: { content: 'resumed' } }, asst('b1', usage({ input_tokens: 1e6 }), { ts: T(11) })));
+  assert.deepEqual(await windowShape(root), [['a.jsonl', 'a', 'a', 3], ['b.jsonl', 'b', 'b', 4]]);
+  const r = await auditRoot(root);
+  assert.deepEqual(r.sessions.map((s) => [s.sessionId, s.title, s.requests]).sort(), [['a', 'a', 1], ['b', 'b', 1]]);
+  assert.deepEqual(r.time.sessions.map((s) => [s.sessionId, s.wallMs / 60e3]).sort(), [['a', 1], ['b', 1]]);
 });
 
 test('transcriptWindows: a replay belongs to the original transcript whatever the files\' names sort to (#142)', async () => {
   // the original and its resume, written under names in both orders; the resume's replay
   // carries the original's records unchanged, so it is the file span that tells them apart
   const run = async (originalName, resumeName) => {
-    const root = mkdtempSync(join(tmpdir(), 'audit-order-'));
-    try {
-      const proj = join(root, 'C--proj');
-      mkdirSync(proj, { recursive: true });
-      const original = [{ type: 'user', uuid: 'o-u0', timestamp: T(0), message: { content: 'go' } }, asst('o1', usage({ input_tokens: 1e6 }), { ts: T(1) })];
-      writeFileSync(join(proj, `${originalName}.jsonl`), jsonl(...original, title('one')));
-      writeFileSync(join(proj, `${resumeName}.jsonl`), jsonl(...original, title('one'), title('two'),
-        { type: 'user', uuid: 'r-u0', timestamp: T(10), message: { content: 'resumed' } }, asst('r1', usage({ input_tokens: 1e6 }), { ts: T(11) })));
-      const r = await auditRoot(root);
-      const wall = new Map(r.time.sessions.map((s) => [s.sessionId, s.wallMs / 60e3]));
-      return {
-        shape: (await windowShape(root)).map(([file, , name, n]) => [file.replace(`${originalName}.jsonl`, 'ORIGINAL').replace(`${resumeName}.jsonl`, 'RESUME'), name, n]).sort(),
-        rows: r.sessions.map((s) => [s.title, s.requests, wall.get(s.sessionId)]).sort(),
-      };
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const root = tempDir('audit-order-');
+    const proj = join(root, 'C--proj');
+    mkdirSync(proj, { recursive: true });
+    const original = [{ type: 'user', uuid: 'o-u0', timestamp: T(0), message: { content: 'go' } }, asst('o1', usage({ input_tokens: 1e6 }), { ts: T(1) })];
+    writeFileSync(join(proj, `${originalName}.jsonl`), jsonl(...original, title('one')));
+    writeFileSync(join(proj, `${resumeName}.jsonl`), jsonl(...original, title('one'), title('two'),
+      { type: 'user', uuid: 'r-u0', timestamp: T(10), message: { content: 'resumed' } }, asst('r1', usage({ input_tokens: 1e6 }), { ts: T(11) })));
+    const r = await auditRoot(root);
+    const wall = new Map(r.time.sessions.map((s) => [s.sessionId, s.wallMs / 60e3]));
+    return {
+      shape: (await windowShape(root)).map(([file, , name, n]) => [file.replace(`${originalName}.jsonl`, 'ORIGINAL').replace(`${resumeName}.jsonl`, 'RESUME'), name, n]).sort(),
+      rows: r.sessions.map((s) => [s.title, s.requests, wall.get(s.sessionId)]).sort(),
+    };
   };
   const originalFirst = await run('a', 'b');
   const resumeFirst = await run('b', 'a'); // the resume sorts first by name
@@ -503,32 +487,24 @@ test('transcriptWindows: a replay belongs to the original transcript whatever th
 });
 
 test('transcriptWindows: a uuid repeated within one file is read once, as a replay is', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'audit-repeat-'));
-  try {
-    mkdirSync(join(root, 'C--proj'), { recursive: true });
-    const said1 = asst('p1', usage({ input_tokens: 1e6 }), { ts: T(1) });
-    writeFileSync(join(root, 'C--proj', 'p.jsonl'), jsonl({ type: 'user', uuid: 'p-u0', timestamp: T(0), message: { content: 'go' } }, said1, said1));
-    assert.deepEqual(await windowShape(root), [['p.jsonl', 'p', undefined, 2]]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = tempDir('audit-repeat-');
+  mkdirSync(join(root, 'C--proj'), { recursive: true });
+  const said1 = asst('p1', usage({ input_tokens: 1e6 }), { ts: T(1) });
+  writeFileSync(join(root, 'C--proj', 'p.jsonl'), jsonl({ type: 'user', uuid: 'p-u0', timestamp: T(0), message: { content: 'go' } }, said1, said1));
+  assert.deepEqual(await windowShape(root), [['p.jsonl', 'p', undefined, 2]]);
 });
 
 test('transcriptWindows: a file removed between its split and its records yields no records instead of throwing', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'audit-gone-'));
-  try {
-    mkdirSync(join(root, 'C--proj'), { recursive: true });
-    const file = join(root, 'C--proj', 'q.jsonl');
-    writeFileSync(file, jsonl(asst('q1', usage(), { ts: T(1) })));
-    let n = 0;
-    for await (const { records } of transcriptWindows(root)) {
-      rmSync(file);
-      for await (const _ of records) n++;
-    }
-    assert.equal(n, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  const root = tempDir('audit-gone-');
+  mkdirSync(join(root, 'C--proj'), { recursive: true });
+  const file = join(root, 'C--proj', 'q.jsonl');
+  writeFileSync(file, jsonl(asst('q1', usage(), { ts: T(1) })));
+  let n = 0;
+  for await (const { records } of transcriptWindows(root)) {
+    rmSync(file);
+    for await (const _ of records) n++;
   }
+  assert.equal(n, 0);
 });
 
 test('an empty custom-title is no name: it neither splits a window nor clears its name', () => {
@@ -542,46 +518,38 @@ test('an empty custom-title is no name: it neither splits a window nor clears it
 });
 
 test('walkTranscripts finds main sessions and subagents with their meta agentType', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'audit-'));
-  try {
-    const proj = join(root, 'C--proj');
-    mkdirSync(join(proj, 'sess-1', 'subagents'), { recursive: true });
-    writeFileSync(join(proj, 'sess-1.jsonl'), `${JSON.stringify(asst('w1', usage({ input_tokens: 1 })))}\nnot json\n`);
-    writeFileSync(join(proj, 'sess-1', 'subagents', 'agent-abc.jsonl'), `${JSON.stringify(asst('w2', usage({ input_tokens: 1 })))}\n`);
-    writeFileSync(join(proj, 'sess-1', 'subagents', 'agent-abc.meta.json'), JSON.stringify({ agentType: 'recon', model: 'sonnet' }));
-    const found = [];
-    for await (const f of walkTranscripts(root)) found.push(f);
-    found.sort((a, b) => a.file.localeCompare(b.file));
-    assert.equal(found.length, 2);
-    const sub = found.find((f) => f.ctx.agent);
-    assert.deepEqual(sub.ctx, { sessionId: 'sess-1', agent: { id: 'abc', type: 'recon', model: 'sonnet' } });
-    const main = found.find((f) => !f.ctx.agent);
-    assert.deepEqual(main.ctx, { sessionId: 'sess-1', agent: null });
-    const recs = [];
-    for await (const r of readJsonl(main.file)) recs.push(r);
-    assert.equal(recs.length, 1); // the malformed line is skipped
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = tempDir('audit-');
+  const proj = join(root, 'C--proj');
+  mkdirSync(join(proj, 'sess-1', 'subagents'), { recursive: true });
+  writeFileSync(join(proj, 'sess-1.jsonl'), `${JSON.stringify(asst('w1', usage({ input_tokens: 1 })))}\nnot json\n`);
+  writeFileSync(join(proj, 'sess-1', 'subagents', 'agent-abc.jsonl'), `${JSON.stringify(asst('w2', usage({ input_tokens: 1 })))}\n`);
+  writeFileSync(join(proj, 'sess-1', 'subagents', 'agent-abc.meta.json'), JSON.stringify({ agentType: 'recon', model: 'sonnet' }));
+  const found = [];
+  for await (const f of walkTranscripts(root)) found.push(f);
+  found.sort((a, b) => a.file.localeCompare(b.file));
+  assert.equal(found.length, 2);
+  const sub = found.find((f) => f.ctx.agent);
+  assert.deepEqual(sub.ctx, { sessionId: 'sess-1', agent: { id: 'abc', type: 'recon', model: 'sonnet' } });
+  const main = found.find((f) => !f.ctx.agent);
+  assert.deepEqual(main.ctx, { sessionId: 'sess-1', agent: null });
+  const recs = [];
+  for await (const r of readJsonl(main.file)) recs.push(r);
+  assert.equal(recs.length, 1); // the malformed line is skipped
 });
 
 test('walkTranscripts carries a subagent\'s meta.json name, never one read off its agent id (#272)', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'audit-'));
-  try {
-    const sub = join(root, 'C--proj', 'sess-1', 'subagents');
-    mkdirSync(sub, { recursive: true });
-    for (const id of ['a01d4ca6', 'aticket-repo-5-77ab']) writeFileSync(join(sub, `agent-${id}.jsonl`), `${JSON.stringify(asst('w', usage()))}\n`);
-    writeFileSync(join(sub, 'agent-a01d4ca6.meta.json'), JSON.stringify({ agentType: 'implementer', model: 'opus', name: 'harness_repo_t5_impl' }));
-    writeFileSync(join(sub, 'agent-aticket-repo-5-77ab.meta.json'), JSON.stringify({ agentType: 'reviewer' }));
-    const agents = [];
-    for await (const f of walkTranscripts(root)) agents.push(f.ctx.agent);
-    assert.deepEqual(agents.sort((a, b) => a.id.localeCompare(b.id)), [
-      { id: 'a01d4ca6', type: 'implementer', model: 'opus', name: 'harness_repo_t5_impl' },
-      { id: 'aticket-repo-5-77ab', type: 'reviewer', model: undefined },
-    ]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = tempDir('audit-');
+  const sub = join(root, 'C--proj', 'sess-1', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  for (const id of ['a01d4ca6', 'aticket-repo-5-77ab']) writeFileSync(join(sub, `agent-${id}.jsonl`), `${JSON.stringify(asst('w', usage()))}\n`);
+  writeFileSync(join(sub, 'agent-a01d4ca6.meta.json'), JSON.stringify({ agentType: 'implementer', model: 'opus', name: 'harness_repo_t5_impl' }));
+  writeFileSync(join(sub, 'agent-aticket-repo-5-77ab.meta.json'), JSON.stringify({ agentType: 'reviewer' }));
+  const agents = [];
+  for await (const f of walkTranscripts(root)) agents.push(f.ctx.agent);
+  assert.deepEqual(agents.sort((a, b) => a.id.localeCompare(b.id)), [
+    { id: 'a01d4ca6', type: 'implementer', model: 'opus', name: 'harness_repo_t5_impl' },
+    { id: 'aticket-repo-5-77ab', type: 'reviewer', model: undefined },
+  ]);
 });
 
 test('a named subagent\'s spend moves out of its window\'s name row into its own; the rows sum to the window (#272)', () => {
@@ -918,7 +886,7 @@ test('time: a failure retried in a timeOnly window counts as retried, as in the 
 });
 
 test('walkTranscripts skips an unreadable directory and keeps walking', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-bad-'));
+  const root = tempDir('wt-bad-');
   mkdirSync(join(root, 'a-proj', 'sess'), { recursive: true });
   writeFileSync(join(root, 'a-proj', 'sess', 'subagents'), 'not a dir');
   mkdirSync(join(root, 'b-proj'));
@@ -926,12 +894,11 @@ test('walkTranscripts skips an unreadable directory and keeps walking', async ()
   const found = [];
   for await (const f of walkTranscripts(root)) found.push(f.file);
   assert.deepEqual(found, [join(root, 'b-proj', 's.jsonl')]);
-  rmSync(root, { recursive: true, force: true });
 });
 
 test('walkTranscripts follows a symlinked project directory', async (t) => {
-  const root = mkdtempSync(join(tmpdir(), 'wt-link-'));
-  const real = mkdtempSync(join(tmpdir(), 'wt-real-'));
+  const root = tempDir('wt-link-');
+  const real = tempDir('wt-real-');
   writeFileSync(join(real, 's.jsonl'), '{}\n');
   try {
     symlinkSync(real, join(root, 'linked'), 'junction');
@@ -1041,27 +1008,23 @@ test('staleStamps: issue-only stamps, unknown lines and models newer than prices
 });
 
 test('checkStamps scans the CLAUDE.md chain, workspace/docs/, agents/ and skills/, nothing else', () => {
-  const root = mkdtempSync(join(tmpdir(), 'stamps-'));
-  try {
-    const put = (rel, text) => {
-      mkdirSync(join(root, rel, '..'), { recursive: true });
-      writeFileSync(join(root, rel), text);
-    };
-    const old = 'rule (verified: 2026-09, Opus 5)\n';
-    put('workspace/CLAUDE.md', 'ok (verified: 2026-10, Opus 5.5)\n' + old);
-    put('workspace/web/CLAUDE.md', old);
-    put('agents/ROUTING.md', old);
-    put('skills/x/SKILL.md', old);
-    put('skills/x/references/more.md', old);
-    put('docs/notes.md', old);
-    put('workspace/docs/api.md', old);
-    put('workspace/docs/deep/more.md', old);
-    put('workspace/notes.md', old);
-    const found = checkStamps(root, GEN_PRICES).map(({ file, line }) => `${file}:${line}`);
-    assert.deepEqual(found.sort(), ['agents/ROUTING.md:1', 'skills/x/SKILL.md:1', 'skills/x/references/more.md:1', 'workspace/CLAUDE.md:2', 'workspace/docs/api.md:1', 'workspace/docs/deep/more.md:1', 'workspace/web/CLAUDE.md:1']);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = tempDir('stamps-');
+  const put = (rel, text) => {
+    mkdirSync(join(root, rel, '..'), { recursive: true });
+    writeFileSync(join(root, rel), text);
+  };
+  const old = 'rule (verified: 2026-09, Opus 5)\n';
+  put('workspace/CLAUDE.md', 'ok (verified: 2026-10, Opus 5.5)\n' + old);
+  put('workspace/web/CLAUDE.md', old);
+  put('agents/ROUTING.md', old);
+  put('skills/x/SKILL.md', old);
+  put('skills/x/references/more.md', old);
+  put('docs/notes.md', old);
+  put('workspace/docs/api.md', old);
+  put('workspace/docs/deep/more.md', old);
+  put('workspace/notes.md', old);
+  const found = checkStamps(root, GEN_PRICES).map(({ file, line }) => `${file}:${line}`);
+  assert.deepEqual(found.sort(), ['agents/ROUTING.md:1', 'skills/x/SKILL.md:1', 'skills/x/references/more.md:1', 'workspace/CLAUDE.md:2', 'workspace/docs/api.md:1', 'workspace/docs/deep/more.md:1', 'workspace/web/CLAUDE.md:1']);
 });
 
 test('the shipped prices.json prices a claude-haiku-5-5 record, dated ids included (#196)', () => {
