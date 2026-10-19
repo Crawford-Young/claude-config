@@ -11,7 +11,9 @@
 // auto-memory, and answers "ok". No model runs. The key and the stub replace auth for that turn, so
 // the session never holds the token; `claude auth status` in the round, with the user's
 // CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, set in their env; required, as for a live
-// round, and never written anywhere), covers auth. No login is copied.
+// round, and never written anywhere), covers auth. No login is copied. However the canary ends, a
+// round that fails to build included, the round dir is removed (--keep retains it and prints its
+// Remove-Item line).
 //
 // Markers: the harness root CLAUDE.md's first line; a nonce CLAUDE.md written into the checkout (a
 // repo-level CLAUDE.md, the kind a repo of its own carries); the first entry of the user's real memory
@@ -29,13 +31,13 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { die, isMain, log, parseArgs, workspaceRoot } from '../lib.mjs';
 import { ARMS, CANARY_COMMAND, DEFAULT_OUT, claudeCommand, loadManifest, planRound, projectKey, tokenHelp } from './ab-lib.mjs';
-import { prepareRound, realClaudePaths, runClaude } from './round.mjs';
+import { prepareRound, realClaudePaths, releaseRound, runClaude } from './round.mjs';
 
 const AB_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -124,7 +126,7 @@ function realMemoryLine(workspace) {
   return existsSync(index) ? readFileSync(index, 'utf8').split(/\r?\n/).find((l) => l.startsWith('- ')) : null;
 }
 
-if (isMain(import.meta.url)) await main();
+if (isMain(import.meta.url)) await main().catch((e) => die(e.message));
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -138,6 +140,18 @@ async function main() {
   const ticket = manifest.tickets.find((t) => t.id === (args.ticket || 'claude-config-240'));
   if (!ticket) die(`unknown ticket ${args.ticket}`);
   const plan = planRound(manifest, ticket, arm, 1, { tmp: tmpdir(), workspace, out, roundId: `canary-${randomBytes(4).toString('hex')}` }, []);
+  let verdict;
+  // However the canary ends, a round that fails to build included, the round dir is removed (--keep names it for removal).
+  try {
+    verdict = await probe(plan, { arm, plant, out, workspace });
+  } finally {
+    await releaseRound(plan.layout.root, Boolean(args.keep));
+  }
+  process.exit(verdict === 'PASS' ? 0 : verdict === 'FAIL' ? 1 : 2);
+}
+
+/** Build the round, run its claude command for one turn against the stub, and judge what loaded. → the verdict. */
+async function probe(plan, { arm, plant, out, workspace }) {
   const l = plan.layout;
   const { env: roundEnv, prompt } = prepareRound(plan, { workspace });
 
@@ -173,13 +187,16 @@ async function main() {
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
   };
   log(`canary ${arm}${plant ? ' (planted memory)' : ''}: ${l.root}\n  $ ${[...cmd, ...plan.claude.args].join(' ')} (API -> ${stub.url})`);
-  const r = await runClaude(cmd, plan.claude.args, { cwd: l.checkout, env, input: prompt, timeoutMs: 180_000 });
-  await stub.close();
+  let r;
+  try {
+    r = await runClaude(cmd, plan.claude.args, { cwd: l.checkout, env, input: prompt, timeoutMs: 180_000 });
+  } finally {
+    await stub.close();
+  }
 
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, 'requests.jsonl'), stub.bodies.map((b) => b.replace(/\r?\n/g, ' ')).join('\n'));
   writeFileSync(join(out, 'claude.out.txt'), `${r.stdout}\n--- stderr ---\n${r.stderr}`);
-  if (!args.keep) rmSync(l.root, { recursive: true, force: true });
 
   const a = analyzeRequests(stub.bodies, markers);
   const m = a.markers;
@@ -191,5 +208,5 @@ async function main() {
   const verdict = a.requests === 0 ? 'INCONCLUSIVE' : ok && loggedIn ? 'PASS' : 'FAIL';
   log(JSON.stringify({ arm, plant, loggedIn, claudeExit: r.status, ...a }, null, 2));
   log(`${verdict} (requests in ${join(out, 'requests.jsonl')})`);
-  process.exit(verdict === 'PASS' ? 0 : verdict === 'FAIL' ? 1 : 2);
+  return verdict;
 }

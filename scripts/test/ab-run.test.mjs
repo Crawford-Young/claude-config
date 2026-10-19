@@ -7,7 +7,7 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isolatedEnv, spawnHarness, tempDir } from './_spawn.mjs';
@@ -33,7 +33,7 @@ function git(cwd, ...args) {
 
 const FAKE = `
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 const sh = (cmd, args) => { const r = spawnSync(cmd, args, { encoding: 'utf8' }); return { rc: r.status, out: (r.stdout || '') + (r.stderr || '') }; };
 const cwd = process.cwd();
@@ -82,6 +82,11 @@ const roundAlias = '/tmp' + e.HOME.slice(e.AB_FAKE_REAL_TEMP.length).replace(/\\
 const lines = [
   call('Read', { file_path: 'hooks/README.md' }), served(readme),
   call('Bash', { command: 'cat ' + JSON.parse(readme).args[0] }),
+  // An Edit that keeps the README's live-hook line (a whole line of the tree: explained), adds a line
+  // spelling the workspace and one that spells the live hook path the tree holds only inside a longer
+  // line (both flagged), and a Write whose path is the workspace (flagged).
+  call('Edit', { file_path: 'hooks/README.md', old_string: readme.trimEnd(), new_string: readme.trimEnd() + '\\nsee ' + e.AB_FAKE_LEAK + '\\ncat ' + JSON.parse(readme).args[0] }),
+  call('Write', { file_path: e.AB_FAKE_LEAK, content: 'x\\n' }),
   call('Bash', { command: 'type ' + e.AB_FAKE_LEAK }),
   call('Bash', { command: 'type ' + e.AB_FAKE_CONFIG_LEAK }),
   call('Bash', { command: 'type ' + e.AB_FAKE_TEMP_LEAK + ' (tmp is ' + e.TEMP + ')' }),
@@ -95,12 +100,18 @@ process.stderr.write('env: ' + e.CLAUDE_CODE_OAUTH_TOKEN + '\\n');
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, num_turns: 2, total_cost_usd: 0.25, session_id: 's', result: 'done ' + e.CLAUDE_CODE_OAUTH_TOKEN }));
 // A session that wrecks its checkout: the runner's capture throws right after claude.stderr.log.
 if (e.AB_FAKE_WRECK) { rmSync('.git', { recursive: true, force: true }); writeFileSync('.git', 'gitdir: missing\\n'); }
+// A session that leaves its token in a file the runner can't write: every redaction walk throws at it.
+if (e.AB_FAKE_LOCKED) { const f = join(cfg, 'projects', 'k', 'locked.txt'); writeFileSync(f, e.CLAUDE_CODE_OAUTH_TOKEN + '\\n'); chmodSync(f, 0o444); }
 `;
 
 const code = join(home, 'code');
 const realTemp = join(home, 't');
 /** The temp and results dirs of the rounds whose capture throws (Major C). */
 const wreck = { temp: join(home, 'tw'), out: join(home, 'out-wreck') };
+/** The same for the rounds whose token redaction throws (#279). */
+const locked = { temp: join(home, 'tl'), out: join(home, 'out-locked') };
+// chmod 0o444 is the read-only attribute on Windows and a mode root ignores on POSIX.
+const asRoot = process.getuid?.() === 0;
 const fx = {};
 const TOKEN = `sk-ant-oat01-AB-FAKE-${randomBytes(6).toString('hex')}`;
 const LEAKS = {
@@ -168,8 +179,8 @@ before(() => {
   put(join(home, 'm', 'tickets', 'claude-config-1.md'), '## Done when\n- [ ] it works\n');
   put(join(home, 'fake-claude.mjs'), FAKE);
   // current keeps its round (--keep); bare takes the default, which removes it after capture.
-  const runArm = (arm, { temp, out, wrecks }) => {
-    const report = join(home, `report-${arm}${wrecks ? '-wreck' : ''}.json`);
+  const runArm = (arm, { temp, out, wrecks, locks }) => {
+    const report = join(home, `report-${arm}${wrecks ? '-wreck' : ''}${locks ? '-locked' : ''}.json`);
     const r = spawnHarness(RUN, ['--manifest', join(home, 'm', 'manifest.json'), '--only', 'claude-config-1', '--arm', arm, '--run', '1', '--out', out, ...(arm === 'current' ? ['--keep'] : [])], {
       home,
       env: {
@@ -178,6 +189,7 @@ before(() => {
         AB_FAKE_LEAK: LEAKS.workspace, AB_FAKE_CONFIG_LEAK: LEAKS.config, AB_FAKE_TEMP_LEAK: LEAKS.temp,
         CLAUDE_CODE_OAUTH_TOKEN: TOKEN,
         ...(wrecks && { AB_FAKE_WRECK: '1' }),
+        ...(locks && { AB_FAKE_LOCKED: '1' }),
       },
     });
     const dir = join(out, 'runs', 'claude-config-1', `${arm}-r1`);
@@ -186,6 +198,8 @@ before(() => {
   for (const arm of ['current', 'bare']) fx[arm] = runArm(arm, { temp: realTemp, out: join(home, 'out') });
   fx.wreck = {};
   for (const arm of ['current', 'bare']) fx.wreck[arm] = runArm(arm, { temp: wreck.temp, out: wreck.out, wrecks: true });
+  fx.locked = {};
+  if (!asRoot) for (const arm of ['current', 'bare']) fx.locked[arm] = runArm(arm, { temp: locked.temp, out: locked.out, locks: true });
 });
 
 test('a live round runs to a result in both arms', () => {
@@ -319,9 +333,11 @@ test('M5 / Major 2 / round 6 A+B: a path the round served (a Read of hooks/READM
     assert.deepEqual(
       bySet(result.contamination),
       bySet([
-        { source: 'tool inputs', label: 'workspace', count: 2, paths: [LEAKS.workspace, README_PATH] },
+        { source: 'tool inputs', label: 'workspace', count: 3, paths: [LEAKS.workspace, README_PATH] },
         { source: 'tool inputs', label: 'config', count: 1, paths: [LEAKS.config] },
         { source: 'tool inputs', label: 'temp', count: gitBashTmp ? 2 : 1, paths: [LEAKS.temp, ...(gitBashTmp ? ['/tmp/claude/other-session'] : [])] },
+        // #279: a piece of a tree line is no tree line, so `cat <live hook path>` flags though the tree spells the path.
+        { source: 'edit content', label: 'workspace', count: 2, paths: [LEAKS.workspace, README_PATH] },
         ...['diff.patch', 'gate-test.log', 'gate-shrunk.log'].map((source) => ({ source, label: 'workspace', count: 1, paths: [LEAKS.workspace] })),
       ]),
       arm,
@@ -331,6 +347,8 @@ test('M5 / Major 2 / round 6 A+B: a path the round served (a Read of hooks/READM
       [
         { source: 'transcripts', label: 'workspace', count: 1, paths: [README_PATH] },
         ...(gitBashTmp ? [{ source: 'transcripts', label: 'temp', count: 1, paths: ['/tmp'] }] : []),
+        // #279: the Edit's old and new README line, each a whole line of the checkout at the parent.
+        { source: 'edit content', label: 'workspace', count: 2, paths: [README_PATH] },
       ],
       arm,
     );
@@ -354,6 +372,23 @@ test('Major C (round 6): when capture throws after claude.stderr.log, no token i
   assert.ok(existsSync(join(wreck.temp, 'ab', left[0], '.claude', 'projects', 'k', 's.jsonl')), 'the kept transcript is there, redacted');
 });
 
+test('#279: when token redaction throws mid-walk, every other file is still redacted, the round is still removed or, under --keep, named for removal, and the run fails naming the file', { skip: asRoot && 'root writes a read-only file' }, () => {
+  for (const arm of ['current', 'bare']) {
+    const { r } = fx.locked[arm];
+    assert.notEqual(r.status, 0, arm);
+    assert.match(r.stderr, /could not redact the token from 1 file\(s\) under .*locked\.txt/, arm);
+    assert.ok(!`${r.stdout}${r.stderr}`.includes(TOKEN), `${arm}: token in the runner output`);
+  }
+  assert.match(fx.locked.bare.r.stdout, /removed the round dir/);
+  const left = readdirSync(join(locked.temp, 'ab'));
+  assert.equal(left.length, 1, 'only the --keep round is left');
+  assert.ok(fx.locked.current.r.stdout.includes(`Remove-Item -Recurse -Force "${join(locked.temp, 'ab', left[0])}"`));
+  // Only the locked file and its transcript copy keep the token.
+  const holding = [...filesUnder(locked.out), ...filesUnder(locked.temp)].filter((f) => readFileSync(f, 'latin1').includes(TOKEN));
+  assert.ok(holding.length > 0 && holding.every((f) => f.endsWith('locked.txt')), holding.join(', '));
+  for (const f of holding) chmodSync(f, 0o644);
+});
+
 test('grade.mjs excludes a contaminated run, holds a packet that still names its arm, packets the rest, and counts both per arm', () => {
   const out = join(home, 'grade-out');
   const runs = join(out, 'runs', 'claude-config-1');
@@ -374,7 +409,7 @@ test('grade.mjs excludes a contaminated run, holds a packet that still names its
   const key = JSON.parse(readFileSync(join(out, 'blind-key.json'), 'utf8'));
   assert.deepEqual(Object.values(key.packets), [{ ticket: 'claude-config-1', arm: 'current', run: 1 }]);
   assert.deepEqual(key.excluded.map((x) => [x.ticket, x.arm, x.run]), [['claude-config-1', 'bare', 1]]);
-  assert.match(key.excluded[0].reason, /^contaminated: workspace 2x in tool inputs, /);
+  assert.match(key.excluded[0].reason, /^contaminated: workspace 3x in tool inputs, /);
   assert.deepEqual(key.held.map((x) => [x.ticket, x.arm, x.run]), [['claude-config-1', 'current', 2]]);
   assert.match(key.held[0].reason, /commit-body vocabulary/);
 });

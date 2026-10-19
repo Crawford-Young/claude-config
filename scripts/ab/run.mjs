@@ -25,14 +25,13 @@
 
 import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { die, git, isMain, log, parseArgs, readIfExists, workspaceRoot } from '../lib.mjs';
-import { DEFAULT_OUT, RUN_COMMAND, addedLines, claudeCommand, gateVerdict, loadManifest, parseClaudeJson, planRound, readResult, scanContamination, selectRounds, tokenHelp, tokenHow, transcriptParts } from './ab-lib.mjs';
-import { TOKEN_PLACEHOLDER, must, prepareRound, realClaudePaths, redactSecret, redactText, runClaude, transcriptText, treeExplains } from './round.mjs';
+import { DEFAULT_OUT, RUN_COMMAND, addedLines, claudeCommand, gateVerdict, loadManifest, parseClaudeJson, planRound, readResult, scanContamination, scanRoots, selectRounds, tokenHelp, tokenHow, transcriptParts } from './ab-lib.mjs';
+import { TOKEN_PLACEHOLDER, must, prepareRound, realClaudePaths, redactSecret, redactText, releaseRound, runClaude, transcriptText, treeExplains, treeHasLine } from './round.mjs';
 
 const AB_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -111,35 +110,27 @@ async function main() {
 
 /** One round. Once its dir is claimed, whatever path the round takes (a capture that throws
  *  included), the token is redacted from the results dir and the round's transcripts, and then the
- *  round dir is removed, or under --keep named for removal. */
+ *  round dir is removed, or under --keep named for removal. A redaction that throws doesn't stop the
+ *  other or the release; the round then fails with every error. */
 async function runRound(p, cmd, { workspace, keep, timeoutMs }) {
   const l = p.layout;
   if (existsSync(join(p.resultsDir, 'result.json'))) throw new Error(`${p.resultsDir} already holds a result; move it aside to re-run this round`);
   if (existsSync(l.root)) throw new Error(`${l.root} exists; a round starts fresh`);
   const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
   mkdirSync(p.resultsDir, { recursive: true });
-  try {
-    await playRound(p, cmd, { workspace, timeoutMs, token });
-  } finally {
-    redactSecret(p.resultsDir, token);
-    redactSecret(join(l.config, 'projects'), token);
-    await releaseRound(l.root, keep);
-  }
-}
-
-/** The round dir after the round: kept (--keep) with a PowerShell line to remove it, else removed. */
-async function releaseRound(root, keep) {
-  if (!existsSync(root)) return;
-  if (keep) {
-    log(`kept the round dir (--keep); remove it when done: Remove-Item -Recurse -Force "${root}"`);
-    return;
-  }
-  try {
-    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    log(`removed the round dir ${root}`);
-  } catch (e) {
-    log(`WARNING: could not remove the round dir (${e.code ?? e.message}); remove it when done: Remove-Item -Recurse -Force "${root}"`);
-  }
+  const errors = [];
+  const attempt = async (step) => {
+    try {
+      await step();
+    } catch (e) {
+      errors.push(e.message);
+    }
+  };
+  await attempt(() => playRound(p, cmd, { workspace, timeoutMs, token }));
+  await attempt(() => redactSecret(p.resultsDir, token));
+  await attempt(() => redactSecret(join(l.config, 'projects'), token));
+  await releaseRound(l.root, keep);
+  if (errors.length) throw new Error([...new Set(errors)].join('\n'));
 }
 
 /** Build the round, run the session, capture it and write result.json. */
@@ -238,21 +229,22 @@ function capture(p, { env, workspace, c, baseline }) {
   if (existsSync(projects)) cpSync(projects, join(p.resultsDir, 'transcripts'), { recursive: true });
   // Model-written code runs in the gates too, so their logs and the diff's added lines are scanned with
   // the transcripts. The round is masked (it sits under the real temp, which Git Bash also spells /tmp).
-  // What the session wrote (its tool inputs, its diff) always flags; in what the round served, a path
-  // the round's own tree spells, at the parent or the harness commit, is explained rather than flagged.
-  const { inputs, served } = transcriptParts(transcriptText(projects));
-  const sources = { transcripts: served, 'tool inputs': inputs, 'diff.patch': addedLines(readIfExists(join(p.resultsDir, 'diff.patch')) ?? '') };
+  // What the session wrote (its tool inputs, its diff) always flags, but for a line an Edit, Write or
+  // MultiEdit wrote that the checkout holds verbatim at the parent (user, 2026-10-19). In what the round
+  // served, a path the round's own tree spells, at the parent or the harness commit, is explained.
+  const { inputs, edits, served } = transcriptParts(transcriptText(projects));
+  const sources = { transcripts: served, 'tool inputs': inputs, 'edit content': edits, 'diff.patch': addedLines(readIfExists(join(p.resultsDir, 'diff.patch')) ?? '') };
   for (const g of gates) sources[`gate-${g.name}.log`] = g.output;
-  const trees = [{ repo: l.checkout, sha: p.ticket.parent }, ...(p.arm === 'current' ? [{ repo: l.harness, sha: p.ticket.harness }] : [])];
+  const checkout = { repo: l.checkout, sha: p.ticket.parent };
+  const trees = [checkout, ...(p.arm === 'current' ? [{ repo: l.harness, sha: p.ticket.harness }] : [])];
   const real = realClaudePaths();
-  const scan = scanContamination(
-    sources,
-    [
-      { path: workspace, label: 'workspace' },
-      { path: real.config, label: 'config' },
-      { path: tmpdir(), label: 'temp' },
-    ],
-    { mask: [l.root], explains: treeExplains(trees), tmp: tmpdir(), written: ['tool inputs', 'diff.patch'] },
-  );
+  const scan = scanContamination(sources, scanRoots({ workspace, config: real.config, globalJson: real.globalJson, temp: tmpdir() }), {
+    mask: [l.root],
+    explains: treeExplains(trees),
+    lineExplains: treeHasLine([checkout]),
+    tmp: tmpdir(),
+    written: ['tool inputs', 'diff.patch'],
+    byLine: ['edit content'],
+  });
   return { claude, diffStat, gates: gates.map(({ output, ...g }) => g), contamination: scan.flagged, contaminationExplained: scan.explained };
 }

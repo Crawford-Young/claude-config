@@ -14,8 +14,10 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { log } from '../lib.mjs';
 import { RUN_COMMAND, ancestorClaudeMds, barrierEnv, checkoutSteps, childEnv, gitconfigEntries, promptFrom, pruneClaudeJson, tokenHelp, transformSettings } from './ab-lib.mjs';
 
 /** Run an argv; throw with its output on failure. → stdout */
@@ -83,6 +85,22 @@ export function prepareRound(plan, { workspace }) {
   return { env: childEnv(process.env, barrierEnv(l)), prompt: promptFrom(ticket.body) };
 }
 
+/** The round dir after the round: kept (`keep`) with a PowerShell line to remove it, else removed. */
+export async function releaseRound(root, keep) {
+  if (!existsSync(root)) return;
+  if (keep) {
+    log(`kept the round dir (--keep); remove it when done: Remove-Item -Recurse -Force "${root}"`);
+    return;
+  }
+  try {
+    // Async rm: Node 24's rmSync ignores maxRetries, and a just-exited child can still pin a file.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    log(`removed the round dir ${root}`);
+  } catch (e) {
+    log(`WARNING: could not remove the round dir (${e.code ?? e.message}); remove it when done: Remove-Item -Recurse -Force "${root}"`);
+  }
+}
+
 /** A predicate: does any of `trees` ([{repo, sha}]) hold the literal string anywhere (a substring of
  *  some line), at that commit? The scan asks it only of what the round served, never of what the
  *  session wrote: a tool result showing a round file that spells a real path reaches nothing, but a
@@ -92,6 +110,24 @@ export function treeExplains(trees) {
   return (s) => {
     if (!seen.has(s)) seen.set(s, trees.some(({ repo, sha }) => spawnSync('git', ['-C', repo, 'grep', '-q', '-F', '-e', s, sha, '--']).status === 0));
     return seen.get(s);
+  };
+}
+
+/** A predicate: is `line` verbatim a whole line of a file in any of `trees` ([{repo, sha}]) at that
+ *  commit, LF or CRLF? git grep has no whole-line switch, so it lists the lines holding `line` (-F; -h
+ *  prints a revision's lines bare) and one must equal it. The scan asks this of what an Edit, Write or
+ *  MultiEdit wrote, a line at a time: keeping a line the checkout already holds reaches nothing. A
+ *  substring never answers yes: the tree spells the live repo path inside longer lines (round 5,
+ *  Major A). A line git can't take as an argument (a NUL, or too long to spawn) answers no. Cached. */
+export function treeHasLine(trees) {
+  const seen = new Map();
+  const holds = ({ repo, sha }, line) => {
+    const r = spawnSync('git', ['-C', repo, 'grep', '-F', '-h', '--no-color', '-e', line, sha, '--'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    return r.status === 0 && r.stdout.split('\n').some((l) => l === line || l === `${line}\r`);
+  };
+  return (line) => {
+    if (!seen.has(line)) seen.set(line, !line.includes('\0') && trees.some((t) => holds(t, line)));
+    return seen.get(line);
   };
 }
 
@@ -137,18 +173,26 @@ export const TOKEN_PLACEHOLDER = '<CLAUDE_CODE_OAUTH_TOKEN>';
 export const redactText = (text, secret) => (secret && text.includes(secret) ? [text.split(secret).join(TOKEN_PLACEHOLDER), true] : [text, false]);
 
 /** Replace `secret` with TOKEN_PLACEHOLDER in every file under `dir` (bytes kept as they are
- *  elsewhere); → how many files held it. A session that echoes its env puts its token in its output. */
+ *  elsewhere); → how many files held it. A session that echoes its env puts its token in its output.
+ *  A file it can't read or write doesn't stop the walk: the rest are redacted, then it throws naming
+ *  each such file, which may still hold the secret. */
 export function redactSecret(dir, secret) {
   if (!secret || !existsSync(dir)) return 0;
   let n = 0;
+  const failed = [];
   for (const rel of readdirSync(dir, { recursive: true })) {
     const f = join(dir, String(rel));
-    if (!statSync(f).isFile()) continue;
-    const [text, hit] = redactText(readFileSync(f).toString('latin1'), secret);
-    if (!hit) continue;
-    writeFileSync(f, Buffer.from(text, 'latin1'));
-    n++;
+    try {
+      if (!statSync(f).isFile()) continue;
+      const [text, hit] = redactText(readFileSync(f).toString('latin1'), secret);
+      if (!hit) continue;
+      writeFileSync(f, Buffer.from(text, 'latin1'));
+      n++;
+    } catch (e) {
+      failed.push(`${f} (${e.code ?? e.message})`);
+    }
   }
+  if (failed.length) throw new Error(`could not redact the token from ${failed.length} file(s) under ${dir}, which may still hold it: ${failed.join(', ')}`);
   return n;
 }
 

@@ -3,10 +3,11 @@
 // the blind anonymizer and packets, the isolation canary's analysis and stub. The live path is in ab-run.test.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnHarness, tempDir } from './_spawn.mjs';
+import { isolatedEnv, spawnHarness, tempDir } from './_spawn.mjs';
 import {
   ARMS,
   addedLines,
@@ -28,13 +29,14 @@ import {
   pruneClaudeJson,
   roundLayout,
   scanContamination,
+  scanRoots,
   selectRounds,
   transcriptParts,
   transformSettings,
 } from '../ab/ab-lib.mjs';
 import { anonymize, dropFiles, leaks, pathVariants } from '../ab/anonymize.mjs';
 import { blindId, buildPacket, exclusionReason, gradeTemplate } from '../ab/grade.mjs';
-import { TOKEN_PLACEHOLDER, redactSecret } from '../ab/round.mjs';
+import { TOKEN_PLACEHOLDER, redactSecret, treeHasLine } from '../ab/round.mjs';
 import { analyzeRequests, startStub } from '../ab/canary.mjs';
 
 const AB = join(dirname(fileURLToPath(import.meta.url)), '..', 'ab');
@@ -269,6 +271,23 @@ test('redactSecret replaces a secret in every file under a dir, binary-safe, and
   assert.equal(redactSecret(join(d, 'missing'), 'TOKEN-123'), 0);
 });
 
+// chmod 0o444 is the read-only attribute on Windows and a mode root ignores on POSIX.
+const asRoot = process.getuid?.() === 0;
+
+test('redactSecret (#279) walks past each file it cannot write, redacts the rest, then throws naming those files', { skip: asRoot && 'root writes a read-only file' }, () => {
+  const d = tempDir('ab-redact-locked-');
+  mkdirSync(join(d, 'sub'));
+  // A locked file and an open one in each of two dirs: whatever order the walk takes, it meets a locked
+  // file before at least one open file, so stopping there would leave that open file unredacted.
+  const locked = [join(d, 'locked.txt'), join(d, 'sub', 'locked.txt')];
+  const open = [join(d, 'open.txt'), join(d, 'sub', 's.jsonl')];
+  for (const f of [...locked, ...open]) writeFileSync(f, '"TOKEN-123"\n');
+  for (const f of locked) chmodSync(f, 0o444);
+  assert.throws(() => redactSecret(d, 'TOKEN-123'), (e) => /could not redact the token from 2 file/.test(e.message) && locked.every((f) => e.message.includes(f)) && !e.message.includes('TOKEN-123'));
+  for (const f of open) assert.equal(readFileSync(f, 'utf8'), `"${TOKEN_PLACEHOLDER}"\n`, f);
+  for (const f of locked) chmodSync(f, 0o644);
+});
+
 test('parseClaudeJson reads cost, turns and duration from --output-format json, and flags unreadable output', () => {
   const ok = parseClaudeJson(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1200, num_turns: 7, total_cost_usd: 1.5, session_id: 'x', result: 'done' }));
   assert.deepEqual(ok, { ok: true, subtype: 'success', isError: false, costUsd: 1.5, turns: 7, durationMs: 1200, sessionId: 'x', result: 'done' });
@@ -337,6 +356,71 @@ test('transcriptParts puts every tool_use input, wherever a line records it, in 
   assert.match(transcriptParts(toolCall('Bash', { command: 'type C:\\x' })).inputs, /type C:\\\\x/);
 });
 
+test('transcriptParts (#279) puts the content fields of Edit, Write and MultiEdit in edits, unescaped; their paths and every other tool input stay in inputs', () => {
+  const jsonl = [
+    toolCall('Edit', { file_path: 'IN-EDIT-PATH', old_string: 'ED-OLD "q" C:\\x', new_string: 'ED-NEW\nline 2', replace_all: false }),
+    toolCall('Write', { file_path: 'IN-WRITE-PATH', content: 'ED-CONTENT\r\n' }),
+    toolCall('MultiEdit', { file_path: 'IN-MULTI-PATH', edits: [{ old_string: 'ED-M-OLD', new_string: 'ED-M-NEW', replace_all: true }] }),
+    toolCall('NotebookEdit', { notebook_path: 'IN-NB', new_source: 'IN-NB-SOURCE' }),
+    toolCall('Bash', { command: 'IN-BASH' }),
+  ].join('\n');
+  const { inputs, served, edits } = transcriptParts(jsonl);
+  for (const s of ['IN-EDIT-PATH', 'IN-WRITE-PATH', 'IN-MULTI-PATH', 'IN-NB', 'IN-NB-SOURCE', 'IN-BASH']) assert.match(inputs, new RegExp(s), s);
+  for (const s of ['ED-OLD', 'ED-NEW', 'ED-CONTENT', 'ED-M-OLD', 'ED-M-NEW']) {
+    assert.doesNotMatch(inputs, new RegExp(s), s);
+    assert.doesNotMatch(served, new RegExp(s), s);
+  }
+  // The field text itself, JSON escaping undone, one field after another.
+  assert.equal(edits, 'ED-OLD "q" C:\\x\nED-NEW\nline 2\nED-CONTENT\r\n\nED-M-OLD\nED-M-NEW');
+});
+
+/** treeHasLine's semantics (git grep -F -h lists the lines holding it, then one must equal it): the line is a whole line of some tree file. */
+const treeLines = (l) => Object.values(TREE_FILES).some((f) => f.split('\n').includes(l));
+const README_LINE = TREE_FILES['hooks/README.md'].trimEnd();
+
+test('scanContamination (#279, user 2026-10-19 "Explain if tree has line"): an edit content line that is a whole tree line is explained; a new line, a substring of a tree line and every path field flag', () => {
+  const tmp = 'C:\\Users\\u\\AppData\\Local\\Temp';
+  const jsonl = [
+    // Keeps the tree's live-hook line (old and new): explained twice. Adds a line spelling the workspace: flagged.
+    toolCall('Edit', { file_path: 'hooks/README.md', old_string: README_LINE, new_string: `${README_LINE}\nsee C:/Users/u/code/claude-config/x` }),
+    // A whole tree line with CRLF endings is still that line; the tree line without its indent is not.
+    toolCall('Write', { file_path: 'C:\\Users\\u\\code\\claude-config\\hooks\\README.md', content: `${README_LINE}\r\n${README_LINE.trimStart()}\r\n` }),
+    // Round 5 Major A: the tree spells this path inside longer lines, never as a line of its own.
+    toolCall('MultiEdit', { file_path: 'x.sh', edits: [{ old_string: 'a', new_string: 'cd C:/Users/u/code/claude-config\nexport TMPDIR=/tmp' }] }),
+  ].join('\n');
+  assert.ok(treeSpells('cd C:/Users/u/code/claude-config') === false && treeSpells('C:/Users/u/code/claude-config'), 'the premise: a substring of a tree line');
+  const { inputs, served, edits } = transcriptParts(jsonl);
+  const scan = scanContamination({ transcripts: served, 'tool inputs': inputs, 'edit content': edits }, SCAN_ROOTS, { explains: treeSpells, lineExplains: treeLines, byLine: ['edit content'], written: ['tool inputs'], tmp });
+  assert.deepEqual(scan, {
+    flagged: [
+      { source: 'tool inputs', label: 'workspace', count: 1, paths: ['C:\\Users\\u\\code\\claude-config\\hooks\\README.md'] },
+      { source: 'edit content', label: 'workspace', count: 3, paths: ['C:/Users/u/code/claude-config/x', 'C:/Users/u/code/claude-config/hooks/bash-guard.mjs', 'C:/Users/u/code/claude-config'] },
+      { source: 'edit content', label: 'temp', count: 1, paths: ['/tmp'] },
+    ],
+    explained: [{ source: 'edit content', label: 'workspace', count: 3, paths: ['C:/Users/u/code/claude-config/hooks/bash-guard.mjs'] }],
+  });
+});
+
+test('treeHasLine (#279) answers whether a line is a whole line of a tree at its commit, LF or CRLF, never a substring or a later commit', () => {
+  const repo = tempDir('ab-treeline-');
+  const g = (...args) => {
+    const r = spawnSync('git', ['-C', repo, '-c', 'core.autocrlf=false', '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8', env: isolatedEnv(repo) });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  g('init', '--quiet');
+  writeFileSync(join(repo, 'lf.md'), '  "args": ["C:/Users/u/code/x.mjs"]\n-starts with a dash\n');
+  writeFileSync(join(repo, 'crlf.ps1'), '# memory by path: C:\\Users\\u\\code\r\nnext\r\n');
+  g('add', '-A');
+  g('commit', '--quiet', '-m', 'base');
+  const sha = g('rev-parse', 'HEAD');
+  writeFileSync(join(repo, 'lf.md'), 'later C:/Users/u/code/y\n');
+  g('commit', '--quiet', '-am', 'later');
+  const has = treeHasLine([{ repo, sha }]);
+  for (const l of ['  "args": ["C:/Users/u/code/x.mjs"]', '-starts with a dash', '# memory by path: C:\\Users\\u\\code']) assert.equal(has(l), true, l);
+  for (const l of ['"args": ["C:/Users/u/code/x.mjs"]', 'C:/Users/u/code/x.mjs', '# memory by path: C:\\Users\\u', 'later C:/Users/u/code/y', 'a\0b']) assert.equal(has(l), false, JSON.stringify(l));
+});
+
 test('scanContamination: each probe-m2 reach into the live repo flags, though the round tree spells its path (round-5 review, Major A)', () => {
   const reaches = [
     ['Bash', { command: 'cd C:/Users/u/code/claude-config && git show 246611065f65 --stat' }],
@@ -389,6 +473,53 @@ test('scanContamination on POSIX roots (CI on Linux): whole paths are reported, 
     ],
     explained: [],
   });
+});
+
+test('scanContamination right boundary (#279): a root followed by `.` or `:` and then a non-name character, or the end, is the root; code2 and code.bak are not', () => {
+  const roots = [...SCAN_ROOTS, { path: 'C:\\Users\\u\\.claude.json', label: '.claude.json' }];
+  // The round-6 probes (rv6/probe-ab.txt), as commands the session wrote.
+  const probes = [
+    ['cat C:/Users/u/.claude.json', '.claude.json', 'C:/Users/u/.claude.json'],
+    ['PATH=/c/Users/u/code:$PATH node x.mjs', 'workspace', '/c/Users/u/code'],
+    ['type C:\\Users\\u\\code.\\x', 'workspace', 'C:\\Users\\u\\code.\\x'],
+    ['ls C:\\Users\\u\\code.', 'workspace', 'C:\\Users\\u\\code'],
+    ['echo "C:/Users/u/code.";', 'workspace', 'C:/Users/u/code'],
+    ['dir C:\\Users\\u\\code:', 'workspace', 'C:\\Users\\u\\code'],
+  ];
+  for (const [command, label, path] of probes) {
+    const { inputs } = transcriptParts(toolCall('Bash', { command }));
+    assert.deepEqual(scanContamination({ 'tool inputs': inputs }, roots, { written: ['tool inputs'] }), { flagged: [{ source: 'tool inputs', label, count: 1, paths: [path] }], explained: [] }, command);
+  }
+  // A PATH list names each entry once.
+  assert.deepEqual(scanContamination({ log: 'PATH=/c/Users/u/code/a:/c/Users/u/code/b' }, roots).flagged, [{ source: 'log', label: 'workspace', count: 2, paths: ['/c/Users/u/code/a', '/c/Users/u/code/b'] }]);
+  for (const other of ['C:\\Users\\u\\code2\\x', 'C:/Users/u/code.bak/x', 'C:/Users/u/code..bak', 'C:\\Users\\u\\.claude-old\\x', 'C:/Users/u/.claude.json.bak']) {
+    assert.deepEqual(scanContamination({ log: `cat ${other}` }, roots), { flagged: [], explained: [] }, other);
+  }
+});
+
+test('scanContamination right boundary on POSIX roots (CI on Linux)', () => {
+  const roots = [{ path: '/tmp/w/code', label: 'workspace' }, { path: '/tmp/w/.claude', label: 'config' }, { path: '/tmp/w/.claude.json', label: '.claude.json' }];
+  const log = 'cat /tmp/w/.claude.json; PATH=/tmp/w/code:$PATH; ls /tmp/w/code./x /tmp/w/code2 /tmp/w/code.bak /tmp/w/.claude-old';
+  assert.deepEqual(scanContamination({ log }, roots).flagged, [
+    { source: 'log', label: 'workspace', count: 2, paths: ['/tmp/w/code', '/tmp/w/code./x'] },
+    { source: 'log', label: '.claude.json', count: 1, paths: ['/tmp/w/.claude.json'] },
+  ]);
+});
+
+test("scanRoots: the workspace, the config dir, the global .claude.json and its .backup, and temp; the .json pair only when it sits outside the config dir", () => {
+  const w = { workspace: '/h/code', config: '/h/.claude', temp: '/t' };
+  assert.deepEqual(scanRoots({ ...w, globalJson: '/h/.claude.json' }), [
+    { path: '/h/code', label: 'workspace' },
+    { path: '/h/.claude', label: 'config' },
+    { path: '/h/.claude.json', label: '.claude.json' },
+    { path: '/h/.claude.json.backup', label: '.claude.json.backup' },
+    { path: '/t', label: 'temp' },
+  ]);
+  // CLAUDE_CONFIG_DIR set: the files are <config>/.claude.json[.backup], which the config root already covers.
+  assert.deepEqual(scanRoots({ ...w, globalJson: '/h/.claude/.claude.json' }).map((r) => r.label), ['workspace', 'config', 'temp']);
+  // Claude Code keeps a .backup copy of the same account data beside .claude.json (#279).
+  const roots = scanRoots({ workspace: 'C:\\Users\\u\\code', config: 'C:\\Users\\u\\.claude', globalJson: 'C:\\Users\\u\\.claude.json', temp: 'C:\\T' });
+  assert.deepEqual(scanContamination({ log: 'cat C:/Users/u/.claude.json.backup' }, roots).flagged, [{ source: 'log', label: '.claude.json.backup', count: 1, paths: ['C:/Users/u/.claude.json.backup'] }]);
 });
 
 test("scanContamination knows git-bash's /tmp, which is the real temp whatever TEMP the round sets: a path under it flags, the round's own alias is masked", () => {
@@ -527,6 +658,26 @@ test('run.mjs and canary.mjs refuse to start without CLAUDE_CODE_OAUTH_TOKEN, an
   }
   assert.equal(existsSync(join(home, 'out')), false, 'nothing written');
   assert.equal(existsSync(join(home, 't', 'ab')), false, 'no round built');
+});
+
+test('canary.mjs (#279) removes its round when the round fails, and under --keep names it for removal', () => {
+  // The fixture workspace has no claude-config repo, so the checkout fetch throws after the round dir exists.
+  // The token is a dummy and AB_CLAUDE_BIN names no file: no claude runs.
+  for (const keep of [false, true]) {
+    const home = tempDir('ab-canary-fail-');
+    const env = { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-dummy', AB_CLAUDE_BIN: join(home, 'no-claude.mjs'), TEMP: join(home, 't'), TMP: join(home, 't'), TMPDIR: join(home, 't') };
+    const r = spawnHarness(join(AB, 'canary.mjs'), ['--arm', 'bare', '--out', join(home, 'out'), ...(keep ? ['--keep'] : [])], { home, env });
+    assert.notEqual(r.status, 0, `keep ${keep}`);
+    assert.match(r.stderr, /git -C .* fetch .* failed/, `keep ${keep}: the round build failed`);
+    const left = existsSync(join(home, 't', 'ab')) ? readdirSync(join(home, 't', 'ab')) : [];
+    if (keep) {
+      assert.equal(left.length, 1, 'the --keep round is left');
+      assert.ok(r.stdout.includes(`Remove-Item -Recurse -Force "${join(home, 't', 'ab', left[0])}"`), r.stdout);
+    } else {
+      assert.deepEqual(left, [], 'the round is removed');
+      assert.match(r.stdout, /removed the round dir/);
+    }
+  }
 });
 
 // ---- anonymizer ------------------------------------------------------------------------

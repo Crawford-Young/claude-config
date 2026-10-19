@@ -296,8 +296,14 @@ export function gateVerdict(gate, exit, out) {
 }
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// A path name character: anything but whitespace, a separator, a quote or a shell/JSON delimiter.
-const NAME = `[^\\s\\\\/"'\`<>|*?,;()[\\]{}]`;
+const DELIMS = `\\s\\\\/"'\`<>|*?,;()[\\]{}`;
+// A path name character: anything but whitespace, a separator, a quote, a shell/JSON delimiter or
+// `:`, which ends a PATH-list entry (a Windows name never holds one past its drive).
+const NAME = `[^${DELIMS}:]`;
+// Where a root spelling ends: before `:`, or before dots and then a non-name character or the end of
+// the text. So code:$PATH, code. and code.\x are the root (Windows drops trailing dots), and code2,
+// code.bak and .claude.json are not .claude or code.
+const RIGHT = `(?!\\.*[^${DELIMS}.:])`;
 // Where a /tmp path can start: the text's start, whitespace, a quote or delimiter, `=` or `:` (an env
 // assignment, a PATH list), or a JSON-escaped newline or tab. Not after a name character or a
 // separator, so x/tmp/y is no /tmp path.
@@ -337,31 +343,53 @@ const halve = (s) => s.replace(/\\\\/g, '\\');
 /** `s` with every escaping level undone: one backslash per separator. */
 const unescaped = (s) => (halve(s) === s ? s : unescaped(halve(s)));
 
-/** How often each source ({name: text}: transcripts, the session's tool inputs, the diff's added lines,
- *  gate logs) reached each real path ({path, label}) in any spelling: the after-the-fact check that a
- *  session and the code it wrote stayed out of the live workspace, config and temp (no OS barrier stops
- *  Bash on Windows). `mask` paths (the round itself, which sits under the real temp `tmp`) are blanked
- *  first. A hit in a `written` source (what the session wrote: its tool inputs, its diff) always flags:
- *  spelling the path in a command is the reach. Elsewhere, what the round served, a whole matched path
- *  that `explains` (the round's own tree spells it, at any escaping level) is explained, not flagged,
- *  and so is bare /tmp (Claude Code's own environment note names it).
- *  → {flagged, explained}: [{source, label, count, paths}]. */
-export function scanContamination(sources, roots, { mask = [], explains = () => false, tmp, written = [] } = {}) {
+/** The real paths the scan looks for: the workspace, the Claude config dir, the global .claude.json and
+ *  the .backup copy Claude Code keeps beside it (outside the config dir unless CLAUDE_CONFIG_DIR moves
+ *  them in, where the config root covers them) and temp. */
+export function scanRoots({ workspace, config, globalJson, temp }) {
+  const json = [
+    { path: globalJson, label: '.claude.json' },
+    { path: `${globalJson}.backup`, label: '.claude.json.backup' },
+  ];
+  return [{ path: workspace, label: 'workspace' }, { path: config, label: 'config' }, ...(isInside(globalJson, config) ? [] : json), { path: temp, label: 'temp' }];
+}
+
+/** How often each source ({name: text}: transcripts, the session's tool inputs and edit content, the
+ *  diff's added lines, gate logs) reached each real path ({path, label}) in any spelling: the
+ *  after-the-fact check that a session and the code it wrote stayed out of the live workspace, config and
+ *  temp (no OS barrier stops Bash on Windows). `mask` paths (the round itself, which sits under the real
+ *  temp `tmp`) are blanked first. A hit in a `written` source (what the session wrote: its tool inputs,
+ *  its diff) always flags: spelling the path in a command is the reach. A `byLine` source (the content
+ *  an Edit, Write or MultiEdit wrote) is read a line at a time: a hit is explained only when its whole
+ *  line (a trailing CR dropped) passes `lineExplains` (the checkout holds it verbatim as a line), so a
+ *  kept line explains and a new one, or a piece of a tree line, flags (user, 2026-10-19). Elsewhere, what
+ *  the round served, a whole matched path that `explains` (the round's own tree spells it, at any
+ *  escaping level) is explained, not flagged, and so is bare /tmp (Claude Code's own environment note
+ *  names it). → {flagged, explained}: [{source, label, count, paths}]. */
+export function scanContamination(sources, roots, { mask = [], explains = () => false, lineExplains = () => false, tmp, written = [], byLine = [] } = {}) {
   const masks = mask.flatMap((m) => pathSpellings(m, tmp).map((s) => s.text)).sort((a, b) => b.length - a.length);
+  const blank = (t) => masks.reduce((s, m) => s.replace(new RegExp(esc(m), 'gi'), ROUND_MASK), t);
+  // A spelling ends at a separator or a non-name character: C:\Users\u\code2 is not the workspace.
+  const patterns = roots.map(({ path, label }) => ({
+    label,
+    spellings: pathSpellings(path, tmp).map(({ text: v, sep, alias }) => ({ v, alias, re: new RegExp(`${alias ? ALIAS_START : ''}${esc(v)}${RIGHT}(?:${NAME}|${sep})*`, 'gi') })),
+  }));
   const flagged = [];
   const explained = [];
   for (const [source, raw] of Object.entries(sources)) {
     const wrote = written.includes(source);
-    const text = masks.reduce((t, m) => t.replace(new RegExp(esc(m), 'gi'), ROUND_MASK), raw);
-    for (const { path, label } of roots) {
+    const lined = byLine.includes(source);
+    const chunks = (lined ? raw.split('\n').map((l) => l.replace(/\r$/, '')) : [raw]).map((line) => ({ line, text: blank(line) }));
+    for (const { label, spellings } of patterns) {
       const hits = { flagged: [], explained: [] };
-      for (const { text: v, sep, alias } of pathSpellings(path, tmp)) {
-        // A spelling ends at a separator or a non-name character: C:\Users\u\code2 is not the workspace.
-        for (const [m] of text.matchAll(new RegExp(`${alias ? ALIAS_START : ''}${esc(v)}(?!${NAME})(?:${NAME}|${sep})*`, 'gi'))) {
-          const whole = m.replace(/[.:]+$/, '');
-          const bare = alias && whole.replace(/\/+$/, '').toLowerCase() === v.toLowerCase();
-          const ok = !wrote && (bare || [whole, halve(whole), halve(halve(whole))].some(explains));
-          hits[ok ? 'explained' : 'flagged'].push(unescaped(whole));
+      for (const { line, text } of chunks) {
+        for (const { v, alias, re } of spellings) {
+          for (const [m] of text.matchAll(re)) {
+            const whole = m.replace(/\.+$/, '');
+            const bare = alias && whole.replace(/\/+$/, '').toLowerCase() === v.toLowerCase();
+            const ok = lined ? lineExplains(line) : !wrote && (bare || [whole, halve(whole), halve(halve(whole))].some(explains));
+            hits[ok ? 'explained' : 'flagged'].push(unescaped(whole));
+          }
         }
       }
       for (const kind of ['flagged', 'explained']) {
@@ -373,20 +401,47 @@ export function scanContamination(sources, roots, { mask = [], explains = () => 
 }
 
 const TOOL_CALLS = new Set(['tool_use', 'server_tool_use']);
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
+const EDIT_FIELDS = ['old_string', 'new_string', 'content'];
 
-/** A Claude Code transcript (jsonl) in two parts: `inputs`, every tool call's input wherever a line
- *  records it (the commands, paths, patterns and file contents the session wrote; a request blob or a
- *  subagent's progress line repeats them), and `served`, the rest (tool results, loaded instructions,
- *  hook output, the model's prose). Each keeps the jsonl's JSON escaping. A line that isn't JSON goes
- *  to inputs whole: what the session wrote in it can't be told apart. */
+/** An Edit, Write or MultiEdit input split into the text of its content fields (top level and each of
+ *  `edits`, in order) and the rest (its file_path and flags). */
+function editParts(input) {
+  const texts = [];
+  const take = (o) => {
+    const rest = { ...o };
+    for (const k of EDIT_FIELDS) {
+      if (typeof o[k] !== 'string') continue;
+      texts.push(o[k]);
+      delete rest[k];
+    }
+    return rest;
+  };
+  const rest = take(input);
+  if (Array.isArray(input.edits)) rest.edits = input.edits.map((e) => (e && typeof e === 'object' ? take(e) : e));
+  return { texts, rest };
+}
+
+/** A Claude Code transcript (jsonl) in three parts: `inputs`, every tool call's input wherever a line
+ *  records it (the commands, paths and patterns the session wrote; a request blob or a subagent's
+ *  progress line repeats them); `edits`, the content fields an Edit, Write or MultiEdit carries
+ *  (old_string, new_string, content), as the text itself, JSON escaping undone; and `served`, the rest
+ *  (tool results, loaded instructions, hook output, the model's prose). inputs and served keep the
+ *  jsonl's JSON escaping. A line that isn't JSON goes to inputs whole: what the session wrote in it
+ *  can't be told apart. */
 export function transcriptParts(text) {
   const inputs = [];
+  const edits = [];
   const served = [];
   const strip = (o) => {
     if (Array.isArray(o)) return o.map(strip);
     if (!o || typeof o !== 'object') return o;
     if (TOOL_CALLS.has(o.type) && 'input' in o) {
-      inputs.push(JSON.stringify(o.input));
+      if (o.type === 'tool_use' && EDIT_TOOLS.has(o.name) && o.input && typeof o.input === 'object' && !Array.isArray(o.input)) {
+        const { texts, rest } = editParts(o.input);
+        edits.push(...texts);
+        inputs.push(JSON.stringify(rest));
+      } else inputs.push(JSON.stringify(o.input));
       return { ...o, input: null };
     }
     return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, strip(v)]));
@@ -402,7 +457,7 @@ export function transcriptParts(text) {
     }
     served.push(JSON.stringify(strip(j)));
   }
-  return { inputs: inputs.join('\n'), served: served.join('\n') };
+  return { inputs: inputs.join('\n'), edits: edits.join('\n'), served: served.join('\n') };
 }
 
 /** The lines a unified diff adds, read hunk by hunk: what the session wrote, not context the repo
