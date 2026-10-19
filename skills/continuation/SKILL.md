@@ -33,7 +33,7 @@ Read first:
 
 Unresolved: <decisions the next session must make, with the trade-off>
 Traps: <what will silently go wrong — especially anything that passes gates while wrong>
-Blockers first: <uncommitted work, unmerged branch, unrun migration>
+Blockers first: <uncommitted work, unmerged branch, unrun migration, background runs still live: wait for them, or post what's pending to the issue (10-16 strate window ended with gates unreported)>
 ===== CONTINUATION END =====
 ```
 ````
