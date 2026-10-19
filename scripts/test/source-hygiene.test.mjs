@@ -93,8 +93,8 @@ test('the helper covers every CLAUDE_* path override the harness reads', () => {
     encoding: 'utf8',
   });
   const read = new Set(src.match(/CLAUDE_[A-Z_]+/g));
-  // Not paths: identity, switches and thresholds (a test sets those per case).
-  const notPaths = new Set(['CLAUDE_PID', 'CLAUDE_LAND_NO_GH', 'CLAUDE_SPEND_NO_REFRESH', 'CLAUDE_CTX_WINDOW', 'CLAUDE_CTX_NUDGE', 'CLAUDE_CTX_WARN', 'CLAUDE_CTX_BLOCK']);
+  // Not paths: identity, credentials, switches and thresholds (a test sets those per case).
+  const notPaths = new Set(['CLAUDE_PID', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_LAND_NO_GH', 'CLAUDE_SPEND_NO_REFRESH', 'CLAUDE_CTX_WINDOW', 'CLAUDE_CTX_NUDGE', 'CLAUDE_CTX_WARN', 'CLAUDE_CTX_BLOCK']);
   const missing = [...read].filter((n) => !notPaths.has(n) && !OVERRIDE_NAMES.includes(n));
   assert.deepEqual(missing, [], 'add these to PATH_OVERRIDES in scripts/test/_spawn.mjs (or to notPaths if not a path)');
 });

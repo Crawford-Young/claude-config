@@ -642,6 +642,17 @@
    ]
   },
   {
+   "id": "script:ab",
+   "kind": "script",
+   "label": "ab/run.mjs",
+   "file": "scripts/ab/run.mjs",
+   "summary": "The #271 A/B, bare Claude Code vs the harness on 10 replayed tickets: run.mjs runs one round that round.mjs builds (the ticket at its parent with no route to the fix; its own home, Claude config, gh and git; the harness at the ticket's commit for the current arm), grade.mjs writes blind grading packets, canary.mjs proves what an arm loads against a local API stub.",
+   "rules": [
+    "A live round runs one (ticket, arm, run) and needs the user's clearance first; --dry-run prints its commands and estimate",
+    "Hand a grader the packets dir only, never blind-key.json"
+   ]
+  },
+  {
    "id": "script:export-harness",
    "kind": "script",
    "label": "export-harness.ps1",
@@ -1329,6 +1340,11 @@
   {
    "from": "script:guard-replay",
    "to": "store:transcripts",
+   "kind": "reads"
+  },
+  {
+   "from": "script:ab",
+   "to": "script:lib",
    "kind": "reads"
   },
   {

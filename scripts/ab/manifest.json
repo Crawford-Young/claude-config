@@ -1,0 +1,296 @@
+{
+  "$comment": "#271 A/B ticket set: 10 claude-config tickets. Round 5 (user, 2026-10-16): the A/B is harness only, so dog-eat-dog-13, strate-10 and strate-30 are dropped and claude-config-129, -178 and -124 added. parent = the main commit the PR's first commit landed on (merge~N for a rebase merge of N commits), checked against `gh pr view --json mergeCommit,commits` on 2026-10-16. lines = the PR's changed lines. harness = the claude-config commit the current arm runs, which is the parent (round 3, user: \"Harness at ticket's parent\", \"No memory\"). The prompt is tickets/<id>.md, the issue body as fetched 2026-10-16, except claude-config-124: its original body of 2026-10-09T02:35Z (user, 2026-10-19), because the 03:26Z edit, made between the parent and the fix commit, spells out the fix's implementation choices. gates = qa.mjs's list at the parent, run after the session; a gate's requireMatch/failIf make a green exit fail as CI would. Round 2 (director, 2026-10-16): claude-config-216 swapped for claude-config-193 (PR 229 also fixed #217).",
+  "issue": "Crawford-Young/claude-config#271",
+  "owner": "Crawford-Young",
+  "model": "claude-opus-5-5",
+  "effort": "high",
+  "permissionMode": "auto",
+  "runsPerArm": 2,
+  "prior": {
+    "usdPerRun": 9.25,
+    "turnsPerRun": 50,
+    "source": "#271 plan: about $370 for 40 runs; the turn figure is unmeasured"
+  },
+  "tickets": [
+    {
+      "id": "claude-config-220",
+      "path": "claude-config",
+      "issue": 220,
+      "kind": "debt",
+      "title": "debt(land): land.mjs sync should fast-forward a clean, strictly-behind main without a named path",
+      "pr": 231,
+      "merge": "b7d8b439486a779b1893d85f5734e5e3a9ebf990",
+      "parent": "8a7f289c6ee314eea26541ec41de4d326608fdfd",
+      "harness": "8a7f289c6ee314eea26541ec41de4d326608fdfd",
+      "lines": 139,
+      "why": "git-plumbing script change with a three-case test matrix plus doc edits; the commonest harness ticket shape",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-240",
+      "path": "claude-config",
+      "issue": 240,
+      "kind": "bug",
+      "title": "bug(worktree): husky repos get no hook stubs in a new worktree, so commitlint never runs",
+      "pr": 244,
+      "merge": "246611065f65983dd62b6b89d4707b06b83daa6a",
+      "parent": "e47723c3e9c9418d2ae0f78118a80d87d320a2ed",
+      "harness": "e47723c3e9c9418d2ae0f78118a80d87d320a2ed",
+      "lines": 70,
+      "why": "small bug with a design choice left open in the Done-when (create stubs or warn)",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-170",
+      "path": "claude-config",
+      "issue": 170,
+      "kind": "feat",
+      "title": "feat(worktree): commitlint base..HEAD before a push; teardown frees the serve port",
+      "pr": 191,
+      "merge": "230e7c19322ab2cb29fe626fb23c68d57a8aa76a",
+      "parent": "1765970460bbb687aa5f3187ca1ebec92ba82c4d",
+      "harness": "1765970460bbb687aa5f3187ca1ebec92ba82c4d",
+      "lines": 388,
+      "why": "two-part feature across a script and its tests, with Windows process handling",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-113",
+      "path": "claude-config",
+      "issue": 113,
+      "kind": "feat",
+      "title": "audit: per-model $ + effort axis, and a stale-model-stamp check",
+      "pr": 198,
+      "merge": "b82a98a73432ca50707fedd09a21fa34de471cad",
+      "parent": "c4bc39fa1c72fbcb1b2304b2119e10eb084a1b4f",
+      "harness": "c4bc39fa1c72fbcb1b2304b2119e10eb084a1b4f",
+      "lines": 333,
+      "why": "data-pipeline feature over transcript parsing plus a CI check and a doc re-derivation",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-226",
+      "path": "claude-config",
+      "issue": 226,
+      "kind": "bug",
+      "title": "bug(test): #167 linear-time depth test flakes on CI wall clock",
+      "pr": 236,
+      "merge": "f32f93123927f7eb95fce8fa928301460d0fa3fe",
+      "parent": "8a4d58679fb54572971685c56c9a4b6abe70d566",
+      "harness": "8a4d58679fb54572971685c56c9a4b6abe70d566",
+      "lines": 120,
+      "why": "flaky-test fix that must keep a regression detector (red against a quadratic stub)",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-183",
+      "path": "claude-config",
+      "issue": 183,
+      "kind": "debt",
+      "title": "debt(land): sync doesn't pre-check a file-vs-directory ff block",
+      "pr": 188,
+      "merge": "3ad635ded518c0d7c106dec83202dc31ea89d4d0",
+      "parent": "9724e2d9e8ea369d8e0744d97be80c73e674bd56",
+      "harness": "9724e2d9e8ea369d8e0744d97be80c73e674bd56",
+      "lines": 74,
+      "why": "narrow edge-case guard where a test fixture must keep reaching a failure branch",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-193",
+      "path": "claude-config",
+      "issue": 193,
+      "kind": "test",
+      "title": "test(hygiene): no harness script runs git push or gh pr create/merge itself",
+      "pr": 245,
+      "merge": "ff0c6a7de68ae67c8c5b6815369c63de6fa938c9",
+      "parent": "246611065f65983dd62b6b89d4707b06b83daa6a",
+      "harness": "246611065f65983dd62b6b89d4707b06b83daa6a",
+      "lines": 72,
+      "why": "a source-scanning hygiene test with a self-tested matcher, an allow-list case and a doc deletion",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-129",
+      "path": "claude-config",
+      "issue": 129,
+      "kind": "bug",
+      "title": "main-guard is a silent no-op when a script runs through a junction",
+      "pr": 134,
+      "merge": "c335c7e292a26f908b8efe4942da3ed3dc955a71",
+      "parent": "c06963573106d68aca935f89404f5866ed8f57ef",
+      "harness": "c06963573106d68aca935f89404f5866ed8f57ef",
+      "lines": 192,
+      "why": "cross-cutting fix: one shared helper replaces a guard copied into 9 hooks and scripts, proven by a test that runs a script through a Windows junction",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-178",
+      "path": "claude-config",
+      "issue": 178,
+      "kind": "debt",
+      "title": "debt(stop-reflect-gate): continuationAsked accepts any ask holding fresh|clear + continu",
+      "pr": 192,
+      "merge": "c2f6d40e82bb142dd65c0fb63ce98ad732c82575",
+      "parent": "230e7c19322ab2cb29fe626fb23c68d57a8aa76a",
+      "harness": "230e7c19322ab2cb29fe626fb23c68d57a8aa76a",
+      "lines": 71,
+      "why": "hook logic tightened from loose word matching to the shape of one ask, with a test that reads a skill file so a wording change fails CI",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    },
+    {
+      "id": "claude-config-124",
+      "path": "claude-config",
+      "issue": 124,
+      "kind": "feat",
+      "title": "verify-frontmatter: report synced skill + plugin listing bytes",
+      "pr": 133,
+      "merge": "c06963573106d68aca935f89404f5866ed8f57ef",
+      "parent": "47107d632f66c89227c9a155ef738417fde8efbb",
+      "harness": "47107d632f66c89227c9a155ef738417fde8efbb",
+      "lines": 220,
+      "why": "reporting feature in a CI gate script: recursive discovery, frontmatter parsing, CLI path overrides and a never-fail contract, tested on fixture dirs only",
+      "gates": [
+        {
+          "name": "test",
+          "cmd": "node --test \"scripts/test/*.test.mjs\"",
+          "requireMatch": "^(?:ℹ|#) tests [1-9]"
+        },
+        {
+          "name": "frontmatter",
+          "cmd": "node scripts/verify-frontmatter.mjs"
+        },
+        {
+          "name": "harness-map",
+          "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    }
+  ]
+}
