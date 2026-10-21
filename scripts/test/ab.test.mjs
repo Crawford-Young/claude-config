@@ -609,6 +609,17 @@ test('planRound fetches only the parent into a fresh repo, and both arms share e
   assert.deepEqual(cur.layout, p.layout);
 });
 
+test('planRound caps both arms of a ticket the same, from the prior, whatever a measured run spent (#288)', () => {
+  const m = parseManifest(manifestText([ticket()]));
+  const cap = (p) => p.claude.args[p.claude.args.indexOf('--max-budget-usd') + 1];
+  const measured = [{ ticketId: m.tickets[0].id, costUsd: 0.9, turns: 19 }];
+  const bare = planRound(m, m.tickets[0], 'bare', 1, WHERE, []);
+  const cur = planRound(m, m.tickets[0], 'current', 1, WHERE, measured);
+  assert.equal(cur.estimate.usd, 0.9, 'the printed estimate still learns from measured runs');
+  assert.equal(cap(cur), cap(bare), 'the second arm is not capped by the first arm\'s spend');
+  assert.equal(cur.estimate.budgetUsd, 20);
+});
+
 test('run.mjs --dry-run prints each round with its commands and estimate, and touches nothing', () => {
   const home = tempDir('ab-home-');
   const out = join(home, 'out');

@@ -539,7 +539,9 @@ export function planRound(manifest, ticket, arm, run, { tmp, workspace, out, rou
   const layout = roundLayout(ticket, roundId, { tmp, workspace });
   const source = join(workspace, ticket.path);
   const estimate = estimateRound(ticket, manifest, measured);
-  const budgetUsd = Math.ceil(2 * estimate.usd);
+  // The cap comes from the prior alone, so both arms of a ticket get the same one: a cap from measured
+  // runs would hold the second arm to the first arm's spend (#288).
+  const budgetUsd = Math.ceil(2 * estimateRound(ticket, manifest, []).usd);
   return {
     ticket,
     arm,
