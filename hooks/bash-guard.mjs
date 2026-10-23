@@ -34,15 +34,23 @@
 //      typed prompt defers to the older. A typed approval is ship words only
 //      ("lgtm push and pr", "ok, merge it"), with no question mark.
 //      Rule 11 keeps the model from writing that transcript (#190).
-//      Approval is single-use per verb, spent from a small state file keyed
-//      by the approving record's uuid, so one approval covers push → pr
-//      create → pr merge once each.
+//      State lives in a small file keyed by the approving record's uuid.
+//      When an approval's first gated call is a lone canonical command
+//      (canonicalShip: `[cd <abs path> &&] git push <remote> <branch>`,
+//      `gh pr create …` or `gh pr merge …`, nothing else but a redirect and
+//      a tail/head), it binds to the `host/owner/repo#branch` that call
+//      ships, read live, and covers that branch's later pushes, one PR create
+//      and one merge, which uses it up (#305). Every later gated call under a
+//      bound approval must be a lone canonical command too. Any other first
+//      call spends one-shot as before: each verb once.
 //      A command holding more than one gated verb is blocked outright (one
 //      gated verb per Bash call), so a compound never spends one approval twice.
 //      A remote branch delete (`push --delete`/`-d`, or every refspec `:branch`)
 //      is exempt like --dry-run; a push that also pushes a ref stays gated.
 //      A spend records its call's tool_use_id; if that call's transcript
-//      tool_result is_error, the next gated call refunds the spend (#147).
+//      tool_result is_error, the next gated call refunds the spend (#147). A
+//      bound approval refunds an errored create or merge, and is released
+//      when every call under it errored.
 //   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
 //      codegen, show-report, show-trace, open — need the user's browser consent
 //      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
@@ -54,7 +62,7 @@
 //      auto-memory dirs exempt) or a gate state file (push-gate-approvals,
 //      browser-gate-sessions, fable-clearance): rules 8 and 9 trust those, so
 //      one appended line would forge approval (#190). Deleting or moving away
-//      a state file counts too (it forgets single-use spends); deleting a
+//      a state file counts too (it forgets spends and bindings); deleting a
 //      transcript doesn't (it can only take an approval away). Read off parsed
 //      calls — redirects, tee, cp/mv/install/ln (a dir destination judged with
 //      each source's name in it, a link's source too), dd of=, sed/perl -i,
@@ -147,7 +155,7 @@
 // checked nothing, and a silent allow is invisible — a loud block is not.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isMain } from '../scripts/lib.mjs';
@@ -2685,6 +2693,400 @@ export function gatedVerb(raw, cwd, tool = null) {
   return gatedVerbs(raw, cwd, tool)[0] || null;
 }
 
+// ---- 8. the canonical ship command (#305) -----------------------------------
+// An approval binds to a branch only through a command the guard can read
+// whole: one push, PR create or merge, optionally after a cd to a literal
+// path and before a redirect and a tail/head. Any earlier step in the same
+// command could change what ships after the guard read it, so this grammar has
+// room for none. It has its own small tokenizer on the raw text: none of the
+// big parser's allowances apply.
+
+// A plain unquoted word character (`~` leads a path; `\` is one in PowerShell only).
+const SHIP_CHAR = /[A-Za-z0-9_./:@%+=-]/;
+// Ends an unquoted word.
+const SHIP_STOP = /[ \t;&|<>(){}\n\r]/;
+// The one shell expansion allowed (bash): a quoted heredoc fed to cat, as
+// Claude Code writes a PR body: "$(cat <<'EOF' … EOF\n)".
+const HEREDOC_SUB = /^\$\(cat <<(['"])([\w.-]+)\1\n/;
+// Marks a heredoc body in a word: data, never a name, path or ref.
+const OPAQUE = '\0';
+const PUSH_FLAG = /^(?:-u|--set-upstream|-q|--quiet|-v|--verbose|-f|--force|--force-with-lease(?:=.*)?|--force-if-includes|--progress|--no-progress|--porcelain)$/s;
+const REMOTE_NAME = /^[A-Za-z0-9][\w.-]*$/;
+// A branch name the guard can read: no `..`, `//`, leading `-`/`+`/`@`, or trailing `/` or `.`.
+const BRANCH = /^(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9_][\w./-]*(?<![./])$/;
+const PR_URL = /^https:\/\/[\w.-]+\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
+const GH_REPO_ARG = /^(?:[\w.-]+\/)?[\w.-]+\/[\w.-]+$/;
+const CREATE_VALUE = new Set(['-t', '--title', '-b', '--body', '-F', '--body-file', '-B', '--base', '-H', '--head', '-R', '--repo', '-l', '--label', '-a', '--assignee', '-r', '--reviewer', '-m', '--milestone', '-p', '--project', '-T', '--template']);
+const CREATE_BOOL = new Set(['-d', '--draft', '-f', '--fill', '--fill-first', '--fill-verbose', '--no-maintainer-edit']);
+const MERGE_VALUE = new Set(['-R', '--repo', '-t', '--subject', '-b', '--body', '-F', '--body-file', '--match-head-commit', '-A', '--author-email']);
+const MERGE_BOOL = new Set(['-r', '--rebase', '-s', '--squash', '-m', '--merge', '-d', '--delete-branch', '--delete-branch=true', '--delete-branch=false', '--auto', '--disable-auto', '--admin']);
+// The long name a short gh flag the guard reads stands for.
+const GH_LONG = { '-R': '--repo', '-H': '--head', '-F': '--body-file' };
+const TRUE_CFG = /^(?:true|yes|on|1)$/i;
+
+/** The command as tokens — `{ word, tilde }`, `{ op }` (`&&`, `;`, `|`) or
+ *  `{ redirect }` — or `{ why }` at the first thing outside the grammar.
+ *  `tilde` marks a word led by an unquoted `~` (home). `ps`: PowerShell's
+ *  quoting rules. */
+function shipTokens(raw, ps) {
+  const text = raw.replace(/\s+$/, '');
+  if (ps && /[\u2018-\u201f]/.test(text)) return { why: 'it holds a Unicode quote, which PowerShell reads as a quote' };
+  const tokens = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === ' ' || c === '\t') {
+      i++;
+      continue;
+    }
+    if (text.startsWith('&&', i) || c === ';' || (c === '|' && text[i + 1] !== '|')) {
+      const op = c === '&' ? '&&' : c;
+      tokens.push({ op });
+      i += op.length;
+      continue;
+    }
+    const redirect = /^(?:2>&1|2?>\/dev\/null)(?=[ \t]|$)/.exec(text.slice(i));
+    if (redirect) {
+      tokens.push({ redirect: redirect[0] });
+      i += redirect[0].length;
+      continue;
+    }
+    if (SHIP_STOP.test(c)) return { why: `it holds ${c === '\n' || c === '\r' ? 'a newline' : `"${c}"`} outside quotes` };
+    const start = i;
+    let word = '';
+    while (i < text.length && !SHIP_STOP.test(text[i])) {
+      const ch = text[i];
+      if (ch === "'") {
+        // bash: literal to the next quote; PowerShell: '' is a quote inside.
+        let j = i + 1;
+        for (;;) {
+          const k = text.indexOf("'", j);
+          if (k < 0) return { why: 'it has an unclosed quote' };
+          word += text.slice(j, k);
+          if (ps && text[k + 1] === "'") {
+            word += "'";
+            j = k + 2;
+            continue;
+          }
+          i = k + 1;
+          break;
+        }
+      } else if (ch === '"') {
+        const sub = !ps && HEREDOC_SUB.exec(text.slice(i + 1));
+        if (sub) {
+          // Closed at the first line that is the delimiter, followed by `)"`.
+          const delim = sub[2];
+          let pos = i + 1 + sub[0].length;
+          for (;;) {
+            const nl = text.indexOf('\n', pos);
+            const end = nl < 0 ? text.length : nl;
+            const line = text.slice(pos, end);
+            if (line === delim) {
+              if (!text.startsWith(')"', end + 1)) return { why: 'its heredoc body is followed by more than `)"`' };
+              i = end + 3;
+              break;
+            }
+            if (line.startsWith(`${delim})"`)) {
+              i = pos + delim.length + 2;
+              break;
+            }
+            if (nl < 0) return { why: 'its heredoc is never closed' };
+            pos = nl + 1;
+          }
+          word += OPAQUE;
+          continue;
+        }
+        // No expansion inside: bash escapes \" \\ and a line continuation,
+        // PowerShell doubles a quote ("").
+        let j = i + 1;
+        for (;;) {
+          const q = text[j];
+          if (q === undefined) return { why: 'it has an unclosed quote' };
+          if (q === '$' || q === '`') return { why: `it holds ${q} inside double quotes` };
+          if (q === '"' && !(ps && text[j + 1] === '"')) break;
+          if (q === '"' || (!ps && q === '\\' && /["\\\n]/.test(text[j + 1] ?? ''))) {
+            if (text[j + 1] !== '\n') word += text[j + 1];
+            j += 2;
+          } else {
+            word += q;
+            j++;
+          }
+        }
+        i = j + 1;
+      } else if (SHIP_CHAR.test(ch) || (ps && ch === '\\') || (ch === '~' && i === start && /^(?:[/ \t;&|]|$)/.test(text[i + 1] ?? ''))) {
+        if (ps && ch === '@' && i === start) return { why: 'it holds a PowerShell splat (@)' };
+        word += ch;
+        i++;
+      } else {
+        return { why: `it holds "${ch}" outside quotes` };
+      }
+    }
+    if (ps && word === '--%') return { why: "it holds PowerShell's --% stop-parsing token" };
+    // PowerShell 5.1 drops an empty argument to a native command and re-splits
+    // one holding a quote, or a backslash with a space: git or gh would read
+    // other args than these.
+    if (ps && (word === '' || word.includes('"') || (/\s/.test(word) && word.includes('\\')))) {
+      return { why: 'it holds an empty or quote-bearing argument, which PowerShell 5.1 passes to git or gh re-split' };
+    }
+    tokens.push({ word, tilde: text[start] === '~' });
+  }
+  return { tokens };
+}
+
+/** The existing dir a cd (`cd`: absolute only) or `git -C` word names from
+ *  `base`, or null. On Windows an absolute path must carry its drive (Git
+ *  Bash's `/c/…` is `C:/…`): a bare `/x` means different dirs to Git Bash, to
+ *  PowerShell and to this process. PowerShell passes a `-C ~` to git as is. */
+function shipDir(base, { word, tilde }, ps, cd) {
+  if (word.includes(OPAQUE) || (tilde && ps && !cd)) return null;
+  const drive = (s) => (process.platform === 'win32' ? s.replace(/^\/([a-zA-Z])(?:\/|$)/, (_, d) => `${d.toUpperCase()}:/`) : s);
+  // Bash's ~ is $HOME; this process's is homedir() (USERPROFILE on Windows).
+  if (tilde && !ps && process.env.HOME && resolve(drive(process.env.HOME)).toLowerCase() !== resolve(homedir()).toLowerCase()) return null;
+  let p = tilde ? expandHome(word) : word;
+  if (process.platform === 'win32') {
+    if (!ps) p = drive(p);
+    if (/^[a-zA-Z]:(?![\\/])/.test(p) || (isAbsolute(p) && !/^[a-zA-Z]:[\\/]/.test(p))) return null;
+  }
+  if (cd && !isAbsolute(p)) return null;
+  const dir = resolve(base ?? '', p);
+  try {
+    return statSync(dir).isDirectory() ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A remote URL, a gh `-R` value or a PR URL as one comparable `host/owner/repo`
+ *  string: scheme, credentials, port, `.git` and a `/pull/N` tail dropped,
+ *  lowercased; a bare `owner/repo` is on github.com. */
+function repoSlug(ref) {
+  let s = String(ref).trim().replace(/^[a-z][\w+.-]*:\/\//i, '').replace(/^[^@/]+@/, '');
+  s = s.replace(/^([^/:]+):(?!\d+\/)/, '$1/').replace(/^([^/]+):\d+\//, '$1/');
+  s = s.replace(/\/pull\/\d+.*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+  return s.split('/').length === 2 ? `github.com/${s}` : s;
+}
+
+/** A repo's remote, branch, push and url config in one read, as git sees it:
+ *  key → every value, in order (git's single-valued keys take the last).
+ *  Section and variable names come lowercased; subsections keep their case.
+ *  Empty when no key matches (git's exit 1, nothing printed); null when the
+ *  read failed (timeout, spawn error, any other exit) — callers fail closed. */
+export function gitConfig(repo) {
+  const r = spawnSync('git', ['-C', repo, 'config', '--get-regexp', '^(remote|branch|push|url)\\.'], { encoding: 'utf8', timeout: 4000 });
+  const noMatch = r.status === 1 && !r.stdout && !(r.stderr || '').trim();
+  if (r.error || (r.status !== 0 && !noMatch)) return null;
+  const cfg = new Map();
+  for (const line of (r.stdout || '').split('\n')) {
+    const sp = line.indexOf(' ');
+    const key = sp > 0 ? line.slice(0, sp) : line.trim();
+    if (key) cfg.set(key, [...(cfg.get(key) || []), sp > 0 ? line.slice(sp + 1).trim() : 'true']);
+  }
+  return cfg;
+}
+
+/** The value git uses for a single-valued key: the last one set. */
+const last = (cfg, key) => cfg.get(key)?.at(-1);
+
+/** The branch checked out in `dir`, or null (no dir, not a repo, detached HEAD). */
+const liveBranch = (dir) => (dir ? currentBranch(dir) || null : null);
+
+/** The `host/owner/repo` gh would act on from `repo`: a remote `gh repo
+ *  set-default` resolved, else upstream, github, origin, then the first. */
+function ghRemoteSlug(repo) {
+  const cfg = gitConfig(repo);
+  if (!cfg) return null;
+  const names = [...cfg.keys()].map((k) => /^remote\.(.+)\.url$/.exec(k)?.[1]).filter(Boolean);
+  const name = names.find((n) => cfg.has(`remote.${n}.gh-resolved`)) || ['upstream', 'github', 'origin'].find((n) => names.includes(n)) || names[0];
+  return name ? repoSlug(last(cfg, `remote.${name}.url`)) : null;
+}
+
+/** Why push config could send `git push <remote> <branch>` somewhere other
+ *  than `url` and that branch, or null. */
+function pushConfigRisk(cfg, remoteName, url, branch) {
+  const r = `remote.${remoteName}`;
+  // A remote from a legacy .git/remotes or .git/branches file, which this read can't see.
+  if (!cfg.has(`${r}.url`)) return `${r}.url is not in its config (a legacy remotes/branches file?)`;
+  if (cfg.has(`${r}.push`)) return `${r}.push maps its refspecs`;
+  // upstream/tracking send an explicit `<remote> <branch>` to the branch's
+  // upstream; simple (git's default) and the rest keep its name.
+  const mode = last(cfg, 'push.default');
+  const merges = cfg.get(`branch.${branch}.merge`) || [];
+  if (/^(?:upstream|tracking)$/i.test(mode ?? '') && merges.some((m) => m !== `refs/heads/${branch}`)) return `push.default=${mode} sends it to its upstream ${merges.join(', ')}`;
+  if (TRUE_CFG.test(last(cfg, `${r}.mirror`) ?? '')) return `${r}.mirror is set`;
+  if ((cfg.get(`${r}.pushurl`) || []).length > 1 || (!cfg.has(`${r}.pushurl`) && (cfg.get(`${r}.url`) || []).length > 1)) return `${r} pushes to more than one URL`;
+  for (const [k, vs] of cfg) {
+    if (/^url\..+\.(?:push)?insteadof$/.test(k) && vs.some((v) => url.startsWith(v))) return `${k} rewrites its URL`;
+  }
+  if (TRUE_CFG.test(last(cfg, 'push.followtags') ?? '')) return 'push.followTags pushes tags along';
+  const subs = last(cfg, 'push.recursesubmodules');
+  if (subs !== undefined && !/^(?:no|check|false)$/i.test(subs)) return `push.recurseSubmodules=${subs} pushes submodules along`;
+  return null;
+}
+
+/** A default PR head lookup: `gh pr view <ref> --json headRefName`, run from
+ *  the call's dir. Null on any failure — the caller fails closed. */
+function ghPrHead(ref, repoFlag, dir) {
+  const args = ['pr', 'view', ref, '--json', 'headRefName', '--jq', '.headRefName', ...(repoFlag ? ['-R', repoFlag] : [])];
+  const r = spawnSync('gh', args, { cwd: dir ?? undefined, encoding: 'utf8', timeout: 10000, windowsHide: true });
+  const head = r.status === 0 ? (r.stdout || '').trim() : '';
+  return head || null;
+}
+
+/** `git [-C <path>] push [flags] <remote> <branch>`'s target from `base`. */
+function pushShip(words, base, ps) {
+  let repo = base;
+  let i = 1;
+  if (words[1]?.word === '-C' && words[2]) {
+    repo = shipDir(base, words[2], ps, false);
+    if (!repo) return { why: `git -C ${words[2].word} is not a dir that exists` };
+    i = 3;
+  }
+  if (words[i]?.word !== 'push') return { why: 'its git call is not a plain `git [-C <path>] push`' };
+  const pos = [];
+  for (const { word: a } of words.slice(i + 1)) {
+    if (!a.startsWith('-')) pos.push(a);
+    else if (!PUSH_FLAG.test(a)) return { why: `push flag ${a} is not one the guard reads` };
+  }
+  if (pos.length !== 2) return { why: 'a push must name exactly `<remote> <branch>`' };
+  const [remote, ref] = pos;
+  if (!REMOTE_NAME.test(remote)) return { why: `"${remote}" is not a plain remote name` };
+  if (!repo || currentBranch(repo) === null) return { why: 'its dir is not a git checkout' };
+  const branch = ref === 'HEAD' ? liveBranch(repo) : ref.replace(/^refs\/heads\//, '');
+  if (!branch) return { why: 'HEAD is detached there' };
+  if (!BRANCH.test(branch) || branch.startsWith('refs/')) return { why: `"${ref}" is not a branch name the guard can read` };
+  const r = spawnSync('git', ['-C', repo, 'remote', 'get-url', '--push', '--all', remote], { encoding: 'utf8', timeout: 4000 });
+  const urls = r.status === 0 ? (r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean) : [];
+  if (urls.length !== 1) return { why: urls.length ? `remote "${remote}" pushes to more than one URL` : `"${remote}" is not a remote git can resolve there` };
+  const cfg = gitConfig(repo);
+  if (!cfg) return { why: 'its git config could not be read' };
+  const configured = last(cfg, `remote.${remote}.pushurl`) || last(cfg, `remote.${remote}.url`) || urls[0];
+  const risk = pushConfigRisk(cfg, remote, configured, branch) || pushConfigRisk(cfg, remote, urls[0], branch);
+  if (risk) return { why: risk };
+  return { verb: 'git push', target: `${repoSlug(urls[0])}#${branch}`, use: {} };
+}
+
+/** gh pr args read against its value and boolean flags: `{ flags, pos }`
+ *  (flag → its values, short names the guard reads under their long ones),
+ *  or `{ why }` for an unknown flag. */
+function ghArgs(args, value, bool) {
+  const flags = new Map();
+  const pos = [];
+  const add = (k, v) => flags.set(GH_LONG[k] ?? k, [...(flags.get(GH_LONG[k] ?? k) || []), v]);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith('-')) pos.push(a);
+    else if (bool.has(a)) add(a, true);
+    else {
+      const eq = a.startsWith('--') ? a.indexOf('=') : -1;
+      const name = eq > 0 ? a.slice(0, eq) : a;
+      const v = eq > 0 ? a.slice(eq + 1) : args[++i];
+      if (!value.has(name)) return { why: `gh flag ${a} is not one the guard reads` };
+      if (v === undefined) return { why: `gh flag ${a} has no value` };
+      add(name, v);
+    }
+  }
+  if ((flags.get('--repo') || []).length > 1 || (flags.get('--head') || []).length > 1) return { why: 'it names --repo or --head twice' };
+  return { flags, pos };
+}
+
+/** The repo a gh pr call acts on: -R, else a PR URL, else `dir`'s gh remote. */
+function ghRepo(flags, dir, url) {
+  const flag = flags.get('--repo')?.[0];
+  if (flag !== undefined && (flag.includes(OPAQUE) || !GH_REPO_ARG.test(flag))) return { why: `-R ${flag} is not OWNER/REPO` };
+  const fromFlag = flag && repoSlug(flag);
+  const fromUrl = url && repoSlug(url);
+  if (fromFlag && fromUrl && fromFlag !== fromUrl) return { why: 'its -R and PR URL name different repos' };
+  const slug = fromFlag || fromUrl || (dir && currentBranch(dir) !== null ? ghRemoteSlug(dir) : null);
+  return slug ? { slug, owner: slug.split('/')[1] } : { why: 'the guard can read no repo for it (no -R, and its dir is not a checkout with a remote)' };
+}
+
+/** `gh pr create [flags]`'s target from `dir`. */
+function createShip(args, dir) {
+  const p = ghArgs(args, CREATE_VALUE, CREATE_BOOL);
+  if (p.why) return p;
+  if (p.pos.length) return { why: 'gh pr create takes no positional args' };
+  if ((p.flags.get('--body-file') || []).includes('-')) return { why: '--body-file - reads stdin' };
+  const repo = ghRepo(p.flags, dir, null);
+  if (repo.why) return repo;
+  const head = p.flags.get('--head')?.[0];
+  const [, owner, named] = head === undefined ? [] : /^(?:([^:]*):)?(.*)$/s.exec(head);
+  if (owner !== undefined && owner.toLowerCase() !== repo.owner) return { why: `its head ${head} is in another owner's fork` };
+  const branch = head === undefined ? liveBranch(dir) : named;
+  if (!branch || !BRANCH.test(branch)) return { why: head === undefined ? 'no branch is checked out in its dir' : `--head ${head} is not a branch name the guard can read` };
+  return { verb: 'gh pr create', target: `${repo.slug}#${branch}`, use: { create: true } };
+}
+
+/** `gh pr merge [<N>|#N|<branch>|<PR URL>] [flags]`'s target from `dir`. */
+function mergeShip(args, dir, prHead) {
+  const p = ghArgs(args, MERGE_VALUE, MERGE_BOOL);
+  if (p.why) return p;
+  if (p.pos.length > 1) return { why: 'gh pr merge takes one PR argument' };
+  const auto = p.flags.has('--auto');
+  const off = p.flags.has('--disable-auto');
+  if (auto && off) return { why: 'it holds both --auto and --disable-auto' };
+  const [arg] = p.pos;
+  const isUrl = arg !== undefined && PR_URL.test(arg);
+  const repo = ghRepo(p.flags, dir, isUrl ? arg : null);
+  if (repo.why) return repo;
+  let branch;
+  if (arg === undefined) branch = p.flags.has('--repo') ? null : liveBranch(dir);
+  else if (/^#?\d+$/.test(arg) || isUrl) branch = prHead(arg.replace(/^#/, ''), p.flags.get('--repo')?.[0] ?? null, dir);
+  else branch = arg;
+  if (!branch || !BRANCH.test(branch)) {
+    return { why: arg === undefined ? 'it names no PR (with -R, or outside a checkout on a branch)' : /^#?\d+$/.test(arg) || isUrl ? `gh could not look up PR ${arg}'s head branch` : `"${arg}" is not a PR the guard can read` };
+  }
+  return { verb: 'gh pr merge', target: `${repo.slug}#${branch}`, use: auto ? { auto: true } : off ? {} : { merge: true } };
+}
+
+/** 8. A canonical ship command's `{ verb, target: 'host/owner/repo#branch', use }`
+ *  (use: this call's create / auto / merge), read live from the checkout,
+ *  remotes and config; or `{ why }` when `raw` is anything else:
+ *  `[cd <abs path> SEP] CALL [2>&1 | >/dev/null | 2>/dev/null]* [| tail|head -N]`,
+ *  SEP `&&` in bash, `;` or `&&` in PowerShell, CALL a push, PR create or
+ *  merge in the shapes hooks/README.md rule 8 lists.
+ *  `deps.prHead(ref, repoFlag, dir)` looks up a PR's head branch (gh by default). */
+export function canonicalShip(raw, cwd, tool = null, deps = {}) {
+  const ps = tool === 'PowerShell';
+  const lexed = shipTokens(String(raw ?? ''), ps);
+  if (lexed.why) return lexed;
+  const t = lexed.tokens;
+  let base = typeof cwd === 'string' ? cwd : null;
+  let k = 0;
+  if (t[0]?.word === 'cd') {
+    // Bash's `;` would run the call in the old dir if the cd failed; PowerShell
+    // 5.1 has no `&&`.
+    if (!t[1]?.word || !(t[2]?.op === '&&' || (ps && t[2]?.op === ';'))) return { why: 'a cd before the call must be `cd <absolute path> &&`' };
+    // Set-Location reads [ ] * ? as wildcards, quoted or not, and its failure
+    // doesn't stop the call.
+    if (ps && /[[\]*?]/.test(t[1].word)) return { why: `PowerShell's cd reads the wildcard chars in ${t[1].word}` };
+    base = shipDir(null, t[1], ps, true);
+    if (!base) return { why: `cd ${t[1].word} is not an absolute path to a dir that exists` };
+    k = 3;
+  }
+  const words = [];
+  while (t[k]?.word !== undefined) words.push(t[k++]);
+  while (t[k]?.redirect) k++;
+  if (t[k]?.op === '|') {
+    const [cmd, a, b] = [t[k + 1]?.word, t[k + 2]?.word, t[k + 3]?.word];
+    if (!/^(?:tail|head)$/.test(cmd ?? '')) return { why: 'its pipe goes to something other than tail or head' };
+    if (/^-\d+$/.test(a ?? '')) k += 3;
+    else if (a === '-n' && /^\d+$/.test(b ?? '')) k += 4;
+    else return { why: 'its tail/head takes something other than -N or -n N' };
+  }
+  if (k < t.length) return { why: `it carries another step (${t[k].op ? `\`${t[k].op}\`` : 'a redirect or word out of place'})` };
+  const w = words.map((x) => x.word);
+  const env = Object.keys(process.env);
+  const gitEnv = env.find((e) => /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|NAMESPACE|CONFIG.*)$/i.test(e));
+  if (gitEnv) return { why: `the hook's env sets ${gitEnv}` };
+  if (w[0] === 'git') return pushShip(words, base, ps);
+  if (w[0] === 'gh' && w[1] === 'pr' && (w[2] === 'create' || w[2] === 'merge')) {
+    const ghEnv = env.find((e) => /^GH_(?:REPO|HOST)$/i.test(e));
+    if (ghEnv) return { why: `the hook's env sets ${ghEnv}` };
+    return w[2] === 'create' ? createShip(w.slice(3), base) : mergeShip(w.slice(3), base, deps.prHead ?? ghPrHead);
+  }
+  return { why: 'its call is not `git push`, `gh pr create` or `gh pr merge`' };
+}
+
 const APPROVE_RE = /\b(commit|push|pr|pull request|merge|ship|land)\b/i;
 
 /** Does some answer value read as approving (mentions the act) without also
@@ -2830,18 +3232,39 @@ export function latestApproval(transcriptPath) {
  *  that spent it, so a later gated call can refund a spend whose call errored. */
 const IDS_KEY = '@ids';
 
-/** Did the transcript record an errored tool_result for tool_use `id`? */
-function toolResultErrored(transcriptPath, id) {
+/** The tool_use ids among `ids` whose transcript tool_result errored, in one
+ *  read. An unreadable transcript or a torn line counts as no error: no refund
+ *  is the safe answer. */
+function erroredCalls(transcriptPath, ids) {
+  const want = new Set(ids);
+  const out = new Set();
+  let text = '';
   try {
-    for (const l of readFileSync(transcriptPath, 'utf8').split('\n')) {
-      if (!l || l[0] !== '{' || !l.includes(id)) continue;
-      const content = JSON.parse(l)?.message?.content;
-      if (Array.isArray(content) && content.some((b) => b?.type === 'tool_result' && b.tool_use_id === id && b.is_error === true)) return true;
-    }
+    text = readFileSync(transcriptPath, 'utf8');
   } catch {
-    // Unreadable or torn line: no refund is the safe answer.
+    return out;
   }
-  return false;
+  for (const l of text.split('\n')) {
+    if (!l || l[0] !== '{' || !l.includes('"tool_result"')) continue;
+    try {
+      const content = JSON.parse(l)?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const b of content) if (b?.type === 'tool_result' && b.is_error === true && want.has(b.tool_use_id)) out.add(b.tool_use_id);
+    } catch {
+      // torn line
+    }
+  }
+  return out;
+}
+
+/** Keeps the newest 200 approval uuids, and their side-table ids. */
+function trimState(state) {
+  const ids = state[IDS_KEY] || {};
+  const keys = Object.keys(state).filter((k) => k !== IDS_KEY);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 200))) {
+    delete state[k];
+    for (const v of Object.keys(ids)) if (v.startsWith(`${k}|`)) delete ids[v];
+  }
 }
 
 /** Has `verb` already been spent against approval `uuid`? Records it spent on
@@ -2853,7 +3276,7 @@ function spend(uuid, verb, file, toolUseId, transcriptPath) {
   const ids = state[IDS_KEY] || {};
   const idKey = `${uuid}|${verb}`;
   let entry = state[uuid] || [];
-  if (entry.includes(verb) && ids[idKey] && toolResultErrored(transcriptPath, ids[idKey])) {
+  if (entry.includes(verb) && ids[idKey] && erroredCalls(transcriptPath, [ids[idKey]]).has(ids[idKey])) {
     entry = entry.filter((v) => v !== verb);
     delete ids[idKey];
   }
@@ -2861,24 +3284,79 @@ function spend(uuid, verb, file, toolUseId, transcriptPath) {
   state[uuid] = [...entry, verb];
   if (toolUseId) ids[idKey] = toolUseId;
   state[IDS_KEY] = ids;
-  const keys = Object.keys(state).filter((k) => k !== IDS_KEY);
-  if (keys.length > 200) {
-    for (const k of keys.slice(0, keys.length - 200)) {
-      delete state[k];
-      for (const v of Object.keys(ids)) if (v.startsWith(`${k}|`)) delete ids[v];
-    }
-  }
+  trimState(state);
   writeState(file, state);
   return false;
 }
 
+// The tool_use ids a binding remembers; past this it can no longer be released.
+const MAX_BOUND_CALLS = 50;
+
+/** A state entry binding an approval to a branch (#305); an array is a
+ *  one-shot approval's spent verbs. */
+const isBound = (e) => e !== null && typeof e === 'object' && !Array.isArray(e) && typeof e.target === 'string';
+
+/** Checks a canonical call (`{ target, use }`) against the binding `entry`
+ *  (null: none yet, so this call binds). Returns null when it may run,
+ *  `{ other }` naming the bound target, `{ merged }` once a merge under it
+ *  used the approval up, or `{ again }` for a second create or merge. A
+ *  create or merge whose call errored is refunded first (#147). A call
+ *  without a tool_use_id makes its binding permanent. */
+function bind(state, uuid, entry, { target, use }, file, toolUseId, transcriptPath) {
+  const spent = entry ? ['merge', 'auto', 'create'].filter((k) => typeof entry[k] === 'string') : [];
+  if (spent.length) {
+    const errored = erroredCalls(transcriptPath, spent.map((k) => entry[k]));
+    for (const k of spent) if (errored.has(entry[k])) delete entry[k];
+  }
+  if (entry?.merge) return { merged: entry.target };
+  if (entry && entry.target !== target) return { other: entry.target, target };
+  if (use.create && entry?.create) return { again: 'gh pr create', target };
+  if ((use.merge || use.auto) && entry?.auto) return { again: 'gh pr merge', target };
+  const next = entry ?? { target, calls: [] };
+  next.calls = toolUseId && Array.isArray(next.calls) && next.calls.length < MAX_BOUND_CALLS ? [...next.calls, toolUseId] : null;
+  // A merge uses the approval up; an auto-merge uses up only the merge verb,
+  // so CI-fix pushes still follow it; a create runs once.
+  for (const k of ['create', 'auto', 'merge']) if (use[k]) next[k] = toolUseId || true;
+  delete state[uuid]; // re-inserted last: the newest binding survives the trim
+  state[uuid] = next;
+  trimState(state);
+  writeState(file, state);
+  return null;
+}
+
+/** 8. Approval `uuid`'s verdict on this gated call: binds it when this is its
+ *  first gated call and `readShip()` (canonicalShip, read only when needed)
+ *  finds a lone canonical command, checks a bound approval's later calls,
+ *  and spends one-shot (main's per-verb `spend`) otherwise. A binding whose
+ *  every call errored is released first, so this call counts as a first. */
+function shipGate(uuid, verb, readShip, file, toolUseId, transcriptPath) {
+  const state = readState(file);
+  let entry = state[uuid];
+  if (isBound(entry)) {
+    const calls = Array.isArray(entry.calls) ? entry.calls : [];
+    if (calls.length && erroredCalls(transcriptPath, calls).size === calls.length) {
+      delete state[uuid];
+      writeState(file, state);
+      entry = undefined;
+    }
+  }
+  if (entry === undefined || isBound(entry)) {
+    const ship = readShip();
+    if (!ship.why) return bind(state, uuid, entry ?? null, ship, file, toolUseId, transcriptPath);
+    if (entry) return { lone: entry.target, why: ship.why };
+  }
+  return spend(uuid, verb, file, toolUseId, transcriptPath) ? { spent: true } : null;
+}
+
 const askRemedy = (verb) =>
-  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry. A prompt the user typed themselves approves the same way ("lgtm push and pr"); a message from an agent, another session, a hook or a tool never does. One approval covers each gated verb once, so get one for the whole ship (push, PR, merge); a second push of the same verb needs a new one.`;
+  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry. A prompt the user typed themselves approves the same way ("lgtm push and pr"); a message from an agent, another session, a hook or a tool never does. One approval covers each gated verb once — but a lone canonical command (\`git push <remote> <branch>\`, \`gh pr create …\`, \`gh pr merge …\`, no other steps) as an approval's first gated call binds it to that branch for the whole ship (pushes, PR create, CI-fix pushes, merge) until the merge.`;
 
 /** 8. git push / gh pr create / gh pr merge need an approving answer in the
- *  transcript, spent once per verb. `transcriptPath` is read lazily — a
- *  non-gated command never touches disk here. */
-export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined, tool = null) {
+ *  transcript: bound to one branch's ship when its first gated call is a lone
+ *  canonical command, else spent once per verb. `transcriptPath` is read
+ *  lazily — a non-gated command never touches disk here. `deps.prHead`
+ *  replaces gh's PR head lookup (tests). */
+export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined, tool = null, deps = {}) {
   const verbs = gatedVerbs(raw, cwd, tool);
   if (!verbs.length) return null;
   if (verbs.length > 1) {
@@ -2887,7 +3365,7 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
   const [verb] = verbs;
 
   if (!transcriptPath || !existsSync(transcriptPath)) {
-    return `${verb} needs explicit user approval (CLAUDE.md: "No commit or push without explicit user approval"), but there is no transcript to read it from. ${askRemedy(verb)}`;
+    return `${verb} needs explicit user approval (CLAUDE.md: "Push, PR create, PR merge need explicit user approval (hook-gated); commits need none."), but there is no transcript to read it from. ${askRemedy(verb)}`;
   }
 
   let record;
@@ -2901,10 +3379,21 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
     return `${verb} needs explicit user approval; neither the user's latest typed prompt nor their latest AskUserQuestion answer approves it (a newer reply that doesn't approve overrides an older one that did). ${askRemedy(verb)}`;
   }
 
-  if (spend(record.uuid, verb, stateFile, toolUseId, transcriptPath)) {
-    return `${verb} already spent that approval — one push/PR per approving answer. ${askRemedy(verb)}`;
+  // Both readings must agree on the verb, or the call is not canonical.
+  const readShip = () => {
+    const ship = canonicalShip(raw, cwd, tool, deps);
+    return ship.why || ship.verb === verb ? ship : { why: `the guard reads it as ${verb}, not ${ship.verb}` };
+  };
+  const held = shipGate(record.uuid, verb, readShip, stateFile, toolUseId, transcriptPath);
+  if (held?.spent) return `${verb} already spent that approval — one push/PR per approving answer. ${askRemedy(verb)}`;
+  if (held?.lone) {
+    return `This approval covers ${held.lone}. After its first call, a push, PR create or merge under it must be a lone command — \`[cd <abs path> && ] git push [-u] <remote> <branch>\`, \`gh pr create … [--head <branch>]\`, \`gh pr merge <N|branch> …\`, optionally ending \`2>&1 | tail -N\` — with no other steps (${held.why}). Run other steps in their own Bash call. Nothing was spent.`;
   }
-
+  if (held?.merged) return `This approval's PR (${held.merged}) was merged, which used the approval up — ${verb} needs a new answer. ${askRemedy(verb)}`;
+  if (held?.again) return `This approval already ran ${held.again} for ${held.target}; a second ${held.again} needs a new answer. ${askRemedy(verb)}`;
+  if (held?.other) {
+    return `This approval covers ${held.other} (the branch its first push/PR/merge shipped); ${verb} ships ${held.target}. A push, PR or merge of another branch needs its own answer. ${askRemedy(verb)}`;
+  }
   return null;
 }
 

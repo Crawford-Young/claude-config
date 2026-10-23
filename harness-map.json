@@ -316,7 +316,7 @@
     "No commit on main in code repos (each git call judged in its own cd'd repo)",
     "claude-config main never switches branch or restores files",
     "claude --model fable needs FABLE OK",
-    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer or typed user prompt in the transcript (never a peer, tool, hook or notification record), single-use per verb; a remote branch delete (push --delete, -d, or :branch refspecs only) is exempt like --dry-run; a negator refuses only the act it negates",
+    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer or typed user prompt in the transcript (never a peer, tool, hook or notification record), single-use per verb — or, when its first gated call is a lone canonical push/PR create/merge command, bound to that branch's whole ship until its merge, every later gated call a lone canonical command for it (#305); a remote branch delete (push --delete, -d, or :branch refspecs only) is exempt like --dry-run; a negator refuses only the act it negates",
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
     "One gated verb per Bash call — a compound with two is blocked unspent",
     "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated",
@@ -703,7 +703,7 @@
    "kind": "store",
    "label": "push-gate-approvals.json",
    "file": "~/.claude/push-gate-approvals.json",
-   "summary": "Which push/PR verbs each AskUserQuestion approval (keyed by transcript record uuid) has already spent (#75). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
+   "summary": "Per push approval (keyed by transcript record uuid): the verbs it has spent (#75), or the repo#branch it is bound to with its calls' tool_use_ids, create and merge (#305). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
    "external": true
   },
   {

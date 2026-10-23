@@ -18,6 +18,8 @@ import {
   gatedVerbs,
   isApproving,
   pushGateReason,
+  canonicalShip,
+  gitConfig,
   browserCommand,
   substitutions,
   branchRules,
@@ -3791,4 +3793,391 @@ test("#264 review 2: cmd's del or erase of a matched dir deletes every file in i
     "find ~ -name .claude -exec cmd /c del {} ';'",
     "find ~ -name .claude -exec cmd /c del /f /q {} +",
   ]) forgesIn(c);
+});
+
+// --- #305: a lone canonical first call binds an approval to one branch's ship ---
+
+/** A repo on `branch` with one commit, whose origin is github.com/o/r. */
+function shipRepo(branch = 'feat/x', dir = tempDir('ship-')) {
+  execFileSync('git', ['init', '-q', '-b', branch, dir]);
+  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']);
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/o/r.git']);
+  return dir;
+}
+
+// A stub for gh's PR head lookup: PR 12 is feat/x's, PR 13 is feat/other's.
+const PR_HEADS = { 12: 'feat/x', 13: 'feat/other' };
+const prHead = (ref) => PR_HEADS[String(ref).replace(/^.*\/pull\//, '')] ?? null;
+const SHIP_X = 'github.com/o/r#feat/x';
+
+/** pushGateReason under one answer and one state file, in `dir`. */
+function shipGate(dir, records = [answered('Push + open PR')]) {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptOf(h, ...records);
+  return (cmd, { cwd = dir, tool = null, id } = {}) => pushGateReason(cmd, cwd, t, stateFile, id, tool, { prHead });
+}
+
+/** A transcript: an approving answer, then a tool_result per `results` entry
+ *  (tool_use_id → is_error). */
+function transcriptWithResults(dir, results) {
+  const lines = [answered('Push + open PR'), ...Object.entries(results).map(([id, isError]) => ({ type: 'user', uuid: `u-${id}`, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: 'x' }] } }))];
+  return transcriptOf(dir, ...lines);
+}
+
+test('#305: one answer covers a branch whole ship when its first call is a lone canonical command', () => {
+  const run = shipGate(shipRepo());
+  assert.equal(run('git push -u origin feat/x'), null);
+  assert.equal(run('gh pr create --fill'), null);
+  assert.equal(run('git push origin feat/x'), null, 'a CI-fix push');
+  assert.equal(run('git push --force-with-lease origin HEAD'), null, 'a second fix push');
+  assert.equal(run('gh pr merge --rebase'), null);
+  // The merge used the approval up.
+  assert.match(run('git push origin feat/x') || '', /merged/);
+  assert.match(run('gh pr merge 12 --rebase') || '', /merged/);
+});
+
+test('#305: under that answer, a second branch push, PR create or merge blocks', () => {
+  const run = shipGate(shipRepo());
+  assert.equal(run('git push origin feat/x'), null);
+  for (const cmd of ['git push origin feat/other', 'gh pr create --head feat/other', 'gh pr merge feat/other', 'gh pr merge 13 --rebase', 'gh pr merge 12 --rebase -R o/elsewhere']) {
+    assert.match(run(cmd) || '', /covers github\.com\/o\/r#feat\/x/, cmd);
+  }
+  assert.equal(run('git push origin feat/x'), null, 'the bound branch still passes');
+});
+
+test('#305: a newer refusing answer blocks a bound branch', () => {
+  const dir = shipRepo();
+  const { h, stateFile } = pushGateTmp();
+  const approve = answered('Push + open PR');
+  assert.equal(pushGateReason('git push origin feat/x', dir, transcriptOf(h, approve), stateFile), null);
+  assert.ok(pushGateReason('git push origin feat/x', dir, transcriptOf(h, approve, answered('Review first')), stateFile));
+  assert.ok(pushGateReason('gh pr merge --rebase', dir, transcriptOf(h, approve, typed('wait — hold off')), stateFile));
+});
+
+test('#305: a non-canonical first call spends one-shot as on main, and the answer never binds', () => {
+  const dir = shipRepo();
+  const run = shipGate(dir);
+  assert.equal(run(`cd ${dir.replaceAll('\\', '/')} && git add a && git commit -m m && git push -u origin feat/x`), null);
+  const again = run('git push origin feat/x');
+  assert.match(again || '', /already spent/);
+  assert.match(again, /lone canonical command/);
+  assert.equal(run('gh pr create --fill'), null);
+  assert.equal(run('gh pr merge --rebase'), null);
+  assert.match(run('gh pr merge --rebase') || '', /already spent/);
+});
+
+test('#305: a first call holding two gated verbs blocks as on main, and spends nothing', () => {
+  const run = shipGate(shipRepo());
+  assert.match(run('git push origin feat/x && gh pr create --fill') || '', /holds 2 gated verbs/);
+  // Nothing was spent: a canonical push still binds.
+  assert.equal(run('git push origin feat/x'), null);
+  assert.equal(run('git push origin feat/x'), null);
+});
+
+test('#305: once bound, a gated call that is not a lone canonical command blocks and spends nothing', () => {
+  const run = shipGate(shipRepo());
+  assert.equal(run('git push origin feat/x'), null);
+  const cases = [
+    ['git checkout main -- && git push origin HEAD'],
+    ['git remote -v set-url origin https://github.com/evil/x.git && git push origin feat/x'],
+    ['git fetch --set-upstream origin feat/x; git push'],
+    ['git show --output=.git/config x && git push origin feat/x'],
+    ['$x = git checkout main; git push origin HEAD', 'PowerShell'],
+    ["cat <<'checkout' > .git/HEAD\nref: refs/heads/main\ncheckout\ngit push origin HEAD"],
+    ['GIT_DIR=/x/.git git push origin feat/x'],
+    ['HOME=/tmp git push origin feat/x'],
+    ['git -c remote.origin.url=https://github.com/evil/x.git push origin feat/x'],
+    ['git push origin feat/x && git push origin feat/y'],
+    ['git push'],
+  ];
+  for (const [cmd, tool = null] of cases) {
+    assert.match(run(cmd, { tool }) || '', /lone command|gated verbs/, cmd);
+  }
+  assert.match(run('git checkout main -- && git push origin HEAD'), /covers github\.com\/o\/r#feat\/x.*Nothing was spent/s);
+  assert.equal(run('git push origin feat/x'), null, 'still bound to feat/x');
+});
+
+test('#305: the target is read live — a checkout or remote change made between calls moves it', () => {
+  const dir = shipRepo();
+  execFileSync('git', ['-C', dir, 'branch', 'other']);
+  const run = shipGate(dir);
+  assert.equal(run('git push origin HEAD'), null);
+  execFileSync('git', ['-C', dir, 'checkout', '-q', 'other']);
+  assert.match(run('git push origin HEAD') || '', /covers github\.com\/o\/r#feat\/x.*ships github\.com\/o\/r#other/s);
+  execFileSync('git', ['-C', dir, 'checkout', '-q', 'feat/x']);
+  assert.equal(run('git push origin HEAD'), null);
+  execFileSync('git', ['-C', dir, 'remote', 'set-url', 'origin', 'https://github.com/evil/x.git']);
+  assert.match(run('git push origin feat/x') || '', /ships github\.com\/evil\/x#feat\/x/);
+});
+
+test('#305: env text inside quoted PR titles and heredoc bodies is data, not a block', () => {
+  const dir = shipRepo();
+  let run = shipGate(dir);
+  assert.equal(run('git push origin feat/x'), null);
+  assert.equal(run('gh pr create --title "set HOME=/tmp and GIT_DIR" --body "HOME=x GIT_DIR=y" --head feat/x'), null);
+  run = shipGate(dir);
+  assert.equal(run('git push origin feat/x'), null);
+  assert.equal(run(`gh pr create --head feat/x --title t --body "$(cat <<'EOF'\n## Summary\nHOME=x; git checkout main\nEOF\n)"`), null);
+});
+
+test('#305: canonicalShip reads the target of each accepted shape', () => {
+  const dir = shipRepo();
+  const fwd = dir.replaceAll('\\', '/');
+  const ok = (cmd, cwd = dir, tool = null) => {
+    const r = canonicalShip(cmd, cwd, tool, { prHead });
+    assert.equal(r.target, SHIP_X, `${cmd} → ${JSON.stringify(r)}`);
+    return r;
+  };
+  assert.deepEqual(ok('git push -u origin feat/x 2>&1 | tail -1'), { verb: 'git push', target: SHIP_X, use: {} });
+  ok(`git -C ${fwd} push origin feat/x`, tempDir('nogit-'));
+  ok(`cd ${fwd} && git push origin refs/heads/feat/x >/dev/null 2>/dev/null`, tempDir('nogit-'));
+  ok(`cd ${fwd}; git push origin feat/x`, tempDir('nogit-'), 'PowerShell');
+  ok(`cd '${fwd}' && git push --force-with-lease=feat/x:abc --porcelain origin HEAD | head -n 5`);
+  ok("git push origin 'feat/x'");
+  assert.deepEqual(ok('gh pr merge 12 --rebase -R o/r', tempDir('nogit-')).use, { merge: true });
+  assert.deepEqual(ok('gh pr merge https://github.com/o/r/pull/12 --auto --squash').use, { auto: true });
+  assert.deepEqual(ok("gh pr merge '#12' --disable-auto").use, {});
+  assert.deepEqual(ok('gh pr create --fill --draft -B main').use, { create: true });
+  ok('gh pr create --head=o:feat/x --repo=o/r --title="a b"', tempDir('nogit-'));
+  ok(`gh pr create --head feat/x --body "$(cat <<'EOF'\nbody\nEOF\n)"`);
+  ok(`gh pr create --head feat/x --body "$(cat <<"EOF"\nbody\nEOF)"`);
+  ok("gh pr create --title 'it''s' --head feat/x", dir, 'PowerShell');
+  ok(`cd '${fwd}' && gh pr create --title 'a b' --head feat/x`, tempDir('nogit-'), 'PowerShell');
+  assert.equal(canonicalShip('gh pr merge 13', dir, null, { prHead }).target, 'github.com/o/r#feat/other');
+});
+
+test('#305: canonicalShip rejects every shape outside its grammar', () => {
+  const dir = shipRepo();
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'two', 'https://github.com/o/r.git']);
+  execFileSync('git', ['-C', dir, 'config', '--add', 'remote.two.pushurl', 'https://github.com/o/a.git']);
+  execFileSync('git', ['-C', dir, 'config', '--add', 'remote.two.pushurl', 'https://github.com/o/b.git']);
+  const detached = shipRepo('feat/d');
+  execFileSync('git', ['-C', detached, 'checkout', '-q', '--detach']);
+  const no = (cmd, cwd = dir, tool = null) => {
+    const r = canonicalShip(cmd, cwd, tool, { prHead });
+    assert.ok(r.why && !r.target, `${cmd} [${tool}] → ${JSON.stringify(r)}`);
+  };
+  for (const cmd of [
+    'git push origin "feat/$B"',
+    'git push origin "feat/`x`"',
+    'git push origin feat/*',
+    'git push origin feat/x #c',
+    'git push origin feat/x\\ y',
+    'cd rel && git push origin feat/x',
+    'cd - && git push origin feat/x',
+    `cd ${dir.replaceAll('\\', '/')}/missing && git push origin feat/x`,
+    'git push origin feat/x; gh pr view 1',
+    'git push origin feat/x | tee x',
+    'git push origin feat/x | tail -f',
+    'git push origin feat/x > file',
+    'git push origin feat/x\ngh pr view 1',
+    'git push origin feat/x &',
+    'git push origin feat/x || true',
+    '(git push origin feat/x)',
+    'git push origin feat/x < in',
+    'gh pr create --body "$(cat <<EOF\nbody\nEOF\n)"',
+    "gh pr create --body \"$(cat <<-'EOF'\nbody\nEOF\n)\"",
+    "gh pr create --body \"$(cat <<'EOF'\nbody\nEOF\necho hi\n)\"",
+    'git push origin',
+    'git push origin feat/x feat/y',
+    'git push origin feat/x:main',
+    'git push origin +feat/x',
+    'git push origin :feat/x',
+    'git push https://github.com/o/r.git feat/x',
+    'git push nope feat/x',
+    'git push two feat/x',
+    'git push --tags origin feat/x',
+    'git push --follow-tags origin feat/x',
+    'git push -uf origin feat/x',
+    'git push origin refs/tags/v1',
+    'git --git-dir=x push origin feat/x',
+    'git -c a.b=c push origin feat/x',
+    'env git push origin feat/x',
+    'git status',
+    'gh pr create --web',
+    'gh pr create --fill extra',
+    'gh pr create --body-file -',
+    'gh pr create --head evil:feat/x',
+    'gh -R o/r pr create --fill',
+    'gh pr merge 99',
+    'gh pr merge 12 13',
+    'gh pr merge --auto --disable-auto',
+    'gh pr merge -R o/r',
+    'gh pr merge --repo $R 12',
+  ]) {
+    no(cmd);
+  }
+  no('git push origin HEAD', detached);
+  no('git push origin feat/x', tempDir('nogit-'));
+  no('gh pr create --fill', tempDir('nogit-'));
+  // Bash's `;` after a cd runs the call in the old dir if the cd fails.
+  no(`cd ${dir.replaceAll('\\', '/')}; git push origin feat/x`);
+  for (const cmd of [
+    'git push origin feat/x,feat/y',
+    'git push origin ‘feat/x’',
+    'git push origin @a',
+    'git push origin feat/x --% y',
+    'git push origin "feat/$x"',
+    'cd C:/nope; git push origin feat/x',
+    // PowerShell 5.1 drops '' and re-splits a quote-bearing arg for a native command.
+    "gh pr create --title '' --head feat/x",
+    'gh pr create --title "say ""hi""" --head feat/x',
+    "gh pr create --title 'a\" --head \"feat/y' --head feat/x",
+    "gh pr create --title 'a b\\' --head feat/x",
+  ]) {
+    no(cmd, dir, 'PowerShell');
+  }
+  // PowerShell has no heredoc form.
+  no(`gh pr create --body "$(cat <<'EOF'\nbody\nEOF\n)"`, dir, 'PowerShell');
+  // The hook's own env can repoint git or gh.
+  for (const [k, cmd] of [['GIT_NAMESPACE', 'git push origin feat/x'], ['GH_REPO', 'gh pr create --fill'], ['GH_HOST', 'gh pr merge feat/x']]) {
+    process.env[k] = 'x';
+    try {
+      no(cmd);
+    } finally {
+      delete process.env[k];
+    }
+  }
+});
+
+test('#305: push config that could send a canonical push elsewhere is not canonical', () => {
+  for (const [k, v] of [
+    ['remote.origin.push', 'refs/heads/feat/x:refs/heads/main'],
+    ['remote.origin.mirror', 'true'],
+    ['remote.origin.url', 'https://github.com/evil/x.git'],
+    ['url.https://github.com/evil/.pushInsteadOf', 'https://github.com/o/'],
+    ['url.https://github.com/evil/.insteadOf', 'https://github.com/o/'],
+    ['push.followTags', 'true'],
+    ['push.recurseSubmodules', 'on-demand'],
+  ]) {
+    const dir = shipRepo();
+    execFileSync('git', ['-C', dir, 'config', '--add', k, v]);
+    assert.ok(canonicalShip('git push origin feat/x', dir).why, `${k}=${v}`);
+  }
+});
+
+test('#305 #147: a bound merge that errored is refunded; a binding whose every call errored is released', () => {
+  const dir = shipRepo();
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWithResults(h, { toolu_M: true, toolu_A: true, toolu_A2: true });
+  const run = (cmd, id, s = stateFile) => pushGateReason(cmd, dir, t, s, id, null, { prHead });
+  assert.equal(run('git push origin feat/x', 'toolu_P'), null);
+  assert.equal(run('gh pr merge --rebase', 'toolu_M'), null);
+  // The merge errored, so the PR is still open: a fix push and a retried merge pass.
+  assert.equal(run('git push origin feat/x', 'toolu_F'), null);
+  assert.equal(run('gh pr merge --rebase', 'toolu_M2'), null);
+  assert.match(run('git push origin feat/x', 'toolu_G') || '', /merged/);
+
+  // Every call of a binding errored: nothing shipped, so the next branch binds ...
+  const { stateFile: s2 } = pushGateTmp();
+  assert.equal(run('git push origin feat/typo', 'toolu_A', s2), null);
+  assert.equal(run('git push origin feat/typo', 'toolu_A2', s2), null);
+  assert.equal(run('git push origin feat/x', 'toolu_B', s2), null);
+  assert.match(run('git push origin feat/typo', 'toolu_C', s2) || '', /covers github\.com\/o\/r#feat\/x/);
+  // ... and a non-canonical next call spends one-shot instead.
+  const { stateFile: s3 } = pushGateTmp();
+  assert.equal(run('git push origin feat/typo', 'toolu_A', s3), null);
+  assert.equal(run('git status && git push origin feat/x', 'toolu_B', s3), null);
+  assert.match(run('git push origin feat/x', 'toolu_C', s3) || '', /already spent/);
+});
+
+test('#305: the block quotes the current CLAUDE.md approval rule', () => {
+  const { h, stateFile } = pushGateTmp();
+  assert.match(pushGateReason('git push', '/repo', join(h, 'none.jsonl'), stateFile) || '', /Push, PR create, PR merge need explicit user approval \(hook-gated\); commits need none\./);
+});
+
+test('#305 end-to-end through the real hook: one bound ship', () => {
+  const h = tmpHome();
+  shipRepo('feat/x', join(h, 'repo'));
+  const t = transcriptOf(h, typed('lgtm push and pr'));
+  const hook = (cmd) => guardRunT(`cd ~/repo && ${cmd}`, h, t);
+  assert.equal(hook('git push -u origin feat/x 2>&1 | tail -1'), 0);
+  assert.equal(hook('gh pr create --fill'), 0);
+  assert.equal(hook('git push origin feat/x'), 0);
+  assert.equal(hook('git push origin feat/other'), 2);
+  assert.equal(hook('git status && git push origin feat/x'), 2);
+  assert.equal(hook('gh pr merge --rebase'), 0);
+  assert.equal(hook('git push origin feat/x'), 2);
+});
+
+// --- #305 review 4 -----------------------------------------------------------
+
+/** The refs `git push --dry-run --porcelain <args>` would update in `dir`, as `src:dst`. */
+const dryRunRefs = (dir, ...args) =>
+  execFileSync('git', ['-C', dir, 'push', '--dry-run', '--porcelain', ...args], { encoding: 'utf8' })
+    .split('\n')
+    .filter((l) => /^[ *+=!-]\t/.test(l))
+    .map((l) => l.split('\t')[1]);
+
+test('#305 review 4.1: push.default upstream/tracking with another upstream maps an explicit push elsewhere — not canonical', () => {
+  // The mapping guarded against, proved on a local bare remote: upstream sends feat/x to main; simple does not.
+  const root = tempDir('pd-');
+  execFileSync('git', ['init', '-q', '--bare', join(root, 'bare.git')]);
+  const local = shipRepo('feat/x', join(root, 'w'));
+  execFileSync('git', ['-C', local, 'remote', 'set-url', 'origin', join(root, 'bare.git')]);
+  execFileSync('git', ['-C', local, 'config', 'branch.feat/x.remote', 'origin']);
+  execFileSync('git', ['-C', local, 'config', 'branch.feat/x.merge', 'refs/heads/main']);
+  execFileSync('git', ['-C', local, 'config', 'push.default', 'upstream']);
+  assert.deepEqual(dryRunRefs(local, 'origin', 'feat/x'), ['refs/heads/feat/x:refs/heads/main']);
+  execFileSync('git', ['-C', local, 'config', 'push.default', 'simple']);
+  assert.deepEqual(dryRunRefs(local, 'origin', 'feat/x'), ['refs/heads/feat/x:refs/heads/feat/x']);
+
+  const repo = (pairs) => {
+    const dir = shipRepo();
+    for (const [k, v] of [['branch.feat/x.remote', 'origin'], ...pairs]) execFileSync('git', ['-C', dir, 'config', '--add', k, v]);
+    return dir;
+  };
+  for (const mode of ['upstream', 'tracking']) {
+    const dir = repo([['push.default', mode], ['branch.feat/x.merge', 'refs/heads/main']]);
+    for (const cmd of ['git push origin feat/x', 'git push origin HEAD', 'git push origin refs/heads/feat/x']) {
+      assert.match(canonicalShip(cmd, dir).why || '', /push\.default/, `${mode}: ${cmd}`);
+    }
+  }
+  // Canonical again: an upstream of the same name, no upstream, a later simple (the last value wins), or git's default.
+  for (const pairs of [
+    [['push.default', 'upstream'], ['branch.feat/x.merge', 'refs/heads/feat/x']],
+    [['push.default', 'upstream']],
+    [['push.default', 'upstream'], ['push.default', 'simple'], ['branch.feat/x.merge', 'refs/heads/main']],
+    [['branch.feat/x.merge', 'refs/heads/main']],
+  ]) {
+    assert.equal(canonicalShip('git push origin feat/x', repo(pairs)).target, SHIP_X, JSON.stringify(pairs));
+  }
+});
+
+test('#305 review 4.2: a legacy .git/remotes or .git/branches remote is not canonical', () => {
+  const dir = shipRepo();
+  mkdirSync(join(dir, '.git', 'remotes'));
+  mkdirSync(join(dir, '.git', 'branches'));
+  writeFileSync(join(dir, '.git', 'remotes', 'legacy'), 'URL: https://github.com/o/r.git\n');
+  writeFileSync(join(dir, '.git', 'branches', 'old'), 'https://github.com/o/r.git\n');
+  for (const r of ['legacy', 'old']) {
+    // git resolves it ...
+    assert.match(execFileSync('git', ['-C', dir, 'remote', 'get-url', '--push', '--all', r], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }), /github\.com\/o\/r/);
+    // ... but the config the guard reads has no remote.<r>.url.
+    assert.ok(canonicalShip(`git push ${r} feat/x`, dir).why, r);
+  }
+});
+
+test('#305 review 4.3: a PowerShell cd path holding a wildcard char is not canonical', () => {
+  const parent = tempDir('wc-');
+  const dir = shipRepo('feat/x', join(parent, 'a[1]'));
+  const fwd = dir.replaceAll('\\', '/');
+  // Set-Location reads [ ] * ? as wildcards and fails without stopping the push.
+  for (const cmd of [`cd '${fwd}'; git push origin feat/x`, `cd '${fwd}' && git push origin feat/x`, "cd 'C:/x*'; git push origin feat/x", "cd 'C:/x?'; git push origin feat/x"]) {
+    assert.match(canonicalShip(cmd, parent, 'PowerShell').why || '', /wildcard/, cmd);
+  }
+  // Bash's cd and git -C take the path literally.
+  assert.equal(canonicalShip(`cd '${fwd}' && git push origin feat/x`, parent).target, SHIP_X);
+  assert.equal(canonicalShip(`git -C '${fwd}' push origin feat/x`, parent, 'PowerShell').target, SHIP_X);
+});
+
+test('#305 review 4.4: an unreadable git config fails closed', () => {
+  assert.equal(gitConfig(join(tempDir('nogit-'), 'missing')), null);
+  const empty = tempDir('cfg-');
+  execFileSync('git', ['init', '-q', empty]);
+  assert.deepEqual(gitConfig(empty), new Map(), 'no matching key is an empty read, not a failure');
+  const bad = shipRepo();
+  writeFileSync(join(bad, '.git', 'config'), '[core\n[remote "origin"]\n\turl = https://github.com/o/r.git\n');
+  assert.equal(gitConfig(bad), null);
+  for (const cmd of ['git push origin feat/x', 'gh pr create --fill', 'gh pr merge --rebase']) assert.ok(canonicalShip(cmd, bad).why, cmd);
 });
