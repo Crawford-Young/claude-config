@@ -5,7 +5,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness, raceHarness, tempDir } from './_spawn.mjs';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -88,23 +87,7 @@ test('run() with failClosed blocks instead, naming the hook', () => {
   const r = runHook(throwingHook(h, 'closey', ', { failClosed: true }'), '{}', h);
   assert.equal(r.code, 2, 'an opted-in guard must not fail open');
   assert.match(r.stderr, /closey/);
-  assert.doesNotMatch(r.stderr, /not gated/, 'bash-guard gates the Edit tool now (#190)');
   assert.match(readFileSync(errorLog(h), 'utf8'), /closey: Error: boom/);
-});
-
-test('bash-guard fails OPEN on the file tools: a throwing check allows the Write', () => {
-  const h = home();
-  const file = join(h, 'file-tool.mjs');
-  writeFileSync(
-    file,
-    `import { fileToolReason } from ${JSON.stringify(pathToFileURL(bashGuard).href)};\n` +
-      `const r = fileToolReason('Write', { file_path: 'x' }, '/work', () => { throw new Error('boom'); });\n` +
-      `process.stdout.write(String(r));\n`,
-  );
-  const r = runHook(file, '', h);
-  assert.equal(r.code, 0);
-  assert.equal(r.stdout, 'null', 'a crashed check must never lock out the Edit tool that fixes it');
-  assert.match(readFileSync(errorLog(h), 'utf8'), /bash-guard: Error: boom/);
 });
 
 test('bash-guard fails closed on an unreadable payload rather than allowing', () => {
@@ -338,23 +321,4 @@ test('shellSkillReads: segment-start wrappers (sudo/time/env, parens, braces, $v
   assert.deepEqual(shellSkillReads('{ cat skills/e/SKILL.md; }'), ['e']);
   assert.deepEqual(shellSkillReads('sleep 1 & cat skills/f/SKILL.md'), ['f']);
   assert.deepEqual(shellSkillReads('sudo grep x skills/a/SKILL.md'), []);
-});
-
-// #190: the files the approval gates trust, and only those
-test('isGateRecord: transcripts, globs that reach them and gate state files; never memory or elsewhere', async () => {
-  const { isGateRecord, claudeDir } = await import(hooklibUrl);
-  const p = join(claudeDir, 'projects');
-  assert.ok(isGateRecord(join(p, 'C--x', 's.jsonl')));
-  assert.ok(isGateRecord(join(p, 'C--x', 's', 'subagents', 'agent-1.jsonl')));
-  assert.ok(isGateRecord(`${p}/*/*.jsonl`));
-  assert.ok(isGateRecord(`${claudeDir}/*.json`), 'a glob that can reach a state file');
-  assert.ok(isGateRecord(join(p, 'C--x'), true), 'a cp/mv destination dir');
-  for (const f of ['push-gate-approvals.json', 'browser-gate-sessions.json', 'fable-clearance.json']) assert.ok(isGateRecord(join(claudeDir, f)), f);
-  assert.equal(isGateRecord(join(p, 'C--x', 'memory', 'MEMORY.md')), false);
-  assert.equal(isGateRecord(join(p, 'C--x', 'memory'), true), false);
-  assert.equal(isGateRecord(`${p}/C--x/memory/*.md`), false);
-  assert.equal(isGateRecord(join(p, 'C--x', 'notes.txt')), false);
-  assert.equal(isGateRecord(join(claudeDir, 'hook-errors.log')), false);
-  assert.equal(isGateRecord(join(tmpdir(), 'x.jsonl')), false);
-  assert.equal(isGateRecord(join(tmpdir(), '*.jsonl')), false);
 });

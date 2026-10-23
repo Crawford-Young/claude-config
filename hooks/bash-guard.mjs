@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // bash-guard.mjs — consolidated PreToolUse guard for Bash/PowerShell commands.
-// Port + extension of pretooluse-guard.ps1. Wire with matcher
-// "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit" (the file tools get rule 11 only).
+// Port + extension of pretooluse-guard.ps1. Wire with matcher "Bash|PowerShell".
 //
 // Blocks (exit 2):
 //   1. git add -A/--all/. and git commit -a/--all/-am, any flag order (sweeps
@@ -33,7 +32,6 @@
 //      approve blocks, and so does a typed prompt that refuses; a neutral
 //      typed prompt defers to the older. A typed approval is ship words only
 //      ("lgtm push and pr", "ok, merge it"), with no question mark.
-//      Rule 11 keeps the model from writing that transcript (#190).
 //      State lives in a small file keyed by the approving record's uuid.
 //      When an approval's first gated call is a lone canonical command
 //      (canonicalShip: `[cd <abs path> &&] git push <remote> <branch>`,
@@ -58,53 +56,16 @@
 //  10. A heredoc body holding a doubled backslash — the Bash tool's shell spawn
 //      collapses it, silently corrupting the file or commit message; use Write
 //      (#123, #137, #147).
-//  11. A write into a session transcript (`~/.claude/projects/**/*.jsonl`,
-//      auto-memory dirs exempt) or a gate state file (push-gate-approvals,
-//      browser-gate-sessions, fable-clearance): rules 8 and 9 trust those, so
-//      one appended line would forge approval (#190). Deleting or moving away
-//      a state file counts too (it forgets spends and bindings); deleting a
-//      transcript doesn't (it can only take an approval away). Read off parsed
-//      calls — redirects, tee, cp/mv/install/ln (a dir destination judged with
-//      each source's name in it, a link's source too), dd of=, sed/perl -i,
-//      truncate, curl/wget -o, rm, Copy-Item/Move-Item/New-Item/Tee-Object/
-//      Rename-Item/Remove-Item, a prefix's file (`time -o`, `strace -o`,
-//      `sudo -e`, sudoedit, script's log; #249) — with the target resolved
-//      through cd, literal vars and every home spelling ($HOME, $USERPROFILE,
-//      ${env:…}); a target that can't resolve blocks only when it looks
-//      aimed (a substitution or a var whose text names one, a
-//      for/read/foreach/`$_` var, a runner's `{}`/`$1`) in a command
-//      naming one. Inline interpreter code (`node -e`, `python -c`,
-//      `node - <<EOF`, PowerShell [IO.File]) blocks on a write call whose
-//      literal path is one, or whose computed path sits in a call naming
-//      one; a runner's payload (`find -exec`, `xargs`) is judged as a call,
-//      a pipe-fed xargs/parallel's once more with what its pipeline names as
-//      its `{}`: the words of the stages before it, through a group or shell
-//      line it sits in, and a here-string's (`echo ~/.claude | xargs rm -rf`,
-//      `xargs rm <<< ~/.claude`; #249). Input from a heredoc (`cat <<EOF |
-//      xargs rm`, its body scrubbed), a file (`xargs -a`, `< list`) or a
-//      command's computed output is out of sight. A find whose payload
-//      rm/mv's `{}` (through wrappers, runners or a shell's -c script)
-//      removes like -delete: what its -name/-iname/-path names in a plain
-//      conjunction, else its start dirs whole, and with a recursive rm or an
-//      mv a matched dir's whole tree (#214). Static, so best-effort: a
-//      script file is out of its sight, whether it builds the path at
-//      runtime or holds it literally (Write x.mjs, then `node x.mjs`). Known
-//      limits, accepted: a link or junction to an ancestor dir (`ln -s
-//      ~/.claude /tmp/c`, New-Item -ItemType Junction) and a write through
-//      it; archive extraction (tar -C, unzip -d, Expand-Archive); Windows
-//      path forms the OS folds (a trailing dot or space, `::$DATA`, `\\?\`);
-//      and inline code that mentions a gate record stays blocked for a
-//      pathlib/stream write even to a literal path. Wired on
-//      Write|Edit|MultiEdit|NotebookEdit too (editToolReason), where it fails
-//      OPEN, so a broken guard never locks out the Edit tool that fixes it.
+//  11. (removed, #291: a write into a transcript or a gate state file could
+//      forge an approval, but a model that would do that can edit this hook
+//      too, and no real session ever wrote one)
 //  12. A node/bun inline script (-e/--eval/-p/--print) or a deno eval script
 //      holding a substitution its shell runs before the runtime starts: in
 //      bash an unescaped backtick or `$(` outside single quotes, in PowerShell
 //      a `$(` (a backtick is its escape char and runs nothing). A JS template
 //      literal in a double-quoted `node -e` ran `cd ~/.claude` and `rm -f`
 //      during #249 (#258). Single quotes or a script file keep it literal.
-//      Read off parsed calls; a runner's payload (`xargs node -e "…"`) is out
-//      of its sight.
+//      Read off parsed calls.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -119,36 +80,22 @@
 // (`cd $d`, `Set-Location $_.FullName`) leaves the repo unknown until a cd
 // to an absolute, `~`/$HOME or bare (home) target, a popd back to a known dir,
 // or an absolute `git -C`: a commit there is blocked (#163). A quoted command handed to a
-// shell (`bash -c`, `pwsh -Command`, `eval`) is parsed as the command it is,
+// shell (`bash -c`, `sh -c`, `powershell -Command`, `eval`) is parsed as the command it is,
 // and so is every command substitution the shell would run — `…`, $(…), <(…),
 // bare or inside double quotes or an unquoted-delimiter heredoc (#92);
 // single-quoted text stays literal. A `{ … }` block body (PowerShell
 // if/foreach/ForEach-Object, a bash group) is parsed in place too (#159), and
 // so is an if/elseif/while condition, which PowerShell runs (#214). Every rule
 // matches a command by its name (commandName: the basename less a `.exe`, in
-// any case, so `C:/…/rm.exe` and `RM` are rm), read through the prefix
-// commands and their options (`sudo -u root`, `env -u X`, `timeout -s KILL 5`,
-// `nice -n 5`, `doas`, `setsid`, `taskset`, `flock f`, `systemd-run`) to the
-// call they run (#239), a shell line they hand a shell (`su -c`, `script -c`,
-// `flock f -c`, `watch`, `wsl`, `strace -o '|cmd'`) parsed as one, and a
-// runner's payloads (`xargs`, `find -exec`, `parallel ::: 'cmd'`) read as
-// calls of their own, fed what their pipeline names (#249; a PowerShell
-// literal stage's strings too, #256). A shell's command line is found past
-// -c in any flag cluster, an o/O in one taking the next word as bash reads
-// it and the rest of the cluster as zsh does, and a `--` (`bash -lc`, `bash
-// -co pipefail`, `zsh -coerrexit`; busybox ash and hush too, #264), in
-// PowerShell as powershell.exe 5.1 or pwsh 7 reads its own parameters,
-// abbreviated, `/`-style or whitespace-padded, an -EncodedCommand decoded
-// (#256), or in cmd past /c, /k or /r (shellLines), and a call inside a
-// group, shell line or payload belongs to the pipeline stage it runs in
-// (inStage), so rule 3 sees `watch pnpm test | tail`. A line rebuilt from
-// words the caller's shell already split and expanded (watch's, cmd's,
-// another reading's) is read with the caller's variables; a quoted `sh -c`
-// line keeps its own (#212). A long option that abbreviates several is read
-// each way it could resolve, and the strictest reading counts (longOptions;
-// a command too ambiguous to read is blocked unread). An env -S line whose
-// command is a ${VAR} env expands itself is blocked unread (UnreadableError),
-// and so is an -EncodedCommand the guard can't decode.
+// any case, so `C:/…/git.exe` and `GIT` are git), read through the prefixes
+// env, timeout, nohup and time and their options (`env -u X`, `timeout -s KILL 5`)
+// to the call they run (#239). A POSIX shell's command line is found past -c,
+// alone or in a flag cluster (`bash -lc`), PowerShell's past -Command or -c,
+// eval/iex's as their words (shellLine), and a call inside a group or shell
+// line belongs to the pipeline stage it runs in (inStage). These are the
+// shapes real sessions use: #291 cut the readers for every other prefix,
+// runner (xargs, find -exec, parallel) and shell (cmd, zsh, busybox), which
+// only guard development ever ran.
 
 // Fail-CLOSED (the exception to the fail-open house rule, see _hooklib.mjs):
 // errors log to ~/.claude/hook-errors.log and block. A guard that crashed has
@@ -165,12 +112,9 @@ import {
   browserGateReason,
   consumeClearance,
   denies,
-  isGateRecord,
   logBilled,
-  logError,
   pushGateStateFile,
   readState,
-  removesGateState,
   run,
   writeState,
 } from './_hooklib.mjs';
@@ -254,8 +198,6 @@ function closeGroup(s, at, open = '(', close = ')') {
 // the whole line, so a long command stays linear.
 const BLOCK_BEFORE = /(?:^|[\s(){};|&%]|(?:^|[^\w-])(?:else|try|finally|do))$/i;
 const BLOCK_AFTER = /^(?:$|[\s;|&)}<>]|(?:else|elseif|catch|finally|while|until)\b)/i;
-// A clause holding a find -exec/-execdir/-ok/-okdir payload.
-const FIND_EXEC = /(?:^|\s)-(?:exec|execdir|ok|okdir)\s/;
 
 /** The block opening at i — a PowerShell script block (`if (…) { … }`,
  *  `ForEach-Object { … }`) or a bash brace group (`{ a; b; }`) — as { body,
@@ -314,8 +256,7 @@ export function substitutions(s, quotesLiteral = false) {
  *  separators, so a flag in one clause can't be attributed to a command in
  *  another and quoted text stays with the command that owns it. A substitution
  *  body stays whole (`echo $(a; b)` is one clause), and so does a redirection
- *  (`2>&1`, `&>f`), and so does find's `-exec … \;` unless `tool` is
- *  PowerShell, where `\` is a word and the `;` still splits. With `pipes`, a
+ *  (`2>&1`, `&>f`). With `pipes`, a
  *  pipeline (`a | b`, `a |& b`) is one piece — `pipelines()`. Unbalanced
  *  quotes fall back to the plain split — never swallow the rest of the line.
  *  When `seps` is an array it is filled, parallel to the result, with the
@@ -325,7 +266,7 @@ export function substitutions(s, quotesLiteral = false) {
  *  placeholder and the array is filled, parallel to the result, with that
  *  clause's blocks as { head, body } (`head` is the clause text since the
  *  previous block: `if ($x) `, ` else `). */
-export function clauses(cmd, pipes = false, seps = null, blocks = null, tool = null) {
+export function clauses(cmd, pipes = false, seps = null, blocks = null) {
   const out = [];
   const before = [];
   const found = [];
@@ -359,10 +300,6 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null, tool = n
       cur += ch;
     } else if (ch === '&' && cmd[i + 1] !== '&' && (/[<>]/.test(cmd[i - 1]) || cmd[i + 1] === '>')) {
       cur += ch;
-    } else if (ch === '\\' && cmd[i + 1] === ';' && tool !== 'PowerShell' && FIND_EXEC.test(cur)) {
-      // find's escaped `\;` ends its -exec payload, not the clause. Anywhere
-      // else it splits: PowerShell reads `\` as a plain character.
-      cur += ch + cmd[++i];
     } else if (ch === '|' && cmd[i - 1] === '>' && cmd[i - 2] !== '\\') {
       // `>|` is a clobbering redirect, not a pipe. After a `\` it splits as a
       // pipe either way, which errs safe: the spawn's `\\`-to-`\` collapse
@@ -413,14 +350,8 @@ export class NestingError extends UnreadableError {
   }
 }
 
-const AMBIGUOUS_REASON =
-  "This command abbreviates so many long options ambiguously that the guard can't read every way it could run: it is blocked unread (#249). Spell the options out.";
-
-const ENV_VAR_REASON =
-  "This command runs an env -S line whose command is a ${VAR} that env expands itself, so the guard can't read what it runs: it is blocked unread (#249). Spell the command out.";
-
 /** The pipelines of a compound command: clauses that keep `|` inside. */
-const pipelines = (cmd, seps = null, tool = null) => clauses(cmd, true, seps, null, tool);
+const pipelines = (cmd, seps = null) => clauses(cmd, true, seps);
 
 /** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
  *  word. Unbalanced quotes: plain whitespace split. With `raw`, the same words
@@ -471,7 +402,7 @@ export function stripHeredocs(cmd) {
     const m = line.match(/<<(-?)\s*(["']?)([\w.-]+)\2/);
     if (!m) continue;
     // The heredoc's consumer is the command of the clause holding the `<<`
-    // (so `cat > run.sh <<EOF` is cat, not sh; `sudo bash <<EOF` is bash).
+    // (so `cat > run.sh <<EOF` is cat, not sh; `timeout 60 bash <<EOF` is bash).
     const consumer = commandName(unwrapCommand(words(clauses(line.slice(0, m.index)).pop() || ''))[0] ?? '');
     if (shellTool(consumer) || /^cmd$/i.test(consumer)) continue;
     const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
@@ -594,10 +525,10 @@ function gateRewrite(raw, tool) {
   // after a list separator, group it: `a && g | t && b` must not run b once `a` failed
   const swapped = `${lead}${g === segs[0] ? body : `{ ${body}; }`}${tail}`;
   const out = segs.map((s) => (s.sep ?? '') + (s === g ? swapped : s.raw)).join('');
-  return gatePiped(withPayloads(commands(scrub(out), null, false, false, newScope(null, tool)))) ? null : out;
+  return gatePiped(commands(scrub(out), null, false, false, newScope(null, tool))) ? null : out;
 }
 
-/** The static rules (1-4, 10-12) on one command. `tool` is the payload's
+/** The static rules (1-4, 10, 12) on one command. `tool` is the payload's
  *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
  *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
  *  reads them as aliases. It is also the shell the command is parsed in (newScope). */
@@ -634,8 +565,8 @@ export function staticCheck(raw, cwd = null, tool = null) {
 
   // 3. gate output piped onward — a gate command, by command word, with any
   //    command after it in the same pipeline (tail, head, grep, tee… all mask
-  //    it), or after the group, shell line or payload it runs in (inStage)
-  const cmds = withPayloads(commands(cmd, null, false, false, newScope(null, tool)));
+  //    it), or after the group or shell line it runs in (inStage)
+  const cmds = commands(cmd, null, false, false, newScope(null, tool));
   if (gatePiped(cmds)) {
     const base = 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped: redirect to a file, echo the rc, then filter the file.';
     const rewrite = gateRewrite(raw, tool);
@@ -649,9 +580,9 @@ export function staticCheck(raw, cwd = null, tool = null) {
     return 'PowerShell Set-Content/Out-File/Add-Content mojibake UTF-8 text. Use the Edit/Write tools for file mutations.';
   }
 
-  // 11. a write into a transcript or a gate state file (#190); then 12. a node
-  //     eval script the caller's shell substitutes into (#258)
-  return forgeWrite(raw, cwd, tool) || evalSubstitution(cmds);
+  // 12. a node eval script the caller's shell substitutes into (#258)
+  //     (11, writes into a gate's records, went with #291.)
+  return evalSubstitution(cmds);
 }
 
 /** 7. The billed model a shell-launched `claude` would run on, or null. `claude`
@@ -669,877 +600,70 @@ export function billedLaunch(raw) {
   return hit.toLowerCase().match(/[^\s"'=]*(?:fable|mythos)[^\s"']*/)[0];
 }
 
-// ---- 11. writes into a gate's records (#190) --------------------------------
-
-/** Does `text` name a transcript or a gate state file? `.claude…projects`
- *  (any separators, `'.claude','projects'` too) unless the path goes on into
- *  an auto-memory dir, or a state file under `.claude`. */
-function namesGateRecord(text) {
-  for (const m of text.matchAll(/\.claude[\s'"`,+/\\]*projects(?![\w-])([^\s'"`;|&<>()]*)/gi)) {
-    if (!/^[/\\][^/\\]+[/\\]memory(?:[/\\]|$)/i.test(m[1])) return true;
-  }
-  return namesGateState(text);
-}
-/** Does `text` name a gate state file (what a removal is judged by)? */
-const namesGateState = (text) => /\.claude[\s'"`,+/\\]*(?:browser-gate-sessions|push-gate-approvals|fable-clearance)/i.test(text);
-const INTERPRETER = /^(?:node|nodejs|deno|bun|python[\d.]*|py|perl|ruby|php)$/i;
-/** Flags that hand an interpreter its code inline: -e/--eval/-p (node, perl
- *  -ne/-pe/-pi -e), -c (python), -r (php). */
-const EVAL_FLAG = /^(?:-[a-zA-Z]*e|--eval(?:=.*)?|-p|--print|-c|-r)$/;
-/** Inline code's file writes (JS, Python, Ruby, .NET), by where the path is:
- *  the first argument, a write-mode open's first argument, or the second (a
- *  copy, rename or link destination). */
-const CODE_PATH_FIRST = /\b(?:(?:writeFile|appendFile|truncate|writeTextFile)(?:Sync)?|createWriteStream|(?:Write|Append)All(?:Text|Lines|Bytes)|Bun\.write|File\.write)\s*\(/gi;
-const CODE_OPEN = /\b(?:open|openSync|fopen)\s*\(/gi;
-const CODE_PATH_SECOND = /\b(?:(?:copyFile|cp|rename|symlink|link)(?:Sync)?|shutil\.\w+|os\.(?:replace|rename)|IO\.File\]::(?:Copy|Move|Replace))\s*\(/gi;
-/** Of those, the ones that take their first argument away (a move). */
-const CODE_MOVE = /rename|replace|move/i;
-/** Inline code's removals, path first (judged by removesGateState). */
-const CODE_REMOVE = /\b(?:(?:unlink|rm|rmdir)(?:Sync)?|os\.(?:remove|unlink)|shutil\.rmtree|IO\.File\]::Delete)\s*\(/gi;
-/** Writes whose path is no argument: a receiver (`Path(p).write_text`), a
- *  subprocess (any shell write), a .NET stream, a Perl `open(F, '>>…')`. */
-const CODE_OPAQUE = /\.write_(?:text|bytes)\s*\(|\.open\s*\(\s*(?:mode\s*=\s*)?['"][rbt]*[wax+]|child_process|subprocess|\b(?:execSync|execFileSync|spawnSync|spawn|system|popen)\s*\(|StreamWriter|FileStream|\bopen\s*\(?\s*(?:my\s+)?[$\w]+\s*,\s*['"]\+?>/i;
-/** PowerShell's .NET file calls, which run as the command itself. */
-const DOTNET_FILE = /\[(?:System\.)?IO\.(?:File|StreamWriter|FileStream)\]|New-Object\s+(?:System\.)?IO\.(?:StreamWriter|FileStream)/i;
-/** Commands that run other commands from their args, maybe with their input
- *  (`find -exec sh -c '… >> {}'`, `xargs cp`); each payload is judged as a
- *  call of its own (runnerPayloads, payloadCalls). One that runs the rest of
- *  its words, or a shell line, as they stand is a prefix (PREFIX), read
- *  through as the call it runs. */
-const RUNNER = /^(?:find|xargs|parallel)$/i;
-/** xargs' and parallel's options, as PREFIX tables (readOption); `optional`
- *  the short ones whose value is only ever attached (`-i{}`). */
-export const XARGS = {
-  value: 'adEILnPs',
-  optional: 'eil',
-  long: 'arg-file= delimiter= eof exit help! interactive max-args= max-chars= max-lines max-procs= no-run-if-empty null open-tty process-slot-var= replace show-limits verbose version!',
-};
-export const PARALLEL = {
-  value: 'aCdEIjJLnNPsS',
-  optional: 'eil',
-  // parallel isn't installed here: its options follow GNU parallel's man page
-  // (https://www.gnu.org/software/parallel/parallel.html, verified: 2026-10).
-  long: 'arg-file-sep= arg-file= arg-sep= bar basefile= basenameextensionreplace= basenamereplace= bf= bin= block-size= block-timeout= block= bner= bnr= bt= cat citation! colsep= combine-executable= combineexec= compress compress-program= ctagstring= decompress-program= delay= delimiter= dirnamereplace= dnr= dry-run env= eof er= eta extensionreplace= fifo files filter= group group-by= halt-on-error= halt= header= help! id= jl= joblog= jobs= keep-order limit= line-buffer link load= match= max-args= max-chars= max-lines max-procs= max-replace-args= memfree= memsuspend= milestone= minversion= nice= no-run-if-empty nonall null onall parens= _parset= pipe pipe-part plus process-slot-var= profile= progress quote recend= recstart= regexp replace res= results= resume resume-failed retries= return= rpl= rsync-opts= semaphore semaphore-name= semaphore-timeout= semaphorename= semaphoretimeout= seqreplace= shard= share-dir= shebang shell-completion= shuf skip-first-line slf= slotreplace= sql-and-worker= sql-master= sql-worker= sql= sqlandworker= sqlmaster= sqlworker= ssh-delay= ssh= sshdelay= sshlogin= sshloginfile= st= tag tagstring= tee tempdir= template= term-seq= termseq= tf= timeout= tmpdir= tmpl= total-jobs= total= transferfile= trc= trim= ungroup verbose version! wd= workdir= xapply xargs',
-};
-const COPY = /^(?:cp|mv|install|ln|rsync|scp|copy|move|cpi|mi|copy-item|move-item)$/i;
-const MOVE = /^(?:mv|move|mi|move-item)$/i;
-const REMOVE = /^(?:rm|unlink|del|erase|ri|rmdir|rd|remove-item|shred)$/i;
-const RENAME = /^(?:rename-item|ren|rni)$/i;
-/** PowerShell content cmdlets (and aliases): the first path is the file written. */
-const CONTENT = /^(?:set-content|add-content|clear-content|out-file|sc|ac|clc)$/i;
-/** PowerShell item cmdlets that take their source from the pipeline. */
-const PS_ITEM = /^(?:copy-item|cpi|copy|move-item|mi|move|remove-item|ri|del|erase|rm|rename-item|rni|ren)$/i;
-/** Pipeline steps that pass the items they get on unchanged. */
-const PASS_THROUGH = /^(?:select-object|select|sort-object|sort|where-object|where|\?)$/i;
-const DOWNLOAD = /^(?:curl|wget)$/i;
-const TEE = /^(?:tee|tee-object)$/i;
-const IN_PLACE = /^(?:sed|perl)$/i;
-const NEW_ITEM = /^(?:new-item|ni|truncate)$/i;
-/** PowerShell params whose value is a path to write (`-Destination x`, `-Destination:x`). */
-const PS_DEST = /^-dest\w*(?::(.*))?$/i;
-const PS_PATH = /^-(?:path|literalpath|filepath)(?::(.*))?$/i;
-
-/** The file targets of a clause's unquoted redirects (`>`, `>>`, `>|`, `&>`,
- *  `2>`, `>&file`), as words; an fd dup or close (`>&2`, `2>&1`, `>&-`) and
- *  a `>(…)` substitution are no file. */
-function redirectTargets(text) {
-  const out = [];
-  let quote = null;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote) {
-      if (ch === '\\' && quote === '"') i++;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      continue;
-    }
-    const sub = substitutionAt(text, i, false);
-    if (sub) {
-      i = sub.end - 1;
-      continue;
-    }
-    // An escaped `\>` counts too: the Bash tool's spawn collapses `\\` to `\`,
-    // so the backslashes before `>` can't be read off the text reliably.
-    if (ch !== '>') continue;
-    let j = i + 1;
-    if (text[j] === '>' || text[j] === '|') j++;
-    if (text[j] === '&') {
-      if (/[\d-]/.test(text[j + 1] ?? '')) {
-        i = j;
-        continue;
-      }
-      j++;
-    }
-    while (text[j] === ' ' || text[j] === '\t') j++;
-    let k = j;
-    for (let q = null; k < text.length; k++) {
-      if (q) {
-        if (text[k] === q) q = null;
-      } else if (text[k] === '"' || text[k] === "'") q = text[k];
-      else if (/[\s;|&<>()]/.test(text[k])) break;
-    }
-    if (k > j) out.push(words(text.slice(j, k))[0] ?? '');
-    i = k - 1;
-  }
-  return out;
-}
-
-/** A call's args up to its first redirect word — what follows is the redirect's. */
-function ownArgs(w) {
-  const end = w.findIndex((a, i) => i > 0 && /^[\d&]*[<>]/.test(a));
-  return w.slice(1, end === -1 ? w.length : end);
-}
-
 /** A command word's name, as every rule matches it: its basename, less a
- *  `.exe` (`C:/…/find.exe` is find). Windows finds a command whatever its
- *  case, in Git Bash as in PowerShell (`RM`, `Rm.EXE`), so the rules match
+ *  `.exe` (`C:/…/git.exe` is git). Windows finds a command whatever its
+ *  case, in Git Bash as in PowerShell (`GIT`, `Git.EXE`), so the rules match
  *  names case-insensitively; shell keywords and builtins keep their case. */
 const commandName = (word) => word.split(/[/\\]/).pop().replace(/\.exe$/i, '');
 
-const SUDO = {
-  value: 'aCcDgpRrTtUu',
-  stop: 'KlVv',
-  long: 'askpass auth-type= background bell chdir= chroot= close-from= command-timeout= edit group= help! host= login login-class= list! no-update non-interactive other-user= preserve-env preserve-groups prompt= remove-timestamp! reset-timestamp role= set-home shell stdin type= user= validate! version!',
-};
-const SU = {
-  value: 'cgGsw',
-  stop: 'hV',
-  long: 'command= fast group= help! login preserve-environment pty session-command= shell= supp-group= version! whitelist-environment=',
-  shell: /^(?:c|command|session-command)$/,
-  program: /^(?:s|shell)$/,
-  operands: 'none',
-  permute: true,
-};
-
-/** Commands that run the rest of their words as a command (`sudo -u root rm
- *  …`, `timeout 5 git push`), by name: the short options that take a value
- *  (`value`) and those after which nothing runs (`stop`: `command -v`,
- *  `sudo -l`); every long option (`long`), marked `=` when it takes a value
- *  and `!` when nothing runs after it; and how many words come before the
- *  command (`args`: timeout's duration, flock's lock file; with `numeric`
- *  only words that are numbers, as chrt may omit its priority). Any other
- *  option takes no value. By the name an option resolves to: the one whose value is
- *  a line of words (`split`: `env -S 'rm -rf x'`), or a shell line (`shell`:
- *  `su -c 'rm x'`, `flock f -c 'rm x'`), or a file it writes (`writes`: `time
- *  -o f`; with `pipes` a `|cmd` or `!cmd` value is a shell line fed its
- *  output: `strace -o '|cmd'`); the ones that make its operands files it
- *  writes (`edit`: `sudo -e f`) or the command after all (`command`: `watch
- *  -x`, `runuser -u`). What its operands are otherwise (`operands`): files
- *  it writes (sudoedit, script's log), a user whose shell (`program`: su
- *  -s) gets the words after it (`su bob -- -c 'x'`), or one shell line (watch, which
- *  `repeats` it); else the command. `either` holds short options that take
- *  a value in one build and not another (strace's -e/-u: Linux values, MSYS
- *  toggles): read as toggles, with the other reading run beside the call
- *  too. With `permute` an option may follow an operand, as getopt reads
- *  su's. `sub` is a word to skip before the command (Windows `sudo run`,
- *  `wsl ~`). */
-export const PREFIX = new Map(
+/** Commands that run the rest of their words as a command (`timeout 60 git
+ *  push`, `env -u X git push`, `nohup git push`, `time (…)`), by name: the short options
+ *  that take a value (`value`; in a cluster the first one takes the rest of
+ *  it, or the next word), every long option (`long`), marked `=` when it
+ *  takes a value and `!` when nothing runs after it, and how many words come
+ *  before the command (`args`: timeout's duration). Any other option takes
+ *  no value. The prefixes real sessions use (#239; #291 cut the rest). */
+const PREFIX = new Map(
   Object.entries({
-    sudo: { ...SUDO, edit: /^(?:e|edit)$/, sub: 'run' },
-    sudoedit: { ...SUDO, operands: 'files' },
-    doas: { value: 'u', stop: 'CL' },
-    su: SU,
-    runuser: { ...SU, value: 'cgGsuw', long: `${SU.long} user=`, command: /^(?:u|user)$/ },
-    pkexec: { long: 'disable-internal-agent help! keep-cwd user= version!' },
-    setsid: { long: 'ctty fork wait help! version!' },
     nohup: { long: 'help! version!' },
-    builtin: {},
-    command: { stop: 'vV' },
-    exec: { value: 'a' },
-    time: { value: 'fo', long: 'append format= help! output= portability quiet verbose version!', writes: /^(?:o|output)$/ },
+    time: { value: 'fo', long: 'append format= help! output= portability quiet verbose version!' },
     env: {
       value: 'aCPSu',
       long: 'argv0= block-signal chdir= debug default-signal help! ignore-environment ignore-signal list-signal-handling null split-string= unset= version!',
-      split: /^(?:S|split-string)$/,
     },
-    nice: { value: 'n', long: 'adjustment= help! version!' },
     timeout: { value: 'ks', long: 'foreground help! kill-after= preserve-status signal= verbose version!', args: 1 },
-    ionice: { value: 'cn', stop: 'pPu', long: 'class= classdata= help! ignore pgid! pid! uid! version!' },
-    stdbuf: { value: 'eio', long: 'error= help! input= output= version!' },
-    unbuffer: {},
-    busybox: { long: 'help! install! list! list-full!' },
-    taskset: { stop: 'hpV', long: 'all-tasks cpu-list help! pid! version!', args: 1 },
-    chrt: {
-      value: 'DPT',
-      stop: 'hmpV',
-      long: 'all-tasks batch deadline fifo help! idle max! other pid! reset-on-fork rr sched-deadline= sched-period= sched-runtime= verbose version!',
-      args: 1,
-      numeric: true,
-    },
-    flock: {
-      value: 'cEw',
-      stop: 'hV',
-      long: 'close command= conflict-exit-code= exclusive help! nb no-fork nonblock shared timeout= unlock verbose version!',
-      shell: /^(?:c|command)$/,
-      args: 1,
-    },
-    // -p attaches to a pid: Linux strace runs the command beside it, so it is
-    // a value option here; only MSYS strace runs no command with it (#264).
-    strace: {
-      value: 'abEImoOpPsSUX',
-      stop: 'hV',
-      either: 'eu',
-      long: 'abbrev= absolute-timestamps argv0= attach= buffer-size= columns= crack-error-numbers events flush-period= mask= new-window no-delta pid= timestamp toggle trace-children usecs const-print-style= daemonize debug decode-fds decode-pids= detach-on= env= fault= failed-only follow-forks help! inject= instruction-pointer interruptible= kvm= no-abbrev output= output-separately quiet raw= read= relative-timestamps seccomp-bpf signal= silent stack-trace stack-trace-frame-limit= status= string-limit= strings-in-hex successful-only summary summary-columns= summary-only summary-sort-by= summary-syscall-overhead= summary-wall-clock syscall-number syscall-times timestamps tips trace= trace-fds= trace-path= user= verbose= version! write=',
-      writes: /^(?:o|output)$/,
-      pipes: true,
-    },
-    'systemd-run': {
-      value: 'CEHMpu',
-      stop: 'h',
-      long: 'background= capsule= collect description= expand-environment= gid= help! host= ignore-failure json= machine= nice= no-ask-password no-block on-active= on-boot= on-calendar= on-clock-change on-startup= on-timezone-change on-unit-active= on-unit-inactive= path-property= pipe property= pty quiet remain-after-exit same-dir scope send-sighup service-type= setenv= shell slice= slice-inherit socket-property= system timer-property= uid= unit= user version! wait working-directory=',
-    },
-    script: {
-      value: 'BcEImOoT',
-      stop: 'hV',
-      long: 'append command= echo= flush force help! log-in= log-io= log-out= log-timing= logging-format= output-limit= quiet return timing version!',
-      shell: /^(?:c|command)$/,
-      writes: /^(?:B|I|O|T|log-in|log-io|log-out|log-timing)$/,
-      operands: 'files',
-      permute: true,
-    },
-    watch: {
-      value: 'nq',
-      stop: 'hv',
-      long: 'beep chgexit color differences equexit= errexit exec help! interval= no-color no-rerun no-title no-wrap precise version!',
-      command: /^(?:x|exec)$/,
-      operands: 'line',
-      repeats: true,
-    },
-    // wsl.exe runs its words as a line in the distro's default shell, or past
-    // -e/--exec as the command, from the home dir after a `~`; its management
-    // arguments run nothing (#264).
-    wsl: {
-      value: 'du',
-      stop: 'lstv',
-      long: 'cd= debug-shell! distribution= distribution-id= exec export! help! import! import-in-place! install! list! manage! mount! set-default! set-default-version! set-version! shell-type= shutdown! status! system terminate! uninstall! unmount! unregister! update! user= version!',
-      command: /^(?:e|exec)$/,
-      operands: 'line',
-      sub: '~',
-    },
   }),
 );
 
-/** The long options `name` may name in `spec`, as { name, takes, stops }:
- *  the option named so, else every option it abbreviates (`--adj` is
- *  --adjustment); none when the table doesn't know it. Getopt fails on an
- *  abbreviation of several, but the guard reads each way it could resolve
- *  and keeps the strictest (#249), so a table that merges two builds (MSYS
- *  and Linux strace) can't hide a command. One option stands for each way
- *  of reading them (optionKind). */
-function longOptions(spec, name) {
-  const all = (spec.long ?? '').split(' ').filter(Boolean).map((o) => ({ name: o.replace(/[=!]$/, ''), takes: o.endsWith('='), stops: o.endsWith('!') }));
-  const exact = all.find((o) => o.name === name);
-  if (exact) return [exact];
-  const kinds = new Map();
-  for (const o of all.filter((x) => x.name.startsWith(name))) if (!kinds.has(optionKind(spec, o))) kinds.set(optionKind(spec, o), o);
-  return [...kinds.values()];
-}
-
-/** The PREFIX fields that give an option's name a role (`shell`, …). */
-export const OPTION_ROLES = Object.freeze(['split', 'shell', 'writes', 'edit', 'command', 'program']);
-/** xargs'/parallel's options whose value is the token their input replaces (`-I {}`). */
-export const REPLACE_TOKEN = /^(?:I|i|replace)$/;
-
-/** How a long option reads: whether it takes a value or stops, and which
- *  role its name has in `spec` (a shell line, a file written, …). */
-const optionKind = (spec, o) => [o.takes, o.stops, ...OPTION_ROLES.map((r) => !!spec[r]?.test(o.name)), REPLACE_TOKEN.test(o.name)].join();
-
-// How deep the readings of ambiguous options may fork, and how many forks
-// one walk may take: past either the command is blocked unread.
-const MAX_FORKS = 6;
-const FORK_BUDGET = 256;
-let forkBudget = FORK_BUDGET;
-
-/** Spend a fork of the readings at depth `forks`, or throw when the command
- *  is too ambiguous to read. */
-function fork(forks) {
-  if (forks >= MAX_FORKS || --forkBudget < 0) throw new UnreadableError(AMBIGUOUS_REASON);
-}
-
-/** The readings of one prefix call merged (prefixRead's shape): the first
- *  run is the call, every other distinct run (by its words past the
- *  wrappers) runs beside it as a quoted line of the caller's words
- *  (`alts`), and their files and lines add up. Null when none runs or
- *  writes anything. */
-function mergeReadings(results) {
-  const rs = results.filter(Boolean);
-  if (!rs.length) return null;
-  const main = rs.find((r) => r.run);
-  const key = (run) => JSON.stringify(run.slice(Math.max(0, run.findIndex((a) => !WRAPPER.test(a)))));
-  const seen = new Set(main ? [key(main.run)] : []);
-  const alts = rs.flatMap((r) => r.alts);
-  for (const { run } of rs.filter((r) => r.run && r !== main)) {
-    if (seen.has(key(run))) continue;
-    seen.add(key(run));
-    alts.push(run.map((a) => `'${a.replaceAll("'", "'\\''")}'`).join(' '));
-  }
-  const union = (field) => [...new Set(rs.flatMap((r) => r[field]))];
-  return { run: main?.run ?? null, joined: !!main?.joined, writes: union('writes'), lines: union('lines'), alts: [...new Set(alts)], repeats: rs.some((r) => r.repeats) };
-}
-
-/** env -S's line as env reads it: outside single quotes `\_` is a space, and
- *  an unquoted `\c` ends the line (#249). */
-function envLine(s) {
-  let out = '';
-  let quote = null;
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (ch === '\\' && quote !== "'") {
-      if (s[i + 1] === 'c' && !quote) break;
-      out += s[i + 1] === '_' ? ' ' : ch + (s[i + 1] ?? '');
-      i++;
-      continue;
-    }
-    if (ch === quote) quote = null;
-    else if (!quote && (ch === '"' || ch === "'")) quote = ch;
-    out += ch;
-  }
-  return out;
-}
-
-/** The option word w[k] as `spec` (a PREFIX-style table) reads it: { k,
- *  names, opt, value }: every option it names, and the one taking a value
- *  with that value (attached, or the next word, `k` then on it), or an
- *  optional one's attached value (`xargs -i{}`, `--replace=X`). For a
- *  long one that abbreviates several, { choices }: the words it may stand
- *  for, each read by the caller (longOptions). Null when nothing runs
- *  after it (a stop option). */
-function readOption(spec, w, k) {
-  const a = w[k];
-  const names = [];
-  let opt = null;
-  let value;
-  if (a.startsWith('--')) {
-    const [name, attached] = a.slice(2).split(/=(.*)/s);
-    const os = longOptions(spec, name);
-    if (os.length > 1) return { choices: os.map((x) => `--${x.name}${attached === undefined ? '' : `=${attached}`}`) };
-    const o = os[0];
-    if (o?.stops) return null;
-    if (o) {
-      names.push(o.name);
-      if (o.takes) [opt, value] = [o.name, attached ?? w[++k]];
-      else if (attached !== undefined) [opt, value] = [o.name, attached];
-    }
-  } else {
-    // A cluster (`-nu root`): its first value option takes the rest of it.
-    for (let j = 1; j < a.length && !opt; j++) {
-      if (spec.stop?.includes(a[j])) return null;
-      names.push(a[j]);
-      const rest = a.slice(j + 1);
-      if (spec.value?.includes(a[j])) [opt, value] = [a[j], rest || w[++k]];
-      else if (rest && spec.optional?.includes(a[j])) [opt, value] = [a[j], rest];
-    }
-  }
-  return { k, names, opt, value };
-}
-
-/** What a prefix command does with its words (PREFIX), as { run, writes,
- *  lines, repeats }: `run` the words of the call it runs (a shell line as
- *  `sh -c …`), or null when it runs none; `writes` the files its options or
- *  operands write (`time -o f`, `sudo -e f`); `lines` the shell lines it
- *  runs beside that call (`strace -o '|cmd'`), each one word of its own;
- *  `alts` the other readings' calls, as lines of the caller's words
- *  (mergeReadings); `joined` when `run` is a shell line rejoined from the
- *  caller's words (watch's). A line of the caller's words is read with the
- *  caller's variables: its shell expanded them before this one ran (#249).
- *  Null when `w` doesn't start
- *  with one, or its options run and write nothing (`sudo -l`). */
-function prefixRead(w, forks = 0) {
+/** The words of the call a prefix command (PREFIX) runs, or null when `w`
+ *  doesn't start with one or its options run nothing (`timeout --help`). */
+function prefixRead(w) {
   const spec = PREFIX.get(commandName(w[0] ?? '').toLowerCase());
   if (!spec) return null;
-  let kind = spec.operands ?? 'command';
-  let line = null; // a shell line an option hands it
-  let program = 'sh'; // the shell su's words after the user go to
-  let sub = false;
-  const writes = [];
-  const lines = [];
-  const others = []; // an `either` option's other readings
-  const operands = []; // read past, with `permute`, to an option after them
   let k = 1;
-  for (; k < w.length; k++) {
+  for (; k < w.length && w[k].startsWith('-'); k++) {
     const a = w[k];
     if (a === '--') {
       k++;
       break;
     }
-    if (!a.startsWith('-')) {
-      if (a === spec.sub && !sub && !operands.length) sub = true;
-      else if (spec.permute && kind !== 'command') operands.push(a);
-      else break;
-      continue;
+    if (a.startsWith('--')) {
+      const [name, attached] = a.slice(2).split(/=(.*)/s);
+      const o = spec.long.split(' ').find((x) => x.replace(/[=!]$/, '') === name);
+      if (o?.endsWith('!')) return null;
+      if (o?.endsWith('=') && attached === undefined) k++;
+    } else {
+      const j = [...a.slice(1)].findIndex((ch) => spec.value?.includes(ch));
+      if (j !== -1 && j === a.length - 2) k++;
     }
-    const o = readOption(spec, w, k);
-    if (!o) return null;
-    // An ambiguous long option: each word it may stand for is read (#249).
-    if (o.choices) {
-      fork(forks);
-      return mergeReadings(o.choices.map((c) => prefixRead([...w.slice(0, k), c, ...w.slice(k + 1)], forks + 1)));
-    }
-    const { names, opt, value } = o;
-    // An `either` option ending its cluster may take the next word instead.
-    if (opt === null && !a.startsWith('--') && spec.either?.includes(a.at(-1)) && k + 1 < w.length) {
-      fork(forks);
-      others.push(prefixRead([w[0], ...w.slice(k + 2)], forks + 1));
-    }
-    k = o.k;
-    if (names.some((n) => spec.edit?.test(n))) kind = 'files';
-    if (names.some((n) => spec.command?.test(n))) kind = 'command';
-    if (opt === null) continue;
-    if (spec.pipes && /^[|!]/.test(value ?? '')) lines.push(value.slice(1));
-    else if (spec.writes?.test(opt) && value !== undefined) writes.push(value);
-    if (spec.shell?.test(opt)) line = value ?? '';
-    if (spec.program?.test(opt) && value) program = value;
-    if (spec.split?.test(opt)) return splitLine(w[0], value ?? '', w.slice(k + 1), forks);
   }
-  const rest = [...operands, ...w.slice(k)];
-  // The words before the command; with `numeric`, only the leading numbers.
-  const skip = spec.numeric ? rest.slice(0, spec.args).findIndex((a) => !/^-?\d+$/.test(a)) : -1;
-  const after = rest.slice(skip === -1 ? (spec.args ?? 0) : skip);
-  // A shell option may still follow them (`flock f -c 'rm x'`).
-  const late = /^--?([\w-]+)(?:=(.*))?$/s.exec(after[0] ?? '');
-  if (line === null && kind === 'command' && late && spec.shell?.test(late[1])) line = late[2] ?? after[1] ?? '';
-  let run = null;
-  if (line !== null) run = ['sh', '-c', line];
-  else if (kind === 'command') run = after;
-  else if (kind === 'line') run = rest.length ? ['sh', '-c', rest.join(' ')] : [];
-  // su's words after its user go to the user's shell (`su bob -- -c 'x'`).
-  else if (kind === 'none' && rest.length > 1) run = [program, ...rest.slice(1)];
-  if (kind === 'files') writes.push(...rest);
-  const joined = line === null && kind === 'line';
-  return mergeReadings([run || writes.length || lines.length ? { run, joined, writes, lines, alts: [], repeats: !!spec.repeats } : null, ...others]);
-}
-
-/** env -S's line read back into env's words, the rest of `w` after it. A
- *  command env expands from a `${VAR}` it alone can see (`G=git env -S
- *  '${G} push'`) is no command the guard can read: it throws (#249). */
-function splitLine(env, value, rest, forks = 0) {
-  const read = prefixRead([env, ...words(envLine(value)), ...rest], forks);
-  if (unwrapCommand(read?.run ?? [])[0]?.includes('${')) throw new UnreadableError(ENV_VAR_REASON);
-  return read;
+  return w.slice(k + (spec.args ?? 0));
 }
 
 /** A call's real command words: past the wrappers (an env assignment, a
- *  subshell opener), the prefix commands (`sudo -u root`, `timeout 5`) and
- *  a runner with one payload (`xargs`; one with several stays, for
- *  payloadCalls to read each) the guard reads through elsewhere. When
- *  `effects` is given ({ writes, lines, alts, joined }), it is filled with
- *  what the prefixes write and run beside the call, and whether the last
- *  one's run is a rejoined line (prefixRead). */
-function unwrapCommand(w, effects = null) {
-  while (w.length) {
-    const run = commandName(w[0]);
-    let read;
-    let payloads;
-    if (WRAPPER.test(w[0])) w = w.slice(1);
-    else if ((read = prefixRead(w))) {
-      effects?.writes.push(...read.writes);
-      effects?.lines.push(...read.lines);
-      effects?.alts.push(...read.alts);
-      if (!read.run) break;
-      if (effects) effects.joined = read.joined;
-      w = read.run;
-    } else if (RUNNER.test(run) && !/^find$/i.test(run) && (payloads = runnerPayloads(run, w.slice(1))).length < 2) {
-      w = fillInput(payloads[0] ?? [], parallelInputs({ cmd: run, words: w }));
-    } else break;
+ *  subshell opener) and the prefix commands (`timeout 5`). */
+function unwrapCommand(w) {
+  for (let run; w.length; w = run) {
+    if (WRAPPER.test(w[0])) run = w.slice(1);
+    else if (!(run = prefixRead(w))) break;
   }
   return w;
 }
 
-/** A runner payload read through its prefixes (unwrapCommand): its call's
- *  words `w` and command `cmd`, the files the prefixes write (`writes`), the
- *  lines they run beside it (`beside`: { text, theirs }, `theirs` for an
- *  other reading's call, a line of the caller's words), whether the run is
- *  a rejoined line (`joined`), and each line it runs as a shell (`lines`,
- *  shellLines). The one reading for payloadCalls and payloadRemoval. */
-function readPayload(words) {
-  const effects = { writes: [], lines: [], alts: [], joined: false };
-  const w = unwrapCommand(words, effects);
-  const cmd = commandName(w[0] ?? '');
-  const beside = [...effects.lines.map((text) => ({ text, theirs: false })), ...effects.alts.map((text) => ({ text, theirs: true }))];
-  return { w, cmd, writes: effects.writes, beside, joined: effects.joined, lines: shellLines(cmd, w) };
-}
-
-/** How a payload takes away what find found, if it does: 'tree' when it
- *  mv's it or removes it recursively (`rm -rf {}`), so a matched dir goes
- *  with all under it; 'file' when it only rm's it; else null. A shell's -c
- *  script counts by the calls in it (`script`: the call, for its cwd), and
- *  there any argument that isn't a fixed path is what find handed it: one
- *  holding `$` (`"$1"`, `"$f"`, `$args[0]`) or `{}`, and a recursive rm's
- *  `.` or `*` after a cd to such a path. A shell's line is its script, in
- *  that shell (`shell`, null when find runs the call itself): a POSIX
- *  shell's first word (the rest are its $0 and args), cmd's or PowerShell's
- *  every word (#264). So is each line a prefix runs beside the call; each
- *  other reading of its options (`strace --us x rm {}`) is its own words. */
-function payloadRemoval(words, script = null, shell = null) {
-  const { w, cmd, beside, lines } = readPayload(words);
-  // `inShell`: the shell `text` runs in as a script; null: the payload's words.
-  const read = (text, tool, inShell) =>
-    commands(text, null, false, false, newScope(null, tool)).map((s) => (inShell ? payloadRemoval(s.words, s, inShell) : payloadRemoval(s.words, script, shell)));
-  const removals = [
-    ...(lines.length ? lines.flatMap((line) => read(shellTool(cmd) === 'Bash' ? line[0] : line.join(' '), shellTool(cmd), cmd)) : [callRemoval(cmd, w.slice(1), script, shell)]),
-    ...beside.flatMap(({ text, theirs }) => read(text, 'Bash', theirs ? null : 'sh')),
-  ];
-  return removals.includes('tree') ? 'tree' : removals.includes('file') ? 'file' : null;
-}
-
-/** payloadRemoval for one call: command `run` with `args`, in a line of
- *  `shell`. rmdir takes only an empty dir, so never a state file, and so
- *  does cmd's rd; but cmd's /s takes the tree (`rd /s /q`), its del/erase
- *  every file in a dir it is handed (`del /q {}`), and in PowerShell rmdir
- *  and rd are Remove-Item (#264). */
-function callRemoval(run, args, script, shell) {
-  if (!(REMOVE.test(run) || MOVE.test(run))) return null;
-  const inCmd = /^cmd$/i.test(shell ?? '');
-  const cmdTree = inCmd && (/^(?:del|erase)$/i.test(run) || args.some((a) => /^(?:\/[a-z])*\/s(?:\/[a-z])*$/i.test(a)));
-  const emptyOnly = shellTool(shell ?? '') === 'PowerShell' ? null : inCmd ? /^(?:rmdir|rd)$/i : /^rmdir$/i;
-  if (!cmdTree && emptyOnly?.test(run)) return null;
-  // rm's -r/-R in any flag cluster; Remove-Item's -Recurse or a prefix of it.
-  const recursive = cmdTree || args.some((a) => (/^rm$/i.test(run) ? /^-[a-zA-Z]*[rR]|^--recursive$/ : /^-r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?$/i).test(a));
-  const handed = script
-    ? args.some((a) => /\$|\{\}/.test(a)) || (recursive && script.dir === UNKNOWN_DIR && args.some((a) => /^(?:\.|\*|\.[/\\]\*?)$/.test(a)))
-    : args.some((a) => a.includes('{}'));
-  if (!handed) return null;
-  return MOVE.test(run) || recursive ? 'tree' : 'file';
-}
-
-/** How a find's -exec/-execdir/-ok/-okdir payloads that are handed `{}` take
- *  away what it finds (payloadRemoval). Either way, like -delete, the
- *  predicates name what goes (#214). */
-function findExecRemoval(args) {
-  const removals = runnerPayloads('find', args).flatMap((p) => (p.some((a) => a.includes('{}')) ? [payloadRemoval(p)] : []));
-  return removals.includes('tree') ? 'tree' : removals.includes('file') ? 'file' : null;
-}
-
-// A find -path/-ipath pattern as the name it leaves the matched entry: `*`
-// and `?` match `/` there, so after the last one any tail without a `/` is
-// only a suffix (`*.json` names `*.json`, `*/.claude*` names `*`); a tail
-// holding a `/`, or a pattern without either, ends in a literal last
-// segment, which is the name (`*/debug/*.txt`: `*.txt`; `*/skills`: `skills`).
-// A bracket class can match `/` too (`[/]`, `[!a]`), so a pattern holding a
-// `[` names any entry, `*`, rather than have its classes parsed.
-function findPathName(pattern) {
-  if (pattern.includes('[')) return '*';
-  const tail = pattern.slice(Math.max(pattern.lastIndexOf('*'), pattern.lastIndexOf('?')) + 1);
-  return tail.length < pattern.length && !tail.includes('/') ? `*${tail}` : tail.slice(tail.lastIndexOf('/') + 1);
-}
-
-/** The paths a command call writes, as { word, dirTarget, tree, removes,
- *  deep }: its redirects, the files its prefixes write (`writes`: `time -o
- *  f`, `sudo -e f`), and the destination of tee, cp/mv/Copy-Item/
- *  Move-Item (a dir counts, and so does each source landing in it under its
- *  own name, as a `tree` that may hold a gate record: `cp -r bk/.claude ~/`;
- *  a contents copy, `bk/.` or rsync's `bk/`, lands as `*`), dd of=, sed/perl
- *  -i, truncate, New-Item, the content cmdlets (Set-/Add-/Clear-Content,
- *  Out-File, sc/ac/clc), curl/wget -o and Rename-Item; a link's source, which
- *  a write through the link reaches; and with `removes` what rm/Remove-Item/
- *  `find -delete` or `find -exec rm/mv {}` (`deep`: its -name/-iname/-path at
- *  any depth; `tree`: a matched dir with all under it) delete or mv takes
- *  away. `tool` is the shell running the call (newScope).
- *  A PowerShell item cmdlet with no source of its own takes `upstream`, the
- *  paths its pipeline feeds it (`Get-Item x | Remove-Item`). */
-function writeTargets({ cmd, words: w, text, upstream = [], spill, tool, writes = [] }) {
-  const out = [...redirectTargets(text), ...(spill === undefined ? [] : [spill]), ...writes].map((word) => ({ word }));
-  if (!w.length) return out;
-  const args = ownArgs(w);
-  const add = (word, o = {}) => word !== undefined && out.push({ word, ...o });
-  const positional = args.filter((a, i) => !a.startsWith('-') && !PS_DEST.test(args[i - 1] ?? '') && !PS_PATH.test(args[i - 1] ?? ''));
-  const flagValue = (re) => {
-    const i = args.findIndex((a) => re.test(a));
-    return i === -1 ? undefined : (args[i].match(re)[1] ?? args[i + 1]);
-  };
-  const fed = (own) => (own.length || !PS_ITEM.test(cmd) ? own : upstream);
-  if (COPY.test(cmd)) {
-    // -t takes the dir, alone or last in a cluster (`-rt`, `install -Dt`);
-    // rsync's -t is --times.
-    const t = /^(?:cp|mv|install|ln)$/i.test(cmd) ? args.findIndex((a) => /^-[a-zA-Z]*t$/.test(a) || a.startsWith('--target-directory')) : -1;
-    let dest = flagValue(PS_DEST);
-    let sources;
-    if (t !== -1) {
-      dest = args[t].split('=')[1] ?? args[t + 1];
-      sources = positional.filter((a) => a !== dest);
-    } else if (dest !== undefined) sources = [...positional, flagValue(PS_PATH)].filter(Boolean);
-    else {
-      // `Copy-Item -Path x dest`: the -Path value is a source, the last positional the dest.
-      [dest, sources] = [positional.at(-1), [...positional.slice(0, -1), flagValue(PS_PATH)].filter(Boolean)];
-    }
-    add(dest, { dirTarget: true });
-    const contents = (s) => /(?:^|[/\\])\.$/.test(s) || (/^rsync$/i.test(cmd) && /[/\\]$/.test(s));
-    for (const s of dest === undefined ? [] : fed(sources)) {
-      add(`${dest}/${contents(s) ? '*' : (s.split(/[/\\]/).filter(Boolean).pop() ?? '')}`, { dirTarget: true, tree: true });
-      if (MOVE.test(cmd)) add(s, { removes: true });
-      if (/^ln$/i.test(cmd)) add(s, { dirTarget: true });
-    }
-  } else if (REMOVE.test(cmd)) {
-    for (const p of fed([...positional, flagValue(PS_PATH)].filter(Boolean))) add(p, { removes: true });
-  } else if (/^find$/i.test(cmd) && (args.includes('-delete') || findExecRemoval(args))) {
-    // find's own options come first: -H/-L/-P, -D <opts>, -O<n>, then `--`.
-    let k = 0;
-    while (/^(?:-[HLP]+|-O\d*|-D)$/.test(args[k] ?? '')) k += args[k] === '-D' ? 2 : 1;
-    if (args[k] === '--') k++;
-    // The expression starts at a word that reaches find as -x, ( or !: past
-    // Bash's `\` (`\!`, `\(`) or PowerShell's backtick (`` `! ``), which
-    // passes a `\!` on as a start path.
-    const unescaped = (a) => (tool === 'PowerShell' ? a.replace(/`(.)/g, '$1') : a.replace(/\\(.)/g, '$1'));
-    const start = args.findIndex((a, i) => i >= k && /^[-(!]/.test(unescaped(a)));
-    const dirs = args.slice(k, start === -1 ? args.length : start);
-    const expr = start === -1 ? [] : args.slice(start);
-    // find's own words: an -exec/-ok payload, to its `;`/`+`, is the payload
-    // rule's (its `$1`, its `\;`).
-    const own = [];
-    let inPayload = false;
-    for (const a of expr) {
-      if (inPayload) inPayload = !/^\\?[;+]$/.test(a);
-      else if (/^-(?:exec|execdir|ok|okdir)$/.test(a)) inPayload = true;
-      else own.push(a);
-    }
-    // The predicates name what goes only when every one must hold for it: in
-    // a plain conjunction. An -o, `,`, !/-not, group or -prune can make one
-    // name what stays instead, and so can an escape or an expansion that
-    // hides one (`\-o`, `` `, ``, `$OP`); then the start dirs are judged whole.
-    const plain = !expr.some((a) => /^(?:-o|-or|,|\\?!|-not|\\?[()]|-prune)$/.test(a)) && !own.some((a) => /[\\`$]/.test(a));
-    const predicate = (re) => (plain ? expr.flatMap((a, i) => (re.test(a) && expr[i + 1] !== undefined ? [expr[i + 1]] : [])) : []);
-    // A -path only narrows a -name; alone it is judged by the name it leaves.
-    const named = predicate(/^-i?name$/);
-    const names = named.length ? named : predicate(/^-i?path$/).map(findPathName);
-    // A recursive rm or an mv of a matched dir takes everything under it.
-    const tree = findExecRemoval(args) === 'tree';
-    for (const dir of dirs.length ? dirs : ['.']) {
-      if (!names.length) add(dir, { removes: true });
-      for (const name of names) add(`${dir}/${name}`, { removes: true, deep: true, tree });
-    }
-  } else if (RENAME.test(cmd)) {
-    const from = flagValue(PS_PATH) ?? positional[0] ?? upstream[0];
-    const name = flagValue(/^-newname(?::(.*))?$/i) ?? positional[1];
-    if (from !== undefined && name !== undefined) add(from.replace(/[^/\\]*[/\\]?$/, '') + name);
-    add(from, { removes: true });
-  } else if (CONTENT.test(cmd)) {
-    add(flagValue(PS_PATH) ?? positional[0]);
-  } else if (DOWNLOAD.test(cmd)) {
-    const flag = /^curl/i.test(cmd) ? /^(?:-[a-zA-Z]*o|--output)$/ : /^(?:-[a-zA-Z]*[oO]|--output-document|--output-file)$/;
-    for (const [i, a] of args.entries()) {
-      if (flag.test(a)) add(args[i + 1]);
-      else if (/^--output(?:-document|-file)?=/.test(a)) add(a.slice(a.indexOf('=') + 1));
-    }
-  } else if (TEE.test(cmd)) {
-    for (const p of positional) add(p);
-    add(flagValue(PS_PATH));
-  } else if (/^dd$/i.test(cmd)) {
-    for (const a of args) if (a.startsWith('of=')) add(a.slice(3));
-  } else if (IN_PLACE.test(cmd) && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) {
-    // The files, not the script: an -e/-f value, else sed's first positional.
-    const script = new Set(args.flatMap((a, i) => (/^(?:-[a-zA-Z]*[ef]|--expression|--file)$/.test(a) ? [i + 1] : [])));
-    const files = args.filter((a, i) => !a.startsWith('-') && !script.has(i));
-    for (const p of script.size || !/^sed$/i.test(cmd) ? files : files.slice(1)) add(p);
-  } else if (NEW_ITEM.test(cmd)) {
-    for (const p of positional) add(p);
-    add(flagValue(PS_PATH));
-  }
-  return out;
-}
-
-/** A `\>|` splits as a pipe (clauses), leaving `call` ending in `\>` and the
- *  redirect's real target as the next segment's command word. The Bash spawn
- *  collapses `\\` to `\`, so whether that `>` was escaped is unknowable: the
- *  word is judged as a target too. */
-function spilledTarget(calls, call) {
-  if (!/\\>\s*$/.test(call.text)) return undefined;
-  return calls.find((c) => c.pipe === call.pipe && c.seg === call.seg + 1)?.words[0];
-}
-
-/** The paths a pipeline feeds `call` (a PowerShell item cmdlet reads them as
- *  its source): the arguments of the segment before it, looking through
- *  Select-/Sort-/Where-Object, which pass items on unchanged. */
-function upstreamPaths(calls, call) {
-  if (!PS_ITEM.test(call.cmd)) return [];
-  let prev = call;
-  do prev = calls.find((c) => c.pipe === call.pipe && c.seg === prev.seg - 1);
-  while (prev && PASS_THROUGH.test(prev.cmd));
-  return prev ? ownArgs(prev.words).filter((a) => !a.startsWith('-')) : [];
-}
-
-/** Is a write to `word` from `dir` a write into a gate's records (or, with
- *  `removes`, a removal of a gate state file)? 'forge' when it resolves to
- *  one; 'unknown' when it can't resolve and looks aimed, which blocks only in
- *  a command naming one; null otherwise. Aimed: a substitution whose own text
- *  names one, a var this command set to such a value (`f=$(ls …/projects/…)`,
- *  `$p = Join-Path …`), a var fed at runtime (a for/read/foreach var, `$_`, a
- *  runner's `{}` or `$1`), or a `*.jsonl`/glob name relative to a dir the
- *  guard lost after a cd that named one. So `S=$(mktemp -d); … > "$S/o"`
- *  and `cd "$S" && … > all.jsonl` stay open. A `{}` inside a path stands for
- *  any name, judged as a glob (`cp {} ~/.claude/` could land a state file). */
-function targetVerdict({ word, dirTarget, tree, removes, deep }, dir, vars, cmd) {
-  if (word === '{}') return 'unknown';
-  const p = toDir(dir, word.replaceAll('{}', '*'), vars);
-  if (typeof p === 'string') return (removes ? removesGateState(p, deep, tree) : isGateRecord(p, dirTarget, tree)) ? 'forge' : null;
-  const names = removes ? namesGateState : namesGateRecord;
-  const refs = varNames(word);
-  if (refs.length || /\$[(@*]|`/.test(word)) {
-    const fed = /\$[@*]/.test(word) || refs.some((n) => isFed(cmd, n));
-    return names(word) || fed || refs.some((n) => assignedValues(cmd, n).some(names)) ? 'unknown' : null;
-  }
-  const last = word.split(/[/\\]/).pop();
-  return /\.jsonl$|[*?[]/i.test(last) && cdNamesGateRecord(cmd) ? 'unknown' : null;
-}
-
-/** The var names `text` references (`$f`, `${f:?}`, `${fs[0]}`, `$env:X`). */
-const varNames = (text) => [...text.matchAll(VAR_REF)].map(([, braced, bare]) => (braced ?? bare).replace(/^env:/i, ''));
-
-/** Is `name` fed at runtime: a positional (`$1`), PowerShell's pipeline item
- *  (`$_`, `$PSItem`), or bound by the command — `for name in`, `read … name`,
- *  `mapfile`/`readarray … name`, `printf -v name`, PowerShell
- *  `foreach ($name in`? */
-const isFed = (cmd, name) =>
-  /^(?:\d|_|PSItem)$/i.test(name) ||
-  new RegExp(
-    String.raw`\bfor\s+${name}\s+in\b|\b(?:read|mapfile|readarray)\b[^;|&\n]*\s${name}(?!\w)|\bprintf\s+-v\s*${name}(?!\w)|\bforeach\s*\(\s*\$${name}\s+in\b`,
-    'i',
-  ).test(cmd);
-
-/** Does a cd/pushd/Set-Location in the command name a gate record? */
-const cdNamesGateRecord = (cmd) =>
-  [...cmd.matchAll(/(?:^|[\s;&|(])(?:cd|chdir|pushd|sl|set-location|push-location)\s+([^;&|\n]*)/gi)].some(([, to]) => namesGateRecord(to));
-
-/** The value texts a command assigns to `name` (default: any name): bash
- *  `NAME=…` (one word, a substitution whole) or PowerShell `$NAME = …` (the
- *  rest of the statement: `$t = (Get-ChildItem … | Sort-Object …)[-1]`). Read
- *  off the text: words() splits `f=$(ls …)` at its spaces, so such an
- *  assignment never reaches `vars`. */
-function assignedValues(cmd, name = String.raw`\w+`) {
-  const set = new RegExp(String.raw`(?:^|[\s;&|({])(?:(\$(?:env:)?${name}\s*=(?!=)\s*)|${name}=)`, 'gi');
-  return [...cmd.matchAll(set)].map((m) => valueAt(cmd, m.index + m[0].length, m[1] !== undefined));
-}
-
-/** The text of a value starting at `i`, quotes and brackets kept whole: up to
- *  the next unquoted, unbracketed space or separator, or with `statement`
- *  (PowerShell) up to the next `;` or newline. */
-function valueAt(s, i, statement) {
-  let depth = 0;
-  let j = i;
-  for (let q = null; j < s.length; j++) {
-    const ch = s[j];
-    if (q) {
-      if (ch === '\\' && q === '"') j++;
-      else if (ch === q) q = null;
-    } else if (ch === '"' || ch === "'") q = ch;
-    else if ('([{'.includes(ch)) depth++;
-    else if (')]}'.includes(ch)) {
-      if (depth === 0) break;
-      depth--;
-    } else if (depth === 0 && (statement ? /[;\n]/ : /[\s;|&<>]/).test(ch)) break;
-  }
-  return s.slice(i, j);
-}
-
-/** A runner's payloads, as word lists: each `find -exec`/`-ok` command (to
- *  its `;`/`+`), or the command after the runner's own options (`xargs -n1
- *  cp …`, `busybox cp …`). xargs/parallel without -I append their input
- *  as a last word, here `{}`; an -I token reads as `{}`. When `inMatch` is an
- *  array it is filled, parallel to the result, with whether each payload
- *  runs in its match's dir (-execdir/-okdir). */
-function runnerPayloads(cmd, args, inMatch = null, forks = 0) {
-  if (/^find$/i.test(cmd)) {
-    const out = [];
-    for (let i = 0; i < args.length; i++) {
-      if (!/^-(?:exec|execdir|ok|okdir)$/.test(args[i])) continue;
-      const end = args.findIndex((a, j) => j > i && /^\\?[;+]$/.test(a));
-      const p = args.slice(i + 1, end === -1 ? args.length : end);
-      if (p.length) {
-        out.push(p);
-        inMatch?.push(/dir$/.test(args[i]));
-      }
-      if (end !== -1) i = end;
-    }
-    return out;
-  }
-  const parallel = /^parallel$/i.test(cmd);
-  const spec = parallel ? PARALLEL : XARGS;
-  let token = null;
-  let k = 0;
-  for (; k < args.length && args[k].startsWith('-'); k++) {
-    if (args[k] === '--') {
-      k++;
-      break;
-    }
-    const o = readOption(spec, args, k);
-    if (!o) return [];
-    // An ambiguous long option: the payloads of each word it may stand for (#249).
-    if (o.choices) {
-      fork(forks);
-      const all = o.choices.flatMap((c) => runnerPayloads(cmd, [...args.slice(0, k), c, ...args.slice(k + 1)], null, forks + 1));
-      const out = [...new Map(all.map((p) => [JSON.stringify(p), p])).values()];
-      inMatch?.push(...out.map(() => false));
-      return out;
-    }
-    k = o.k;
-    if (o.names.some((n) => REPLACE_TOKEN.test(n))) token = o.value ?? '{}';
-  }
-  let payload = args.slice(k);
-  let out;
-  // parallel's inputs follow a `:::`; given no command, each runs as one.
-  const sep = parallel ? payload.findIndex((a) => /^::::?\+?$/.test(a)) : -1;
-  const inputs = sep === -1 ? [] : payload.slice(sep + 1).filter((a) => !/^::::?\+?$/.test(a));
-  if (sep !== -1) payload = payload.slice(0, sep);
-  if (parallel && !payload.length) out = sep === -1 ? [['sh', '-c', '{}']] : inputs.map((i) => ['sh', '-c', i]);
-  else if (!payload.length) out = [];
-  // parallel appends its input unless the command holds its `{}`.
-  else if (token === null) out = [parallel && payload.some((a) => a.includes('{}')) ? payload : [...payload, '{}']];
-  else out = [payload.map((a) => a.replaceAll(token, '{}'))];
-  inMatch?.push(...out.map(() => false));
-  return out;
-}
-
-/** The calls a runner call's payloads make, one level down: each read through
- *  its wrappers and prefixes, and a shell's command line parsed in that shell
- *  (its calls as commands() emits them, after an `aside` entry carrying any
- *  file the prefixes write), with any shell line a prefix runs beside it. A
- *  payload may run once per input, so each is a `loop`; an -execdir/-okdir
- *  one runs in its match's dir, unknown. With `input` (pipeFeed's words),
- *  `{}` stands for them (fillInput). */
-function payloadCalls(call, input = null) {
-  if (!RUNNER.test(call.cmd)) return [];
-  const inMatch = [];
-  const stage = { pipe: call.pipe, seg: call.seg, outer: call.outer };
-  return runnerPayloads(call.cmd, ownArgs(call.words), inMatch).flatMap((payload, i) => {
-    const { w, cmd, writes, beside, joined, lines } = readPayload(fillInput(payload, input));
-    const dir = inMatch[i] ? UNKNOWN_DIR : call.dir;
-    // A line of the caller's words keeps its variables (prefixRead); a quoted one is its shell's own.
-    const parse = (text, tool, theirs) => inStage(commands(text, dir, call.viaOr, true, theirs ? { ...newScope(dir, tool), vars: call.vars } : newScope(dir, tool)), stage);
-    const besideCalls = beside.flatMap(({ text, theirs }) => parse(text, 'Bash', theirs));
-    const own = { cmd, words: w, text: '', dir, vars: call.vars, tool: call.tool, pipe: call.pipe, seg: call.seg, outer: call.outer, viaOr: call.viaOr, loop: true, arms: call.arms, writes };
-    if (!lines.length) return [...besideCalls, ...(w.length || writes.length ? [own] : [])];
-    const lineCalls = lines.flatMap((line) => parse(line.join(' '), shellTool(cmd), rejoined(cmd, line, joined)));
-    return [...besideCalls, ...(writes.length ? [{ ...own, aside: true }] : []), ...lineCalls];
-  });
-}
-
-/** `payload` given `input` (pipeFeed's words): a `{}` word stands for all of
- *  them split at blanks, as xargs splits its input, and a `{}` inside a word
- *  for them joined. */
-function fillInput(payload, input) {
-  if (!input?.length) return payload;
-  const split = input.flatMap((a) => a.split(/\s+/).filter(Boolean));
-  return payload.flatMap((a) => (a === '{}' ? split : [a.replaceAll('{}', input.join(' '))]));
-}
-
-/** Is a shell's command line `line` (one of shellLines') made of the caller's
- *  words, its variables expanded before the shell ran: rejoined by a prefix
- *  (`watch rm -rf $D`), or several words that cmd or PowerShell join
- *  (`cmd /c rm -rf $D`)? A POSIX shell's one quoted line (`sh -c '…'`) is
- *  its own scope's (#212). */
-const rejoined = (cmd, line, joined) => joined || (shellTool(cmd) !== 'Bash' && line.length > 1);
-
-/** `calls` with every runner's payload calls after it, at any depth, each
- *  fed what its pipeline feeds it, so a rule reads `xargs git push`, `echo
- *  push | xargs git` and `find -exec sh -c '…'` like the bare call (#249). */
-const withPayloads = (calls) => calls.flatMap((c) => [c, ...withPayloads(payloadCalls(c, pipeFeed(calls, c)))]);
-
 /** Mark `cs`, emitted from a body or shell line run as pipeline stage
  *  `stage` ({ pipe, seg }), as inside it: each call's chain of enclosing
- *  stages (`outer`) ends there, so rule 3 and pipeFeed see the pipeline
- *  around a group, a shell's -c line or a payload. */
+ *  stages (`outer`) ends there, so rule 3 sees the pipeline around a group
+ *  or a shell's -c line. */
 function inStage(cs, stage) {
   for (const c of cs) {
     let s = c;
@@ -1555,208 +679,6 @@ const stagesOf = (call) => {
   for (let s = call; s; s = s.outer) out.push(s);
   return out;
 };
-
-/** The inputs a parallel call names after its `:::` (it reads no stdin
- *  then), or null. */
-function parallelInputs(call) {
-  if (!/^parallel$/i.test(call.cmd)) return null;
-  const args = ownArgs(call.words);
-  const sep = args.findIndex((a) => /^::::?\+?$/.test(a));
-  return sep === -1 ? null : args.slice(sep + 1).filter((a) => !/^::::?\+?$/.test(a));
-}
-
-// A PowerShell literal stage: a string, maybe in an array (`,'x'`, `'a', 'b'`)
-// or an @( ), $( ) or ( ) around it (#256).
-const PS_LITERAL = /^(?:[@$]?\(\s*)*,?\s*['"]/;
-// What wraps a literal stage's word: those openers, a comma, a closing paren.
-const PS_LITERAL_WRAP = /^(?:[@$]?\(|,)+|\)+$/g;
-
-/** The words a pipeline stage's call `c` may output: its arguments, or under
- *  PowerShell a literal stage's strings (`'push' |`, `@('a', 'b') |`), which
- *  run no command (#256). */
-function stageWords(c) {
-  if (c.tool === 'Bash' || !PS_LITERAL.test(c.text)) return ownArgs(c.words).filter((a) => !a.startsWith('-'));
-  return c.words.flatMap((a) => a.replace(PS_LITERAL_WRAP, '').split(',')).filter(Boolean);
-}
-
-/** What a pipeline feeds an xargs/parallel `call` to run its payload on
- *  (parallel's own `:::` inputs instead, when it names them):
- *  a here-string's word, and the words of every call in the stages
- *  before its own, each a path or word that may come out
- *  (`echo ~/.claude`, `find ~/.claude -type f | grep x`, stageWords).
- *  A first stage reads what its group's or shell line's stage is fed.
- *  A heredoc, a file (`xargs -a`, `< list`) or a command's computed
- *  output is out of the guard's sight. */
-function pipeFeed(calls, call) {
-  if (!/^(?:xargs|parallel)$/i.test(call.cmd)) return [];
-  const inputs = parallelInputs(call);
-  if (inputs) return inputs;
-  const here = call.words.findIndex((a) => a.startsWith('<<<'));
-  const own = here === -1 ? [] : [call.words[here].slice(3) || call.words[here + 1]].filter(Boolean);
-  let at = call;
-  while (at.seg === 0 && at.outer) at = at.outer;
-  const before = calls.filter((c) => stagesOf(c).some((s) => s.pipe === at.pipe && s.seg < at.seg));
-  return [...own, ...before.flatMap(stageWords)];
-}
-
-/** Does the command set a var to a gate-record path? */
-const setsGateRecordVar = (cmd) => assignedValues(cmd).some(namesGateRecord);
-
-/** The argument texts of the call whose `(` is at `open`, split on top-level
- *  commas (quotes and nested brackets respected). */
-function callArgs(text, open) {
-  const out = [];
-  let depth = 0;
-  let cur = '';
-  for (let i = open + 1, q = null; i < text.length; i++) {
-    const ch = text[i];
-    if (q) {
-      if (ch === '\\') cur += ch + (text[++i] ?? '');
-      else {
-        if (ch === q) q = null;
-        cur += ch;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') q = ch;
-    else if ('([{'.includes(ch)) depth++;
-    else if (')]}'.includes(ch)) {
-      if (depth === 0) break;
-      depth--;
-    } else if (ch === ',' && depth === 0) {
-      out.push(cur.trim());
-      cur = '';
-      continue;
-    }
-    cur += ch;
-  }
-  out.push(cur.trim());
-  return out.filter(Boolean);
-}
-
-/** A code argument that is one plain string literal, as its text, else null.
- *  A shell-escaped quote (`\"x\"` inside a double-quoted `-e`) counts. */
-function literal(arg) {
-  const m = /^(['"`])([^'"`]*)\1$/.exec(arg.replace(/\\(["'`])/g, '$1'));
-  return m && !(m[1] === '`' && m[2].includes('${')) ? m[2].replaceAll('\\\\', '\\') : null;
-}
-
-/** Inline code's verdict: 'forge' when a write call's literal path is a gate
- *  record (or a removal's or move's literal path a gate state file), 'opaque'
- *  when a write's path isn't a literal (or it runs a subprocess), else null.
- *  Literal paths resolve from `dir`. */
-function codeVerdict(code, dir) {
-  let opaque = CODE_OPAQUE.test(code);
-  const judge = (arg, o = {}) => {
-    if (arg === undefined) return null;
-    // A bare name set only from literals (`const f='README.md'; …(f, s)`) is
-    // judged by those literals.
-    if (/^[A-Za-z_$][\w$]*$/.test(arg)) {
-      const set = [...code.matchAll(new RegExp(String.raw`(?<![\w$.])${arg.replace(/\$/g, '\\$')}\s*=(?![=>])\s*([^,;\n]*)`, 'g'))].map((m) => m[1].trim());
-      if (set.length && set.every((v) => literal(v) !== null)) return set.some((v) => judge(v, o) === 'forge') ? 'forge' : null;
-    }
-    const lit = literal(arg);
-    const p = lit === null ? null : toDir(dir, lit);
-    if (typeof p === 'string') return (o.removes ? removesGateState(p) : isGateRecord(p, o.dirTarget)) ? 'forge' : null;
-    opaque ||= lit === null || /\.jsonl$/i.test(lit);
-    return null;
-  };
-  const end = (m) => m.index + m[0].length - 1;
-  for (const m of code.matchAll(CODE_PATH_FIRST)) if (judge(callArgs(code, end(m))[0]) === 'forge') return 'forge';
-  for (const m of code.matchAll(CODE_OPEN)) {
-    const [path, mode] = callArgs(code, end(m));
-    const modeText = mode === undefined ? null : literal(mode.replace(/^mode\s*=\s*/, ''));
-    if (modeText !== null && /[wax+]/.test(modeText) && judge(path) === 'forge') return 'forge';
-  }
-  for (const m of code.matchAll(CODE_PATH_SECOND)) {
-    const [from, to] = callArgs(code, end(m));
-    if (judge(to, { dirTarget: true }) === 'forge') return 'forge';
-    if (CODE_MOVE.test(m[0]) && judge(from, { removes: true }) === 'forge') return 'forge';
-  }
-  for (const m of code.matchAll(CODE_REMOVE)) if (judge(callArgs(code, end(m))[0], { removes: true }) === 'forge') return 'forge';
-  return opaque ? 'opaque' : null;
-}
-
-const FORGE_REASON =
-  'This writes into a session transcript (~/.claude/projects/**/*.jsonl) or an approval gate\'s state file (push-gate-approvals, browser-gate-sessions, fable-clearance), or deletes one of those state files. The push and browser gates read user approval from those files, so the model never writes them (#190). Read them freely; write any copy elsewhere (the scratchpad). Inline code that mentions them and writes a path built at runtime (computed, a subprocess, a pathlib/stream write) can\'t be verified, even when the path is literal: do the write as a separate step, e.g. print the result and redirect it to a literal path outside ~/.claude.';
-
-/** 11, for one parsed call (a runner's payload included). `ctx` is the whole
- *  command: its text, raw form and whether it names a gate record or state
- *  file; `fed` marks a runner's payload, whose input is whatever it named. */
-function callForges(call, ctx, fed = false) {
-  for (const t of writeTargets(call)) {
-    const v = targetVerdict(t, call.dir, call.vars, ctx.cmd);
-    if (v === 'forge' || (v === 'unknown' && (t.removes ? ctx.namedState : ctx.named))) return true;
-  }
-  if (call.aside) return false;
-  const args = ownArgs(call.words);
-  // A payload has no redirect text: the outer shell already took any redirect
-  // as the runner's. A pipeline feeds xargs the paths it names: all of them,
-  // and each alone, stand for `{}` too (`echo ~/.claude | xargs rm -rf`, #249).
-  if (RUNNER.test(call.cmd)) {
-    const feed = call.feed ?? parallelInputs(call) ?? [];
-    return [null, ...(feed.length ? [feed, ...feed.map((a) => [a])] : [])].some((input) => payloadCalls(call, input).some((p) => callForges(p, ctx, true)));
-  }
-  // The inline code: an eval flag's argument, PowerShell's own .NET call, or
-  // for code read from stdin (`node - <<EOF`, a bare `python`) the raw text,
-  // since a heredoc body is scrubbed out of `cmd`.
-  let code = null;
-  if (DOTNET_FILE.test(call.text)) code = call.text;
-  else if (INTERPRETER.test(call.cmd)) {
-    const e = args.findIndex((a) => EVAL_FLAG.test(a));
-    if (e !== -1) code = args[e + 1] ?? '';
-    else if (/^deno/i.test(call.cmd) && args[0] === 'eval') code = args.slice(1).join(' ');
-    else if (args.includes('-') || !args.some((a) => !a.startsWith('-'))) code = ctx.raw;
-  }
-  if (code === null) return false;
-  const v = codeVerdict(code, call.dir);
-  // A computed path is aimed when this call or its code names a gate record,
-  // a var the command set does (`f=$(ls …/projects/…)`, then `"$f"`), or a
-  // runner, a pipeline or a loop feeds it (`$_`, a foreach var) what the
-  // command named.
-  if (v !== 'opaque') return v === 'forge';
-  return (ctx.named && (fed || varNames(code).some((n) => isFed(ctx.cmd, n)))) || namesGateRecord(call.text) || namesGateRecord(code) || setsGateRecordVar(ctx.cmd);
-}
-
-/** 11. Does a command write into a transcript or a gate state file, or delete
- *  a state file? Read off parsed calls: a redirect, tee, cp/mv, dd, sed -i,
- *  truncate, curl -o, rm or PowerShell Copy-Item/Move-Item/New-Item/
- *  Tee-Object/Rename-Item/Remove-Item whose target resolves to one (or can't
- *  resolve and looks aimed at one, in a command naming one); a runner's
- *  payload (`find -exec`, `xargs`), judged as a call; or inline
- *  interpreter code (`node -e`, `python -c`, `node - <<EOF`, PowerShell
- *  [IO.File]) whose write call names one as a literal path, or writes a
- *  computed path while the command names one. Static, so best-effort: a
- *  script file is out of its sight, its path literal or built at runtime. */
-export function forgeWrite(raw, cwd = null, tool = null) {
-  const cmd = scrub(raw);
-  const ctx = { cmd, raw, named: namesGateRecord(cmd), namedState: namesGateState(cmd) };
-  const calls = commands(cmd, cwd, false, false, newScope(cwd, tool));
-  return calls.some((call) => callForges({ ...call, upstream: upstreamPaths(calls, call), spill: spilledTarget(calls, call), feed: pipeFeed(calls, call) }, ctx)) ? FORGE_REASON : null;
-}
-
-/** 11, for the file tools: Write/Edit/MultiEdit/NotebookEdit into a
- *  transcript or a gate state file. The path expands like a shell target
- *  (`~`, a Git Bash `/c/…` drive) and a relative one resolves against `cwd`. */
-export function editToolReason(tool, input, cwd) {
-  if (!/^(?:Write|Edit|MultiEdit|NotebookEdit)$/.test(tool || '')) return null;
-  const raw = input?.file_path ?? input?.notebook_path;
-  if (typeof raw !== 'string' || !raw) return null;
-  const p = toDir(cwd || process.cwd(), raw.replaceAll('\\', '/'));
-  return typeof p === 'string' && isGateRecord(p) ? FORGE_REASON : null;
-}
-
-/** editToolReason as the hook runs it: failing OPEN, since a crashed check
- *  must never lock out the Edit tool that fixes it. `check` is swappable so a
- *  test can make it throw. */
-export function fileToolReason(tool, input, cwd, check = editToolReason) {
-  try {
-    return check(tool, input, cwd);
-  } catch (err) {
-    logError('bash-guard', err);
-    return null;
-  }
-}
 
 // ---- 12. an eval script the caller's shell substitutes into (#258) ---------
 
@@ -1820,8 +742,7 @@ function runsSubstitution(word, shell) {
  *  #249 probe incident: a JS template literal ran as shell commands. Read off
  *  parsed calls, so through wrappers, prefixes, groups and a shell's -c line;
  *  the script is found among the call's clause words with their quotes
- *  (the call's words are the clause's last ones). A runner's payload (`xargs
- *  node -e "…"`) is out of its sight; an `env -S` line substitutes nothing. */
+ *  (the call's words are the clause's last ones). */
 function evalSubstitution(calls) {
   for (const call of calls) {
     if (!EVAL_RUNTIME.test(call.cmd)) continue;
@@ -1842,138 +763,23 @@ const WRAPPER = /^(?:[({!]+|\w+\+?=.*|\$env:\w+=.*|then|do|else|elif|if|while|un
 const LOCATION = /^(?:cd|chdir|sl|set-location|pushd|push-location|popd|pop-location)$/i;
 const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
-// The POSIX shells, busybox's ash and hush among them (#264).
-const POSIX_SHELL = /^(?:bash|sh|zsh|dash|ash|hush)$/i;
-const SHELL_C = /^(?:bash|sh|zsh|dash|ash|hush|pwsh|powershell|cmd|eval|iex|invoke-expression)$/i;
+const POSIX_SHELL = /^(?:bash|sh)$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
 
-/** A PowerShell host's parameter table: `min[rest]` per parameter, `=` when
- *  it takes the next word, read into { name, min, takes }. */
-const psParams = (table) =>
-  table
-    .split(' ')
-    .filter(Boolean)
-    .map((p) => {
-      const [, min, rest = '', takes] = /^([^[=]+)(?:\[([^\]]*)\])?(=?)$/.exec(p);
-      return { name: min + rest, min, takes: !!takes };
-    });
-
-/** The parameters of powershell.exe 5.1 and pwsh 7, in the order each host
- *  tries them (#256). A parameter word names the first one it begins
- *  (case-insensitive) that it spells at least as far as the `[`: `-co` is
- *  c[ommand], once trimmed of whitespace (psTrim). `first` holds 5.1's
- *  launcher parameters, read only as its first word and after a dash of
- *  any kind (`–version`), never a `/`. pwsh drops a second dash of any kind
- *  after the first character (`--command`, `–-c`, `/-c`: `doubled`), and its
- *  default is -File, not 5.1's -Command (`defaultFile`). 5.1's come from
- *  `powershell.exe -?` and harmless probes of what it runs (verified:
- *  2026-10, 5.1.26100); pwsh 7's from ParseHelper in PowerShell's
- *  CommandLineParameterParser.cs and about_Pwsh (verified: 2026-10, 7.5). */
-const PS_HOSTS = {
-  powershell: {
-    params: psParams(
-      'h[elp] ? noe[xit] nop[rofile] nol[ogo] noni[nteractive] so[cketservermode] s[ervermode] nam[edpipeservermode] imp[ortsystemmodules] config[urationname]= c[ommand] w[indowstyle]= f[ile] o[utputformat]= o[f]= i[nputformat]= if= ex[ecutionpolicy]= ep= e[ncodedcommand] e[c] encodeda[rguments]= ea= s[ta] mta wo[rkingdirectory]= wd=',
-    ),
-    first: psParams('v[ersion]= p[sconsolefile]='),
-  },
-  pwsh: {
-    params: psParams(
-      'v[ersion] h[elp] ? l[ogin] noe[xit] nop[rofile] nol[ogo] noni[nteractive] so[cketservermode] v2so[cketservermode] s[ervermode] nam[edpipeservermode] sshs[ervermode] noprofileloadtime i[nteractive] configurationfile= config[urationname]= cus[tompipename]= commandwithargs cwa c[ommand] w[indowstyle]= f[ile] o[utputformat]= o[f]= inp[utformat]= if= ex[ecutionpolicy]= ep= e[ncodedcommand] e[c] encodeda[rguments]= ea= settings[file]= st[a] mta wo[rkingdirectory]= wd= removeworkingdirectorytrailingcharacter to[ken]= utc[timestamp]=',
-    ),
-    first: [],
-    doubled: true,
-    defaultFile: true,
-  },
-};
-// A dash as the host reads one: an en or em dash or a bar too.
-const PS_DASH = /^[-–—―]/;
-// A PowerShell parameter word starts with a dash or a `/`.
-const PS_PARAM = /^[-/–—―]/;
-// The host trims each word (.NET Trim: Unicode whitespace, NBSP and NEL too).
-// JS's \s lacks NEL and U+180E and adds the BOM: the union, so no host-trimmed
-// word is missed (#256).
-const psTrim = (a) => a.replace(/^[\s\u0085\u180e]+|[\s\u0085\u180e]+$/g, '');
-
-const ENCODED_REASON =
-  'This command runs a PowerShell -EncodedCommand whose value the guard cannot decode (a variable, a substitution, or not plain base64), so it is blocked unread (#256). Run the command as plain text.';
-
-/** An -EncodedCommand value as the line it runs: base64 of UTF-16LE text.
- *  One the guard can't decode is blocked unread. */
-function decodePowerShell(value) {
-  const b64 = value.replace(/\s+/g, '');
-  if (!b64 || b64.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw new UnreadableError(ENCODED_REASON);
-  return Buffer.from(b64, 'base64').toString('utf16le');
-}
-
-/** The words of the line a PowerShell host (PS_HOSTS) runs, or null (#256):
- *  after -Command (all the words after it), -CommandWithArgs (the next
- *  one; the rest are its arguments) or -EncodedCommand (decoded), else in
- *  5.1 from its first word that is no parameter of its own (its default is
- *  -Command, and an unknown parameter starts the line). Null for -File,
- *  pwsh's default: the words after it are the script's path and arguments. */
-function powershellLine(cmd, w) {
-  const host = PS_HOSTS[cmd.toLowerCase()];
-  for (let k = 1; k < w.length; k++) {
-    const a = psTrim(w[k]);
-    if (!a) continue;
-    let key = a.slice(1).toLowerCase();
-    if (host.doubled && PS_DASH.test(key)) key = key.slice(1);
-    const match = (ps) => ps.find((p) => key.length >= p.min.length && p.name.startsWith(key));
-    const p = PS_PARAM.test(a) ? ((k === 1 && a[0] !== '/' && match(host.first)) || match(host.params)) : null;
-    if (!p) return host.defaultFile ? null : w.slice(k);
-    if (p.name === 'command') return w.slice(k + 1);
-    if (/^(?:commandwithargs|cwa)$/.test(p.name)) return w.slice(k + 1, k + 2);
-    if (/^(?:encodedcommand|ec)$/.test(p.name)) return k + 1 < w.length ? [decodePowerShell(w[k + 1])] : null;
-    if (p.name === 'file') return null;
-    if (p.takes) k++;
+/** The words of the command line a shell call runs, or null (#92): eval/iex's
+ *  words, iex maybe after -Command; a POSIX shell's after a -c flag, alone or
+ *  in a cluster (`bash -lc`), the first word the line and the rest its $0 and
+ *  args; PowerShell's after -Command or -c. The shapes real sessions use
+ *  (#291 cut the readers for every other shell and spelling). */
+function shellLine(cmd, w) {
+  if (EVAL.test(cmd)) {
+    const line = w.slice(/^-c/i.test(w[1] ?? '') ? 2 : 1);
+    return line.length ? line : null;
   }
-  return null;
-}
-
-/** The words of each command line a shell call may run (#249), none when it
- *  runs none: a POSIX shell's after -c (posixLine), read both ways an o/O
- *  may take its value; PowerShell's as its host reads its parameters
- *  (powershellLine); cmd's after /c, /k or /r, the line maybe attached
- *  (`/cgit push`); eval/iex's words, iex maybe after -Command. Readings
- *  that agree are one. The one reader for top-level calls and runner
- *  payloads. */
-function shellLines(cmd, w) {
-  if (!SHELL_C.test(cmd)) return [];
-  let lines;
   const tool = shellTool(cmd);
-  if (EVAL.test(cmd)) lines = [w.slice(/^-c/i.test(w[1] ?? '') ? 2 : 1)];
-  else if (tool === 'PowerShell') lines = [powershellLine(cmd, w)];
-  else if (tool === null) {
-    const at = w.findIndex((a, j) => j > 0 && /^\/[ckr]/i.test(a));
-    lines = [at === -1 ? null : [w[at].slice(2), ...w.slice(at + 1)].filter(Boolean)];
-  } else lines = [posixLine(w, false), posixLine(w, true)];
-  return [...new Map(lines.filter((l) => l?.length).map((l) => [JSON.stringify(l), l])).values()];
-}
-
-/** A POSIX shell's line, or null: after the -c cluster, in any short-flag
- *  cluster (`bash -lc`, `sh -ec`), past the options and `--` after it (the
- *  first word the line, the rest its $0 and args), the clusters read as
- *  shellFlags reads them. */
-function posixLine(w, attached) {
-  let at = w.findIndex((a, j) => j > 0 && a.startsWith('-') && shellFlags(a, attached)?.letters.includes('c'));
-  if (at === -1) return null;
-  // `bash -c -e 'x'`: options may still come before the line.
-  for (let f; (f = shellFlags(w[at], attached)); ) at += 1 + f.takes;
-  if (w[at] === '--') at++;
-  return w.slice(at);
-}
-
-/** A POSIX shell flag cluster's option letters, and how many next words its
- *  o/O take; null when `a` is none. bash and dash give each o/O the next
- *  word (`-co pipefail`; `bash -coerrexit` fails); zsh, read `attached`,
- *  the rest of the cluster (`-coerrexit`), so its letters end there and
- *  only an o ending it takes the next word (#264). zsh and busybox hush
- *  aren't installed here, so the guard reads both ways. */
-function shellFlags(a, attached) {
-  if (!/^[-+][a-zA-Z]+$/.test(a ?? '')) return null;
-  const letters = attached ? /^[^oO]*[oO]?/.exec(a.slice(1))[0] : a.slice(1);
-  const takes = attached ? Number(letters.length === a.length - 1 && /[oO]$/.test(letters)) : (letters.match(/[oO]/g) ?? []).length;
-  return { letters, takes };
+  const flag = tool === 'Bash' ? /^-[a-zA-Z]*c[a-zA-Z]*$/ : tool === 'PowerShell' ? /^-c(?:ommand)?$/i : null;
+  const at = flag ? w.findIndex((a, j) => j > 0 && flag.test(a)) : -1;
+  return at === -1 || at + 1 === w.length ? null : w.slice(at + 1);
 }
 
 // An if/elseif condition that runs no command: a var, a literal, `-not` one, or
@@ -2350,7 +1156,6 @@ function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cw
   // The top-level text is level 0: up to MAX_NESTING bodies below it are read.
   // The count is back to 0 after every outermost call, thrown or not.
   if (nesting > MAX_NESTING) throw new NestingError();
-  if (nesting === 0) forkBudget = FORK_BUDGET;
   nesting++;
   try {
     return walkCommands(raw, cwd, orFirst, inLoop, scope);
@@ -2404,7 +1209,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
   let orList = false; // an `||` since the last `;`/newline/`&`: what runs now may not
   const pipeSeps = [];
   let committed = false; // the pipeline before this one emitted a git commit
-  for (const [pi, p] of pipelines(raw, pipeSeps, scope.tool).entries()) {
+  for (const [pi, p] of pipelines(raw, pipeSeps).entries()) {
     // An `||` makes an alternative only to a commit that could have failed: the
     // pipeline right before it must hold one (`a; false || git commit` is no
     // fallback — its commit spends like any other).
@@ -2434,7 +1239,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
     };
     const pipe = {};
     const blocks = [];
-    const segs = clauses(p, false, null, blocks, scope.tool);
+    const segs = clauses(p, false, null, blocks);
     for (const [seg, c] of segs.entries()) {
       settle();
       closeSubshells();
@@ -2450,11 +1255,6 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
       const psBlock = () => /^\((?!\()/.test(w[0] ?? '') && (/\)\s*\{/.test(c) || !c.includes(')'));
       const opensLoop = (kw) => /^(?:for|while|until)$/i.test(kw) && !psBlock();
       const wrappers = [];
-      const writes = []; // files the prefixes write (prefixRead)
-      const lines = []; // shell lines the prefixes run beside the call
-      const alts = []; // the other readings' calls, as lines of the caller's words
-      let joined = false; // the run is a line rejoined from the caller's words
-      let repeats = false; // a prefix runs the call again and again (watch)
       let negated = false; // a `!` wrapper inverts the clause's exit status
       let opens = 0; // ( … ) subshells opened at command position
       // A `(` after if/while/until opens a PowerShell condition, not a subshell.
@@ -2469,18 +1269,11 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
           w[0] = w[0].slice(lead.length);
         }
         if (!w.length) break;
-        // A prefix command (`sudo -u root`, `timeout 5`) runs the call after it.
-        const read = !WRAPPER.test(w[0]) && prefixRead(w);
-        if (read) {
-          writes.push(...read.writes);
-          lines.push(...read.lines);
-          alts.push(...read.alts);
-          repeats ||= read.repeats;
-        }
-        if (read?.run) {
-          joined = read.joined;
+        // A prefix command (`timeout 5`, `env -u X`) runs the call after it.
+        const run = !WRAPPER.test(w[0]) && prefixRead(w);
+        if (run) {
           wrappers.push(w[0]);
-          w.splice(0, w.length, ...read.run);
+          w.splice(0, w.length, ...run);
           continue;
         }
         if (!WRAPPER.test(w[0])) break;
@@ -2519,20 +1312,15 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
       const conditions = (blocks[seg] || []).filter(({ head }) => CONDITION_HEAD.test(head.trim()));
       if (conditions.length && conditions[0] === blocks[seg][0]) w.length = 0;
       const cmd = w.length ? commandName(w[0]) : '';
-      const loop = inLoop || loops > 0 || repeats;
-      const shellRuns = shellLines(cmd, w); // the lines this call runs as a shell
+      const loop = inLoop || loops > 0;
+      const shellRun = shellLine(cmd, w); // the line this call runs as a shell
       // What runs as this pipeline stage: a body or shell line here is inside it (inStage).
       const stage = { pipe, seg };
       // A shell's own command string is parsed whole below; reading its
       // substitutions here too would count each gated verb twice.
       // A condition's own substitutions are read with it, below.
       const own = conditions.reduce((t, { head }) => t.replace(head.trim(), ''), c);
-      if (!shellRuns.length) for (const body of substitutions(own)) emit(...commands(body, null, viaOr, loop, scopeCopy(scope)));
-      // A line of the caller's words is read with its variables (prefixRead).
-      // Its functions are its own shell's: a fresh table, so none leaks either way.
-      const theirs = (tool) => ({ ...scopeCopy(scope), funcs: newScope(null).funcs, tool });
-      for (const line of lines) emit(...inStage(commands(line, scope.dir, viaOr, loop, newScope(scope.dir, 'Bash')), stage));
-      for (const alt of alts) emit(...inStage(commands(alt, scope.dir, viaOr, loop, theirs('Bash')), stage));
+      if (!shellRun) for (const body of substitutions(own)) emit(...commands(body, null, viaOr, loop, scopeCopy(scope)));
       let chain = null; // the PowerShell if/elseif/else chain this clause's blocks are arms of
       for (const { head, body } of blocks[seg] || []) {
         const h = head.trim();
@@ -2603,16 +1391,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
         if (cmd.startsWith('esac')) caseDepths.pop();
       }
       for (const key of runtimeSets(cmd, w.slice(1))) setVar(scope, key, UNKNOWN_DIR);
-      // A prefix with no call after it still writes its files (`time -o f`).
-      if (!w.length && writes.length) out.push({ cmd, words: [], text: c, dir: scope.dir, vars: scope.vars, tool: scope.tool, pipe, seg, aside: true, writes });
       if (!w.length) continue;
-      // A clause the branches below consume unemitted can still redirect or
-      // have a prefix write (`done > f`, `time -o f bash -c "…"`): an `aside`
-      // entry carries it to rule 11. No git/gh/gate rule matches its command
-      // word; rule 3 sees it as the pipeline segment it is.
-      if ((c.includes('>') || writes.length) && (/^(?:for|done\)*)$/i.test(cmd) || LOCATION.test(cmd) || SHELL_C.test(cmd))) {
-        out.push({ cmd, words: [...w], text: c, dir: scope.dir, vars: scope.vars, tool: scope.tool, pipe, seg, aside: true, writes });
-      }
       // bash `select W in …` loops like `for` (PowerShell's select is Select-Object).
       const select = cmd === 'select' && w[2] === 'in';
       if (/^for$/i.test(cmd) || select) {
@@ -2629,15 +1408,13 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
         moveLocation(scope, cmd, w.slice(1));
         continue;
       }
-      if (SHELL_C.test(cmd)) {
-        // eval/iex run in this shell: they share the location and vars.
-        for (const line of shellRuns) {
-          if (EVAL.test(cmd)) unlessCertain(certain, () => emit(...inStage(commands(line.join(' '), null, viaOr, loop, scope), stage)));
-          else {
-            const own = rejoined(cmd, line, joined) ? theirs(shellTool(cmd)) : newScope(scope.dir, shellTool(cmd));
-            emit(...inStage(commands(line.join(' '), scope.dir, viaOr, loop, own), stage));
-          }
-        }
+      // eval/iex run in this shell: they share the location and vars.
+      if (EVAL.test(cmd)) {
+        if (shellRun) unlessCertain(certain, () => emit(...inStage(commands(shellRun.join(' '), null, viaOr, loop, scope), stage)));
+        continue;
+      }
+      if (shellTool(cmd)) {
+        if (shellRun) emit(...inStage(commands(shellRun.join(' '), scope.dir, viaOr, loop, newScope(scope.dir, shellTool(cmd))), stage));
         continue;
       }
       // A function call runs its body here, as the definitions stand now (a
@@ -2653,7 +1430,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
         for (const key of effect.keys) setVar(scope, key, UNKNOWN_DIR);
       }
       // `vars` as they stand here, for a git call's -C (gitCalls).
-      const call = { cmd, words: w, text: c, dir: scope.dir, vars: scope.vars, tool: scope.tool, pipe, seg, viaOr, loop, writes };
+      const call = { cmd, words: w, text: c, dir: scope.dir, vars: scope.vars, tool: scope.tool, pipe, seg, viaOr, loop };
       // Only a commit that decides the pipeline's exit status — run directly (not
       // in a substitution or block body), in its last segment, not under `!` —
       // makes a following `||` its fallback.
@@ -2713,7 +1490,7 @@ function isGate({ cmd, words: w }) {
  *  follow — callRule blocks a commit there. `tool` is the shell (newScope). */
 export function gitCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w, dir, vars, viaOr, loop, arms = [] } of withPayloads(commands(raw, cwd, false, false, newScope(cwd, tool)))) {
+  for (const { cmd, words: w, dir, vars, viaOr, loop, arms = [] } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
     if (!/^git$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
@@ -2731,7 +1508,7 @@ export function gitCalls(raw, cwd, tool = null) {
  *  — never by substring, so quoted text and commit messages never trigger it. */
 export function ghCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w } of withPayloads(commands(raw, cwd, false, false, newScope(cwd, tool)))) {
+  for (const { cmd, words: w } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
     if (!/^gh$/i.test(cmd)) continue;
     // `-R x` / `--repo x` take a value, before the subcommand or after it.
     const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
@@ -3490,7 +2267,7 @@ const PW_VISIBLE_FLAG = /^--(?:headed|ui|debug)(?:=.*)?$/;
  *  package script forwarding it) counts too. Headless `playwright test` is a
  *  QA gate and stays ungated. */
 export function browserCommand(raw, cwd, tool = null) {
-  for (const { cmd, words: w } of withPayloads(commands(scrub(raw), cwd, false, false, newScope(cwd, tool)))) {
+  for (const { cmd, words: w } of commands(scrub(raw), cwd, false, false, newScope(cwd, tool))) {
     let p = -1;
     if (/^playwright(?:\.cmd)?$/i.test(cmd)) p = 0;
     else if (PW_LAUNCHER.test(cmd)) {
@@ -3615,11 +2392,6 @@ function guard(payload) {
   const cmd = payload?.tool_input?.command || '';
   const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
   const tool = payload?.tool_name;
-  if (tool && tool !== 'Bash' && tool !== 'PowerShell') {
-    const fileReason = fileToolReason(tool, payload?.tool_input, cwd);
-    if (fileReason) block(fileReason);
-    return;
-  }
   const browser = browserCommand(cmd, cwd, tool);
   // Browser before push: a blocked command never spends a push approval.
   const reason =
