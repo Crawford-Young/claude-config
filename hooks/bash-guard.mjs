@@ -515,6 +515,82 @@ function expandHome(p) {
   return p;
 }
 
+/** Is a gate command among `cmds` piped onward? Rule 3's test. */
+function gatePiped(cmds) {
+  const masked = (g) => stagesOf(g).some((s) => cmds.some((t) => t.pipe === s.pipe && t.seg > s.seg));
+  return cmds.some((g) => isGate(g) && masked(g));
+}
+
+/** Rule 3's runnable rewrite (#295): the one `gate [2>&1] | filter…` pipeline
+ *  becomes `gate > LOG 2>&1; echo rc=$?; filter < LOG` (`tail -n N LOG` for a
+ *  lone tail/head -N), the rest of the command kept as written; or null when it
+ *  cannot be built faithfully. Declined: a PowerShell command; `||`, `&`,
+ *  `<<`, groups, substitutions or backticks anywhere; more or fewer than one
+ *  piped segment (split at `&&`, `;`, newline); a redirect on any gate-pipeline
+ *  stage but the gate's `2>&1`; a first stage that is not itself the gate; a
+ *  rewrite that rule 3 would still block. The log sits in `${TMPDIR:-/tmp}`
+ *  (the payload does not expose the session scratchpad), `$$`-suffixed so
+ *  concurrent calls do not share it. */
+function gateRewrite(raw, tool) {
+  if (tool && tool !== 'Bash') return null;
+  const segs = [{ raw: '', stages: [{ text: '', bad: false, at: -1 }] }];
+  const seg = () => segs[segs.length - 1];
+  const stage = () => seg().stages[seg().stages.length - 1];
+  const add = (ch) => { seg().raw += ch; stage().text += ch; };
+  let quote = null;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    const next = raw[i + 1] ?? '';
+    if (quote) {
+      if (ch === '\\' && quote === '"') { add(ch + next); i++; continue; }
+      if (ch === quote) quote = null;
+      add(ch);
+    } else if (ch === '\\') { add(ch + next); i++; }
+    else if (ch === '"' || ch === "'") { quote = ch; add(ch); }
+    else if (ch === '(' || ch === ')' || ch === '`' || (ch === '$' && next === '(')) return null;
+    else if (ch === '|') {
+      if (next === '|') return null;
+      seg().raw += ch;
+      if (next === '&') { seg().raw += '&'; i++; }
+      seg().stages.push({ text: '', bad: false, at: -1 });
+    } else if (ch === '&' && next === '&') segs.push({ raw: '', stages: [{ text: '', bad: false, at: -1 }], sep: '&&' }), i++;
+    else if (ch === ';' || ch === '\n') segs.push({ raw: '', stages: [{ text: '', bad: false, at: -1 }], sep: ch });
+    else if (ch === '\r') add(ch);
+    else if (ch === '2' && raw.startsWith('2>&1', i) && /(?:^|\s)$/.test(stage().text) && /^(?:\s|$|\|)/.test(raw.slice(i + 4))) {
+      stage().at = stage().text.length;
+      add('2>&1');
+      i += 3;
+    } else if (ch === '&' || ch === '<' || ch === '>') {
+      if (ch === '<' && next === '<') return null;
+      if (ch === '&' && next !== '>' && raw[i - 1] !== '>') return null;
+      stage().bad = true;
+      add(ch);
+    } else add(ch);
+  }
+  if (quote) return null;
+  const piped = segs.filter((s) => s.stages.length > 1);
+  if (piped.length !== 1) return null;
+  const g = piped[0];
+  const [first, ...rest] = g.stages;
+  if (first.bad) return null;
+  const head = first.at >= 0 ? first.text.slice(0, first.at) + first.text.slice(first.at + 4) : first.text;
+  if (rest.some((s) => s.bad || !s.text.trim()) || !head.trim()) return null;
+  const lead = g.raw.match(/^\s*/)[0];
+  const gateCmd = head.trim();
+  const probe = commands(gateCmd, null, false, false, newScope(null, tool));
+  if (probe.length !== 1 || !isGate(probe[0])) return null;
+  const log = '"${TMPDIR:-/tmp}/gate-$$.log"';
+  const filters = rest.map((s) => s.text.trim());
+  const lone = filters.length === 1 && filters[0].match(/^(tail|head)\s+(?:-n\s*(\d+)|-(\d+))$/);
+  const filter = lone
+    ? `${lone[1]} -n ${lone[2] ?? lone[3]} ${log}`
+    : `${filters[0]} < ${log}${filters.slice(1).map((s) => ` | ${s}`).join('')}`;
+  const tail = g.raw.match(/\s*$/)[0];
+  const swapped = `${lead}${gateCmd} > ${log} 2>&1; echo rc=$?; ${filter}${tail}`;
+  const out = segs.map((s) => (s.sep ?? '') + (s === g ? swapped : s.raw)).join('');
+  return gatePiped(withPayloads(commands(scrub(out), null, false, false, newScope(null, tool)))) ? null : out;
+}
+
 /** The static rules (1-4, 10-12) on one command. `tool` is the payload's
  *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
  *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
@@ -554,9 +630,10 @@ export function staticCheck(raw, cwd = null, tool = null) {
   //    command after it in the same pipeline (tail, head, grep, tee… all mask
   //    it), or after the group, shell line or payload it runs in (inStage)
   const cmds = withPayloads(commands(cmd, null, false, false, newScope(null, tool)));
-  const masked = (g) => stagesOf(g).some((s) => cmds.some((t) => t.pipe === s.pipe && t.seg > s.seg));
-  if (cmds.some((g) => isGate(g) && masked(g))) {
-    return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped (use `node $HOME/code/claude-config/scripts/qa.mjs` for compact output).';
+  if (gatePiped(cmds)) {
+    const base = 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped: redirect to a file, echo the rc, then filter the file.';
+    const rewrite = gateRewrite(raw, tool);
+    return rewrite ? `${base} Same command, unpiped (rc kept):\n${rewrite}` : base;
   }
 
   // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
