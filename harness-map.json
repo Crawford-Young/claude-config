@@ -629,27 +629,6 @@
    ]
   },
   {
-   "id": "script:export-harness",
-   "kind": "script",
-   "label": "export-harness.ps1",
-   "file": "scripts/export-harness.ps1",
-   "summary": "Zips the harness and workspace MDs for moving to another machine."
-  },
-  {
-   "id": "script:import-harness",
-   "kind": "script",
-   "label": "import-harness.ps1",
-   "file": "scripts/import-harness.ps1",
-   "summary": "Restores the harness from that zip on a new Windows machine."
-  },
-  {
-   "id": "script:open-admin-shells",
-   "kind": "script",
-   "label": "open-admin-shells.ps1",
-   "file": "scripts/open-admin-shells.ps1",
-   "summary": "Opens three elevated PowerShell windows."
-  },
-  {
    "id": "store:harness-map-json",
    "kind": "store",
    "label": "harness-map.json",
@@ -1236,12 +1215,6 @@
    "to": "script:verify-frontmatter",
    "kind": "feeds",
    "label": "CI, alongside"
-  },
-  {
-   "from": "script:import-harness",
-   "to": "script:export-harness",
-   "kind": "reads",
-   "label": "restores its zip"
   },
   {
    "from": "script:harness-map",
