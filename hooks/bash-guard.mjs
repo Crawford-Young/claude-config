@@ -548,10 +548,11 @@ function gateRewrite(raw, tool) {
     } else if (ch === '\\') { add(ch + next); i++; }
     else if (ch === '"' || ch === "'") { quote = ch; add(ch); }
     else if (ch === '(' || ch === ')' || ch === '`' || (ch === '$' && next === '(')) return null;
+    else if (ch === '#' && (i === 0 || /\s/.test(raw[i - 1]))) return null; // a comment would swallow `< LOG`
     else if (ch === '|') {
       if (next === '|') return null;
       seg().raw += ch;
-      if (next === '&') { seg().raw += '&'; i++; }
+      if (next === '&') { seg().raw += '&'; i++; if (seg().stages.length === 1) seg().err = true; }
       seg().stages.push({ text: '', bad: false, at: -1 });
     } else if (ch === '&' && next === '&') segs.push({ raw: '', stages: [{ text: '', bad: false, at: -1 }], sep: '&&' }), i++;
     else if (ch === ';' || ch === '\n') segs.push({ raw: '', stages: [{ text: '', bad: false, at: -1 }], sep: ch });
@@ -577,6 +578,8 @@ function gateRewrite(raw, tool) {
   if (rest.some((s) => s.bad || !s.text.trim()) || !head.trim()) return null;
   const lead = g.raw.match(/^\s*/)[0];
   const gateCmd = head.trim();
+  if (gateCmd.startsWith('!')) return null; // `!` inverts the rc echoed
+  if (rest.some((s) => /^tail\s(?:.*\s)?(?:-[a-zA-Z]*[fF]\b|--follow)/.test(s.text.trim()))) return null; // would hang
   const probe = commands(gateCmd, null, false, false, newScope(null, tool));
   if (probe.length !== 1 || !isGate(probe[0])) return null;
   const log = '"${TMPDIR:-/tmp}/gate-$$.log"';
@@ -586,7 +589,10 @@ function gateRewrite(raw, tool) {
     ? `${lone[1]} -n ${lone[2] ?? lone[3]} ${log}`
     : `${filters[0]} < ${log}${filters.slice(1).map((s) => ` | ${s}`).join('')}`;
   const tail = g.raw.match(/\s*$/)[0];
-  const swapped = `${lead}${gateCmd} > ${log} 2>&1; echo rc=$?; ${filter}${tail}`;
+  const redirect = first.at >= 0 || g.err ? `> ${log} 2>&1` : `> ${log}`;
+  const body = `${gateCmd} ${redirect}; echo rc=$?; ${filter}`;
+  // after a list separator, group it: `a && g | t && b` must not run b once `a` failed
+  const swapped = `${lead}${g === segs[0] ? body : `{ ${body}; }`}${tail}`;
   const out = segs.map((s) => (s.sep ?? '') + (s === g ? swapped : s.raw)).join('');
   return gatePiped(withPayloads(commands(scrub(out), null, false, false, newScope(null, tool)))) ? null : out;
 }
