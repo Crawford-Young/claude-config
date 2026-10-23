@@ -2,10 +2,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness, tempDir } from './_spawn.mjs';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const hook = join(repo, 'hooks', 'session-start.mjs');
@@ -75,4 +75,55 @@ test('gh failing, missing or hanging fails open silently', () => {
     assert.ok(out.includes(index));
     assert.doesNotMatch(out, /In progress/);
   }
+});
+
+// ---- hook-errors.log reader (#300) ----
+const hooksUrl = pathToFileURL(join(repo, 'hooks')).href;
+const entry = (ts, name, dirUrl) =>
+  `${ts} ${name}: Error: boom\n    at f (${dirUrl}/${name}.mjs:1:1)\n    at g (${dirUrl}/_hooklib.mjs:2:2)\n`;
+
+/** Run the hook in a home whose .claude holds `files`; returns { out, home }. */
+function runWithClaudeDir(files) {
+  const home = tempDir('ss-home-');
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(home, '.claude', name), body);
+  const out = execHarness(hook, [], { home, input: JSON.stringify({ source: 'startup' }), env: { SESSION_START_GH: failingGh } }).replace(/\r\n/g, '\n');
+  return { out, home };
+}
+
+test('live-hook errors since the last session start add one line: count and newest hook', () => {
+  const log =
+    entry('2026-10-01T00:00:00.000Z', 'old-hook', hooksUrl) +
+    entry('2026-10-10T00:00:00.000Z', 'bash-guard', hooksUrl) +
+    entry('2026-10-11T00:00:00.000Z', 'context-gauge', hooksUrl);
+  const { out } = runWithClaudeDir({ 'hook-errors.log': log, 'hook-errors.seen': '2026-10-05T00:00:00.000Z' });
+  const lines = out.split('\n').filter((l) => /hook-errors\.log/.test(l));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /2 hook errors/);
+  assert.match(lines[0], /context-gauge/);
+});
+
+test('worktree, scratch and compiled-copy entries are not counted', () => {
+  const log =
+    entry('2026-10-10T00:00:00.000Z', 'bash-guard', 'file:///C:/Users/x/code/.worktrees/claude-config-1-foo/hooks') +
+    entry('2026-10-10T00:00:01.000Z', 'bash-guard', 'file:///C:/tmp/scratch/hooks') +
+    entry('2026-10-10T00:00:02.000Z', 'bash-guard', `${hooksUrl}-copy`);
+  const { out } = runWithClaudeDir({ 'hook-errors.log': log, 'hook-errors.seen': '2026-10-05T00:00:00.000Z' });
+  assert.doesNotMatch(out, /hook-errors\.log/);
+});
+
+test('each start advances the marker, so the same errors are reported once', () => {
+  const log = entry('2026-10-10T00:00:00.000Z', 'bash-guard', hooksUrl);
+  const { out, home } = runWithClaudeDir({ 'hook-errors.log': log, 'hook-errors.seen': '2026-10-05T00:00:00.000Z' });
+  assert.match(out, /1 hook error\b/);
+  const second = execHarness(hook, [], { home, input: JSON.stringify({ source: 'startup' }), env: { SESSION_START_GH: failingGh } });
+  assert.doesNotMatch(second, /hook-errors\.log/);
+  assert.ok(Date.parse(readFileSync(join(home, '.claude', 'hook-errors.seen'), 'utf8')) > Date.parse('2026-10-10'));
+});
+
+test('first run (no marker) and a missing log stay silent but leave a marker', () => {
+  const first = runWithClaudeDir({ 'hook-errors.log': entry('2026-10-10T00:00:00.000Z', 'bash-guard', hooksUrl) });
+  assert.doesNotMatch(first.out, /hook-errors\.log/);
+  assert.ok(existsSync(join(first.home, '.claude', 'hook-errors.seen')));
+  assert.doesNotMatch(runWithClaudeDir({}).out, /hook-errors\.log/);
 });
