@@ -205,7 +205,7 @@ test('warn says checkpoint, then run the continuation skill', () => {
   assert.match(text, /What\/Verified\/Next\/Ruled out/);
   assert.match(text, /comment/i);
   assert.match(text, /continuation\/SKILL\.md/);
-  assert.match(text, /AskUserQuestion/);
+  assert.doesNotMatch(text, /AskUserQuestion/);
   assert.doesNotMatch(text, /auto-compact|window/i);
 });
 
@@ -265,7 +265,7 @@ test('with no window source the absolute bands still fire: 160k nudges, 260k blo
   const b = runHook('keep building', line(usage(0, 260_000)), { window: null });
   assert.equal(b.code, 2);
   assert.match(b.stderr, /260k/);
-  assert.match(b.stderr, /fresh-session-or-continue/);
+  assert.doesNotMatch(b.stderr, /fresh-session-or-continue|AskUserQuestion/);
   assert.match(b.stderr, /\/exit, run the launch line/);
   assert.match(b.stderr, /\/compact/);
   assert.doesNotMatch(b.stderr, /clear-vs-continue|\/clear\b/);
@@ -307,7 +307,7 @@ test('PostToolUse emits additionalContext JSON per band and exits 0', () => {
 
   const w = JSON.parse(runPost(line(usage(0, 210_000)), { window: null }).stdout);
   assert.match(w.hookSpecificOutput.additionalContext, /continuation\/SKILL\.md/);
-  assert.match(w.hookSpecificOutput.additionalContext, /fresh-session-or-continue/);
+  assert.doesNotMatch(w.hookSpecificOutput.additionalContext, /fresh-session-or-continue|AskUserQuestion/);
   assert.doesNotMatch(w.hookSpecificOutput.additionalContext, /clear-or-continue/);
 
   const blockRun = runPost(line(usage(0, 260_000)), { window: null });

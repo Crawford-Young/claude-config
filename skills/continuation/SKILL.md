@@ -6,15 +6,7 @@ disable-model-invocation: true
 
 # Continuation
 
-Ask first, with one AskUserQuestion whose options are labelled `Fresh session` and `Continue` (stop-reflect-gate matches those labels). A fresh session means `/exit`, run the launch line, paste. Emit the block only if the user picks the fresh session — never in the same reply as the ask, and never unprompted.
-
-## If continue
-
-Say so in one line. No block.
-
-## If fresh session
-
-Produce a **copy-paste prompt** the user pastes into the fresh session. No handoff file — the GitHub issue and the last commit body already record durable state; the prompt points at them and carries only what exists nowhere on disk.
+Produce a **copy-paste prompt** the user pastes into a fresh session. Print it directly, with no question first. To keep going in this session, the user ignores it, so end the reply with one line saying so. No handoff file — the GitHub issue and the last commit body already record durable state; the prompt points at them and carries only what exists nowhere on disk.
 
 Print the launch line from `node ~/code/claude-config/scripts/session-name.mjs <type> <args>` (type: `ticket` for an issue unit, `epic` for an epic, `director` for a director, else `general`). The user runs it from the repo root in a fresh terminal, then pastes the block below as the first message (an agent can't run `/rename`, and `-n` names the session at launch).
 

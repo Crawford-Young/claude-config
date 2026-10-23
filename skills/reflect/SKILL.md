@@ -1,12 +1,12 @@
 ---
 name: reflect
-description: Use when an issue's PR merges or a phase closes — review the unit's evidence with the user and land agreed harness edits in place. Gathers every session window of the unit via reflect-gather.mjs (audit joined on the unit's session name).
+description: Use when the user asks for a review, or once at batch or epic close — review the unit's evidence with the user and land agreed harness edits in place. Gathers every session window of the unit via reflect-gather.mjs (audit joined on the unit's session name).
 disable-model-invocation: true
 ---
 
 # Reflect
 
-Run when an issue's PR merges or a phase closes. The user can decline.
+Run when the user asks, or once at batch or epic close (`directing-a-batch.md` "Closing audit") — never after each merged PR. The user can decline.
 
 ## 1. Gather
 
@@ -37,4 +37,4 @@ Apply agreed edits with the Edit tool, showing each diff. Place each per the `ha
 - Routing surprises go to `agents/ROUTING.md` as a dated one-liner.
 - claude-config edits land live on the main checkout and commit via `git-ops` (`land.mjs`).
 
-No ledger: the commits and the issue thread are the record. Then Read `~/code/claude-config/skills/continuation/SKILL.md` and ask its fresh-session-or-continue AskUserQuestion.
+No ledger: the commits and the issue thread are the record. Then Read `~/code/claude-config/skills/continuation/SKILL.md` and print its launch line and block.
