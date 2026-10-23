@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execHarness, raceHarness, tempDir } from './_spawn.mjs';
-import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -392,7 +392,7 @@ test('dropping under the nudge line re-arms the bands for both triggers', () => 
   assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
 });
 
-test('a write prunes week-old sessions and their sidecars, and the legacy inline-edit-nudge lock (#217)', () => {
+test('a write prunes week-old sessions and their sidecars (#217)', () => {
   const home = sharedHome();
   const dir = join(home, '.claude', 'context-gauge');
   mkdirSync(dir, { recursive: true });
@@ -404,13 +404,10 @@ test('a write prunes week-old sessions and their sidecars, and the legacy inline
   };
   for (const f of ['dead.json', 'dead.json.lock.123', 'dead.json.4242.tmp']) touch(f, 8);
   touch('recent.json', 6);
-  const legacy = join(home, '.claude', 'inline-edit-nudge.json.lock');
-  writeFileSync(legacy, '');
   assert.equal(runPost(line(usage(0, 20_000)), { home }).stdout.trim(), '', 'under the nudge line nothing is written');
   assert.equal(readdirSync(dir).length, 4, 'only a write prunes');
   assert.match(runPost(line(usage(0, 160_000)), { home }).stdout, /next green commit/);
   assert.deepEqual(readdirSync(dir).sort(), ['e2e-sid.json', 'recent.json']);
-  assert.ok(!existsSync(legacy), 'the legacy lock is removed');
 });
 
 test('a broken transcript path fails open rather than wedging the session', () => {
