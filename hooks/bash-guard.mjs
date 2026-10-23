@@ -579,7 +579,7 @@ function gateRewrite(raw, tool) {
   const lead = g.raw.match(/^\s*/)[0];
   const gateCmd = head.trim();
   if (gateCmd.startsWith('!')) return null; // `!` inverts the rc echoed
-  if (rest.some((s) => /^tail\s(?:.*\s)?(?:-[a-zA-Z]*[fF]\b|--follow)/.test(s.text.trim()))) return null; // would hang
+  if (rest.some((s) => /^tail\s/.test(s.text.trim()) && /(?:\s|^)(?:-[^-\s]*[fF]|--follow)/.test(s.text.trim()))) return null; // would hang
   const probe = commands(gateCmd, null, false, false, newScope(null, tool));
   if (probe.length !== 1 || !isGate(probe[0])) return null;
   const log = '"${TMPDIR:-/tmp}/gate-$$.log"';

@@ -1530,6 +1530,7 @@ test('#295: a blocked gate pipe answers with a runnable unpiped rewrite', () => 
   const log = '"${TMPDIR:-/tmp}/gate-$$.log"';
   const cases = [
     ['node --test scripts/test/x.test.mjs 2>&1 | tail -15', `node --test scripts/test/x.test.mjs > ${log} 2>&1; echo rc=$?; tail -n 15 ${log}`],
+    ['pnpm test 2>&1 | tail -n 5', `pnpm test > ${log} 2>&1; echo rc=$?; tail -n 5 ${log}`],
     // stderr is merged only when the original pipe carried it
     ['cargo +1.98.0 test -p core -- --nocapture | grep foo', `cargo +1.98.0 test -p core -- --nocapture > ${log}; echo rc=$?; grep foo < ${log}`],
     ['pnpm test 2>&1 | grep FAIL', `pnpm test > ${log} 2>&1; echo rc=$?; grep FAIL < ${log}`],
@@ -1568,6 +1569,9 @@ test('#295: no rewrite when it cannot be built faithfully; the block stays', () 
     'pnpm test 2>&1 | tail -3 # note', // a comment would swallow `< LOG`
     'pnpm test 2>&1 | tail -f',
     'pnpm test 2>&1 | tail -F -n 5',
+    'pnpm test 2>&1 | tail -fn 5',
+    'pnpm test 2>&1 | tail -Fn20',
+    'pnpm test 2>&1 | tail -5f',
   ]) {
     const msg = staticCheck(cmd, null, 'Bash');
     assert.ok(msg, cmd);
