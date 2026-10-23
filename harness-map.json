@@ -316,9 +316,9 @@
     "No commit on main in code repos (each git call judged in its own cd'd repo)",
     "claude-config main never switches branch or restores files",
     "claude --model fable needs FABLE OK",
-    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer or typed user prompt in the transcript (never a peer, tool, hook or notification record), bound to the one branch its first gated call ships until that PR merges (#305); a remote branch delete (push --delete, -d, or :branch refspecs only) is exempt like --dry-run; a negator refuses only the act it negates",
+    "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer or typed user prompt in the transcript (never a peer, tool, hook or notification record), single-use per verb — or, when its first gated call is a lone canonical push/PR create/merge command, bound to that branch's whole ship until its merge, every later gated call a lone canonical command for it (#305); a remote branch delete (push --delete, -d, or :branch refspecs only) is exempt like --dry-run; a negator refuses only the act it negates",
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
-    "A compound of gated calls passes when they all ship the bound branch; a branch the guard can't determine blocks",
+    "One gated verb per Bash call — a compound with two is blocked unspent",
     "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated",
     "No write into a session transcript or gate state file (push-gate-approvals, browser-gate-sessions, fable-clearance), nor a delete/move-away of a state file, by shell, PowerShell, a runner payload, inline interpreter or Write/Edit tool; auto-memory exempt; a script file is out of reach",
     "A command nesting blocks, groups or substitutions more than 100 levels deep is blocked unread (#167)"
@@ -703,7 +703,7 @@
    "kind": "store",
    "label": "push-gate-approvals.json",
    "file": "~/.claude/push-gate-approvals.json",
-   "summary": "The repo#branch each push approval (keyed by transcript record uuid) is bound to, its calls' tool_use_ids and its merge (#75, #305). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
+   "summary": "Per push approval (keyed by transcript record uuid): the verbs it has spent (#75), or the repo#branch it is bound to with its calls' tool_use_ids, create and merge (#305). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
    "external": true
   },
   {

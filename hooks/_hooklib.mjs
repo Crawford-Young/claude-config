@@ -221,7 +221,7 @@ export function isGateRecord(p, dirTarget = false, tree = false) {
  *  (`find DIR -name X -delete`); with `tree` too, a matched dir goes with
  *  everything under it, so the name may match any dir on a state file's way
  *  down (`find DIR -name X -exec rm -rf {} +`, #214). Deleting
- *  push-gate-approvals.json forgets every approval's binding, so it counts as a
+ *  push-gate-approvals.json forgets every spend and binding, so it counts as a
  *  write. A transcript doesn't: deleting one can only take an approval away
  *  (the gates fail closed on a missing transcript), never forge one. #190. */
 export function removesGateState(p, deep = false, tree = false) {
