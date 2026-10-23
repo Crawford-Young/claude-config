@@ -552,6 +552,20 @@ test('walkTranscripts carries a subagent\'s meta.json name, never one read off i
   ]);
 });
 
+test('walkTranscripts falls back to a tree-named meta.json description when there is no name (#318)', async () => {
+  const root = tempDir('audit-');
+  const sub = join(root, 'C--proj', 'sess-1', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  const metas = { d1: { description: 'harness_repo_t5_review-r5' }, d2: { description: 'Fix the bug' }, d3: { name: 'harness_repo_t1', description: 'harness_repo_t2' } };
+  for (const [id, m] of Object.entries(metas)) {
+    writeFileSync(join(sub, `agent-${id}.jsonl`), `${JSON.stringify(asst('w', usage()))}\n`);
+    writeFileSync(join(sub, `agent-${id}.meta.json`), JSON.stringify({ agentType: 'reviewer', ...m }));
+  }
+  const names = {};
+  for await (const f of walkTranscripts(root)) names[f.ctx.agent.id] = f.ctx.agent.name;
+  assert.deepEqual(names, { d1: 'harness_repo_t5_review-r5', d2: undefined, d3: 'harness_repo_t1' });
+});
+
 test('a named subagent\'s spend moves out of its window\'s name row into its own; the rows sum to the window (#272)', () => {
   const c = createCollector({ prices: PRICES });
   const win = { sessionId: 'w1', agent: null, window: 'w1', name: 'director-harness' };

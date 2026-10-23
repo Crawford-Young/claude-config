@@ -92,7 +92,38 @@ test("a subagent's spawn must strictly extend its own tree name", () => {
   }
 });
 
-test('a worker is a leaf: its spawn is refused with a pointer to its lead', () => {
+test('an Agent tool with no name parameter: the tree name in description stands in, name wins when both are present (#318)', () => {
+  const f = fixture();
+  title(f, 'director-harness');
+  const byDesc = (description, extra = {}) => {
+    const payload = { session_id: 's1', transcript_path: f.transcript, tool_name: 'Agent', tool_input: { description, prompt: 'y', subagent_type: 'implementer' }, ...extra };
+    return spawnHarness(guard, [], { input: JSON.stringify(payload), home: f.home });
+  };
+  assert.equal(byDesc('harness_repo_t5_impl').status, 0);
+  assert.equal(byDesc('harness_repo_t5_impl-r2').status, 0);
+  for (const d of ['Fix the bug', 'other_repo_t5_impl', 'Harness_repo_t5']) {
+    const r = byDesc(d);
+    assert.equal(r.status, 2, d);
+    assert.match(r.stderr, /session-name\.mjs tree/, d);
+  }
+  assert.equal(spawn(f, 'harness_repo_t6', { tool_input: { name: 'harness_repo_t6', description: 'Fix the bug', prompt: 'y' } }).code, 0, 'name beats a prose description');
+  assert.equal(spawn(f, undefined, { tool_input: { name: 'bad', description: 'harness_repo_t6', prompt: 'y' } }).code, 2, 'a present name is judged on its own, not rescued by description');
+});
+
+test("a subagent caller's tree name may sit in its meta.json description when the Agent tool had no name (#318)", () => {
+  const f = fixture();
+  title(f, 'director-harness');
+  meta(f, 'lead', { description: 'harness_repo_t5' });
+  meta(f, 'w1', { description: 'harness_repo_t5_impl' });
+  meta(f, 'both', { name: 'harness_repo_t7', description: 'harness_repo_t8' });
+  const as = (id, name) => spawn(f, undefined, { agent_id: id, tool_input: { description: name, prompt: 'y' } });
+  assert.equal(as('lead', 'harness_repo_t5_impl').code, 0);
+  assert.equal(as('lead', 'harness_repo_t6_impl').code, 2, 'outside the lead subtree');
+  assert.equal(as('w1', 'harness_repo_t5_impl_recon').code, 2, 'a worker is a leaf');
+  assert.equal(as('both', 'harness_repo_t7_impl').code, 0, 'meta name wins over description');
+});
+
+test('a worker is a leaf:its spawn is refused with a pointer to its lead', () => {
   const f = fixture();
   meta(f, 'w1', { name: 'harness_repo_t5_impl' });
   const r = spawn(f, 'harness_repo_t5_recon', { agent_id: 'w1' });

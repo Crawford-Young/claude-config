@@ -19,7 +19,8 @@
 //   ai-title and agent-name records carry auto names, not unit names (#73).
 // - A named subagent's .meta.json carries its Agent `name` (verified 2026-10-16, CC
 //   2.1.301); with agent teams off its id no longer embeds the name. Its spend and time
-//   group under that name's sessionKey, not its window's title (#272).
+//   group under that name's sessionKey, not its window's title (#272). With no `name`
+//   (an Agent tool without the parameter), a tree-name `description` stands in (#318).
 // - An assistant record carries the request's effort as a top-level `effort` field
 //   (#113; on every subagent record of CC 2.1.26x-2.1.296 on disk 2026-10-13, except
 //   Haiku 4.5, whose records have none: its effort is unknown, not a default).
@@ -56,7 +57,7 @@ import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { shellSkillReads } from '../hooks/_hooklib.mjs';
-import { sessionKey } from './lib.mjs';
+import { parseSessionName, sessionKey } from './lib.mjs';
 
 const MTOK = 1e6;
 
@@ -918,7 +919,8 @@ export async function* walkTranscripts(root) {
           const id = basename(f, '.jsonl').replace(/^agent-/, '');
           let meta = {};
           try { meta = JSON.parse(readFileSync(join(sub, `agent-${id}.meta.json`), 'utf8')); } catch { /* no meta: untyped */ }
-          const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : null;
+          // No `name` when the Agent tool had none (#318): the tree name rides in description; prose descriptions don't count.
+          const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : parseSessionName(meta.description).tree ? meta.description : null;
           yield { file: join(sub, f), ctx: { sessionId: e.name, agent: { id, type: meta.agentType || 'unknown', model: meta.model, ...(name && { name }) } } };
         }
       }

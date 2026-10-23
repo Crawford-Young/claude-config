@@ -8,7 +8,11 @@
 // payload carries its agent_id) whose <session>/subagents/agent-<agent_id>.meta.json name
 // is a tree name. Everywhere else a spawn passes untouched, named or not (Explore, Plan,
 // claude-code-guide, a fork, any session outside a director's tree). In tree context:
-//   1. tool_input.name must be a tree name, lowercase as built.
+//   1. The spawn's name must be a tree name, lowercase as built: tool_input.name, else
+//      tool_input.description. The Desktop and 2026-10 CLI Agent tools have no `name`
+//      parameter, so a director puts the tree name in `description`, and the subagent's
+//      meta.json records it there too (no `name` field); the caller's lineage reads meta.json
+//      name, else description (#318).
 //   2. A subagent caller spawns only below itself: the child's name strictly extends the
 //      caller's. A worker is a leaf (no tree name extends one), so its refusal names the
 //      lead to report to.
@@ -48,6 +52,13 @@ function sessionDir(transcriptPath, sessionId) {
   return basename(dir) === 'subagents' ? dirname(dir) : join(dir, sessionId);
 }
 
+/** A spawn's name from an Agent tool_input or a subagent's meta.json: `name`, else `description`
+ *  (#318: the Desktop and 2026-10 CLI Agent tools have no `name`, so the tree name rides in description). */
+function spawnName(o) {
+  const named = typeof o?.name === 'string' && o.name.trim();
+  return named ? o.name : o?.description;
+}
+
 /** The caller's tree context: { parent } for a subagent with a tree name, { director } for
  *  the main session under a director title; null outside the tree. */
 function treeContext(payload) {
@@ -55,7 +66,7 @@ function treeContext(payload) {
   if (!dir) return null;
   const agentId = payload.agent_id;
   if (agentId) {
-    const parent = PLAIN_ID.test(agentId) ? readJson(join(dir, 'subagents', `agent-${agentId}.meta.json`))?.name : null;
+    const parent = PLAIN_ID.test(agentId) ? spawnName(readJson(join(dir, 'subagents', `agent-${agentId}.meta.json`))) : null;
     const p = parseSessionName(parent);
     return p.tree ? { parent: parent.toLowerCase(), worker: Boolean(p.role) } : null;
   }
@@ -67,7 +78,7 @@ function treeContext(payload) {
 function refusal(payload) {
   const ctx = treeContext(payload);
   if (!ctx) return null;
-  const name = payload?.tool_input?.name;
+  const name = spawnName(payload?.tool_input);
   if (ctx.worker) return `${ctx.parent} is a worker, a leaf of the tree: it spawns nothing, so report the need to your lead, ${ctx.parent.slice(0, ctx.parent.lastIndexOf('_'))}.`;
   if (typeof name !== 'string' || !name.trim()) return `Name every Agent spawn with its tree name (dir → repo → epic → ticket → worker, e.g. harness_claude-config_t264_impl). ${BUILD}`;
   if (!parseSessionName(name).tree || name !== name.trim().toLowerCase()) return `"${name}" is not a tree name: <dir>_<repo>[_e<N>][_t<N>][_<impl|review|recon>[-r<K>]], lowercase. ${BUILD}`;
