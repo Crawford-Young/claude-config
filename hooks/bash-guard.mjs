@@ -2869,11 +2869,14 @@ function repoSlug(ref) {
 /** A repo's remote, branch, push and url config in one read, as git sees it:
  *  key → every value, in order (git's single-valued keys take the last).
  *  Section and variable names come lowercased; subsections keep their case.
- *  Empty when unreadable. */
-function gitConfig(repo) {
+ *  Empty when no key matches (git's exit 1, nothing printed); null when the
+ *  read failed (timeout, spawn error, any other exit) — callers fail closed. */
+export function gitConfig(repo) {
   const r = spawnSync('git', ['-C', repo, 'config', '--get-regexp', '^(remote|branch|push|url)\\.'], { encoding: 'utf8', timeout: 4000 });
+  const noMatch = r.status === 1 && !r.stdout && !(r.stderr || '').trim();
+  if (r.error || (r.status !== 0 && !noMatch)) return null;
   const cfg = new Map();
-  for (const line of ((r.status === 0 && r.stdout) || '').split('\n')) {
+  for (const line of (r.stdout || '').split('\n')) {
     const sp = line.indexOf(' ');
     const key = sp > 0 ? line.slice(0, sp) : line.trim();
     if (key) cfg.set(key, [...(cfg.get(key) || []), sp > 0 ? line.slice(sp + 1).trim() : 'true']);
@@ -2891,6 +2894,7 @@ const liveBranch = (dir) => (dir ? currentBranch(dir) || null : null);
  *  set-default` resolved, else upstream, github, origin, then the first. */
 function ghRemoteSlug(repo) {
   const cfg = gitConfig(repo);
+  if (!cfg) return null;
   const names = [...cfg.keys()].map((k) => /^remote\.(.+)\.url$/.exec(k)?.[1]).filter(Boolean);
   const name = names.find((n) => cfg.has(`remote.${n}.gh-resolved`)) || ['upstream', 'github', 'origin'].find((n) => names.includes(n)) || names[0];
   return name ? repoSlug(last(cfg, `remote.${name}.url`)) : null;
@@ -2898,9 +2902,16 @@ function ghRemoteSlug(repo) {
 
 /** Why push config could send `git push <remote> <branch>` somewhere other
  *  than `url` and that branch, or null. */
-function pushConfigRisk(cfg, remoteName, url) {
+function pushConfigRisk(cfg, remoteName, url, branch) {
   const r = `remote.${remoteName}`;
+  // A remote from a legacy .git/remotes or .git/branches file, which this read can't see.
+  if (!cfg.has(`${r}.url`)) return `${r}.url is not in its config (a legacy remotes/branches file?)`;
   if (cfg.has(`${r}.push`)) return `${r}.push maps its refspecs`;
+  // upstream/tracking send an explicit `<remote> <branch>` to the branch's
+  // upstream; simple (git's default) and the rest keep its name.
+  const mode = last(cfg, 'push.default');
+  const merges = cfg.get(`branch.${branch}.merge`) || [];
+  if (/^(?:upstream|tracking)$/i.test(mode ?? '') && merges.some((m) => m !== `refs/heads/${branch}`)) return `push.default=${mode} sends it to its upstream ${merges.join(', ')}`;
   if (TRUE_CFG.test(last(cfg, `${r}.mirror`) ?? '')) return `${r}.mirror is set`;
   if ((cfg.get(`${r}.pushurl`) || []).length > 1 || (!cfg.has(`${r}.pushurl`) && (cfg.get(`${r}.url`) || []).length > 1)) return `${r} pushes to more than one URL`;
   for (const [k, vs] of cfg) {
@@ -2947,8 +2958,9 @@ function pushShip(words, base, ps) {
   const urls = r.status === 0 ? (r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean) : [];
   if (urls.length !== 1) return { why: urls.length ? `remote "${remote}" pushes to more than one URL` : `"${remote}" is not a remote git can resolve there` };
   const cfg = gitConfig(repo);
+  if (!cfg) return { why: 'its git config could not be read' };
   const configured = last(cfg, `remote.${remote}.pushurl`) || last(cfg, `remote.${remote}.url`) || urls[0];
-  const risk = pushConfigRisk(cfg, remote, configured) || pushConfigRisk(cfg, remote, urls[0]);
+  const risk = pushConfigRisk(cfg, remote, configured, branch) || pushConfigRisk(cfg, remote, urls[0], branch);
   if (risk) return { why: risk };
   return { verb: 'git push', target: `${repoSlug(urls[0])}#${branch}`, use: {} };
 }
@@ -3029,8 +3041,9 @@ function mergeShip(args, dir, prHead) {
 /** 8. A canonical ship command's `{ verb, target: 'host/owner/repo#branch', use }`
  *  (use: this call's create / auto / merge), read live from the checkout,
  *  remotes and config; or `{ why }` when `raw` is anything else:
- *  `[cd <abs path> (&& | ;)] CALL [2>&1 | >/dev/null | 2>/dev/null]* [| tail|head -N]`,
- *  CALL a push, PR create or merge in the shapes hooks/README.md rule 8 lists.
+ *  `[cd <abs path> SEP] CALL [2>&1 | >/dev/null | 2>/dev/null]* [| tail|head -N]`,
+ *  SEP `&&` in bash, `;` or `&&` in PowerShell, CALL a push, PR create or
+ *  merge in the shapes hooks/README.md rule 8 lists.
  *  `deps.prHead(ref, repoFlag, dir)` looks up a PR's head branch (gh by default). */
 export function canonicalShip(raw, cwd, tool = null, deps = {}) {
   const ps = tool === 'PowerShell';
@@ -3043,6 +3056,9 @@ export function canonicalShip(raw, cwd, tool = null, deps = {}) {
     // Bash's `;` would run the call in the old dir if the cd failed; PowerShell
     // 5.1 has no `&&`.
     if (!t[1]?.word || !(t[2]?.op === '&&' || (ps && t[2]?.op === ';'))) return { why: 'a cd before the call must be `cd <absolute path> &&`' };
+    // Set-Location reads [ ] * ? as wildcards, quoted or not, and its failure
+    // doesn't stop the call.
+    if (ps && /[[\]*?]/.test(t[1].word)) return { why: `PowerShell's cd reads the wildcard chars in ${t[1].word}` };
     base = shipDir(null, t[1], ps, true);
     if (!base) return { why: `cd ${t[1].word} is not an absolute path to a dir that exists` };
     k = 3;

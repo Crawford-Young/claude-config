@@ -19,6 +19,7 @@ import {
   isApproving,
   pushGateReason,
   canonicalShip,
+  gitConfig,
   browserCommand,
   substitutions,
   branchRules,
@@ -4097,4 +4098,86 @@ test('#305 end-to-end through the real hook: one bound ship', () => {
   assert.equal(hook('git status && git push origin feat/x'), 2);
   assert.equal(hook('gh pr merge --rebase'), 0);
   assert.equal(hook('git push origin feat/x'), 2);
+});
+
+// --- #305 review 4 -----------------------------------------------------------
+
+/** The refs `git push --dry-run --porcelain <args>` would update in `dir`, as `src:dst`. */
+const dryRunRefs = (dir, ...args) =>
+  execFileSync('git', ['-C', dir, 'push', '--dry-run', '--porcelain', ...args], { encoding: 'utf8' })
+    .split('\n')
+    .filter((l) => /^[ *+=!-]\t/.test(l))
+    .map((l) => l.split('\t')[1]);
+
+test('#305 review 4.1: push.default upstream/tracking with another upstream maps an explicit push elsewhere — not canonical', () => {
+  // The mapping guarded against, proved on a local bare remote: upstream sends feat/x to main; simple does not.
+  const root = tempDir('pd-');
+  execFileSync('git', ['init', '-q', '--bare', join(root, 'bare.git')]);
+  const local = shipRepo('feat/x', join(root, 'w'));
+  execFileSync('git', ['-C', local, 'remote', 'set-url', 'origin', join(root, 'bare.git')]);
+  execFileSync('git', ['-C', local, 'config', 'branch.feat/x.remote', 'origin']);
+  execFileSync('git', ['-C', local, 'config', 'branch.feat/x.merge', 'refs/heads/main']);
+  execFileSync('git', ['-C', local, 'config', 'push.default', 'upstream']);
+  assert.deepEqual(dryRunRefs(local, 'origin', 'feat/x'), ['refs/heads/feat/x:refs/heads/main']);
+  execFileSync('git', ['-C', local, 'config', 'push.default', 'simple']);
+  assert.deepEqual(dryRunRefs(local, 'origin', 'feat/x'), ['refs/heads/feat/x:refs/heads/feat/x']);
+
+  const repo = (pairs) => {
+    const dir = shipRepo();
+    for (const [k, v] of [['branch.feat/x.remote', 'origin'], ...pairs]) execFileSync('git', ['-C', dir, 'config', '--add', k, v]);
+    return dir;
+  };
+  for (const mode of ['upstream', 'tracking']) {
+    const dir = repo([['push.default', mode], ['branch.feat/x.merge', 'refs/heads/main']]);
+    for (const cmd of ['git push origin feat/x', 'git push origin HEAD', 'git push origin refs/heads/feat/x']) {
+      assert.match(canonicalShip(cmd, dir).why || '', /push\.default/, `${mode}: ${cmd}`);
+    }
+  }
+  // Canonical again: an upstream of the same name, no upstream, a later simple (the last value wins), or git's default.
+  for (const pairs of [
+    [['push.default', 'upstream'], ['branch.feat/x.merge', 'refs/heads/feat/x']],
+    [['push.default', 'upstream']],
+    [['push.default', 'upstream'], ['push.default', 'simple'], ['branch.feat/x.merge', 'refs/heads/main']],
+    [['branch.feat/x.merge', 'refs/heads/main']],
+  ]) {
+    assert.equal(canonicalShip('git push origin feat/x', repo(pairs)).target, SHIP_X, JSON.stringify(pairs));
+  }
+});
+
+test('#305 review 4.2: a legacy .git/remotes or .git/branches remote is not canonical', () => {
+  const dir = shipRepo();
+  mkdirSync(join(dir, '.git', 'remotes'));
+  mkdirSync(join(dir, '.git', 'branches'));
+  writeFileSync(join(dir, '.git', 'remotes', 'legacy'), 'URL: https://github.com/o/r.git\n');
+  writeFileSync(join(dir, '.git', 'branches', 'old'), 'https://github.com/o/r.git\n');
+  for (const r of ['legacy', 'old']) {
+    // git resolves it ...
+    assert.match(execFileSync('git', ['-C', dir, 'remote', 'get-url', '--push', '--all', r], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }), /github\.com\/o\/r/);
+    // ... but the config the guard reads has no remote.<r>.url.
+    assert.ok(canonicalShip(`git push ${r} feat/x`, dir).why, r);
+  }
+});
+
+test('#305 review 4.3: a PowerShell cd path holding a wildcard char is not canonical', () => {
+  const parent = tempDir('wc-');
+  const dir = shipRepo('feat/x', join(parent, 'a[1]'));
+  const fwd = dir.replaceAll('\\', '/');
+  // Set-Location reads [ ] * ? as wildcards and fails without stopping the push.
+  for (const cmd of [`cd '${fwd}'; git push origin feat/x`, `cd '${fwd}' && git push origin feat/x`, "cd 'C:/x*'; git push origin feat/x", "cd 'C:/x?'; git push origin feat/x"]) {
+    assert.match(canonicalShip(cmd, parent, 'PowerShell').why || '', /wildcard/, cmd);
+  }
+  // Bash's cd and git -C take the path literally.
+  assert.equal(canonicalShip(`cd '${fwd}' && git push origin feat/x`, parent).target, SHIP_X);
+  assert.equal(canonicalShip(`git -C '${fwd}' push origin feat/x`, parent, 'PowerShell').target, SHIP_X);
+});
+
+test('#305 review 4.4: an unreadable git config fails closed', () => {
+  assert.equal(gitConfig(join(tempDir('nogit-'), 'missing')), null);
+  const empty = tempDir('cfg-');
+  execFileSync('git', ['init', '-q', empty]);
+  assert.deepEqual(gitConfig(empty), new Map(), 'no matching key is an empty read, not a failure');
+  const bad = shipRepo();
+  writeFileSync(join(bad, '.git', 'config'), '[core\n[remote "origin"]\n\turl = https://github.com/o/r.git\n');
+  assert.equal(gitConfig(bad), null);
+  for (const cmd of ['git push origin feat/x', 'gh pr create --fill', 'gh pr merge --rebase']) assert.ok(canonicalShip(cmd, bad).why, cmd);
 });

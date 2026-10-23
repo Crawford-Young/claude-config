@@ -150,10 +150,13 @@ fixed false verdict; change them only with a test:
   changes the target and blocks. Not canonical, besides anything outside the
   grammar: push config that could send the push elsewhere
   (`remote.<r>.push`, `mirror`, several push URLs, a matching `insteadOf`/
-  `pushInsteadOf`, `push.followTags`, `push.recurseSubmodules`), any
+  `pushInsteadOf`, `push.followTags`, `push.recurseSubmodules`,
+  `push.default` upstream/tracking with a `branch.<b>.merge` naming another
+  branch, a legacy `.git/remotes`/`.git/branches` remote with no
+  `remote.<r>.url`), a git config the guard can't read, any
   `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`/`GIT_CONFIG*`
-  or `GH_REPO`/`GH_HOST` in the hook's env, a detached HEAD, a failed PR
-  lookup. Refunds (#147): one-shot spends as before; a bound create or merge
+  or `GH_REPO`/`GH_HOST` in the hook's env, a PowerShell cd path holding a
+  wildcard char (`[ ] * ?`), a detached HEAD, a failed PR lookup. Refunds (#147): one-shot spends as before; a bound create or merge
   whose tool_result is `is_error` is undone, and a binding whose every call
   errored is released, so the next call counts as a first. A
   missing/unreadable transcript or no approving record
