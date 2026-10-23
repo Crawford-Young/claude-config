@@ -61,7 +61,7 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md, `.gitign
 ## Security
 
 - Never commit secrets. Secrets never in request URLs — token params go in POST bodies.
-- Zod validates all inputs at system boundaries; rate-limit user-facing endpoints.
+- TypeScript repos: Zod validates all inputs at system boundaries; rate-limit user-facing endpoints.
 - A security fix in one repo gets its siblings checked the same session — same dep tree, same advisory.
 - A Fable session doing security work may be silently answered by an Opus-tier model via the refusal fallback (`cyber`/`bio` categories; API docs call it opt-in, Claude Code's default undocumented) — don't treat model identity as stable in a security wave (observed 2026-09 as Opus 5; verified: 2026-10, Fable 5.1).
 
