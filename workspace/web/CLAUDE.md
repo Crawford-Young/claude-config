@@ -75,7 +75,7 @@ Prettier owns formatting. Full guide → TYPESCRIPT-STYLE.md.
 
 ## Design system
 
-Compact token reference for artifact/design output. Authority: `docs/brand/design-system.md` — on conflict, that file wins.
+Compact token reference for artifact/design output. Authority: `docs/brand/brand-identity.md` — on conflict, that file wins.
 
 - Accent (emerald, both modes): `--accent #10b981` · hover `#34d399` · active `#6ee7b7` · subtle `#d1fae5` light / `#022c22` dark.
 - Neutrals (zinc): light `--background #ffffff` / `--surface #fafafa` / `--surface-raised #f4f4f5` / `--border #e4e4e7` / `--foreground #09090b`; dark `#09090b` / `#18181b` / `#27272a` / `#27272a` / `#fafafa`.

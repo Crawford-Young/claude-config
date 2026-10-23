@@ -46,9 +46,8 @@ The bar is principles 1 and 2 in `workspace/CLAUDE.md`'s Philosophy: least overh
 ## Verification
 
 - Routing/behavior claims are verified by **probe** (a fresh session, an uncontaminated prompt, a near negative control), not by inspection — and audited by tool trace, not the announce line. A session cannot probe its own routing.
-- Known-broken description routing: `docs/web/TESTING-TRAPS.md` and games diagnostics are hand-loaded via domain CLAUDE.md pointer lines — don't re-attempt description rewrites for them.
 - The `claude` CLI is `~/.local/bin/claude.exe`, which is not on Git Bash's PATH, and subagent shells lack it too. CLI probes (`--help`, `plugin eval`) call it by path from the orchestrator.
-- Hooks are fail-open: errors go to `~/.claude/hook-errors.log` — check it first when a hook seems silent. Unit-test hooks by piping JSON to stdin.
+- The four guards fail closed (`hooks/README.md`); other hooks fail open, logging errors to `~/.claude/hook-errors.log` — check it first when a hook seems silent. Unit-test hooks by piping JSON to stdin.
 - A change live for every session (hooks, settings.json, statusline, the CLAUDE.md chain) gets a fresh-context reviewer before push: green gates hid 5 majors in Phase 2 (#93) and 4 in #77 (b92ad8e).
 - A guard or approval change gets a guard-replay diff before the PR: `node scripts/guard-replay.mjs <main-checkout> <branch-worktree>` (#106). A bash-guard change adds `--branch` (gitCalls + branchRules on an unborn and a born repo, #165). It only sees shapes the transcripts hold, so it complements the fresh-context reviewer and never replaces it.
 - Harness itself suspected: `claude --safe-mode` disables every harness customization at once to confirm the harness is the cause (it won't name the hook); `/doctor` runs a general checkup.
