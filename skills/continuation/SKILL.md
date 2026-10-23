@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Produce a **copy-paste prompt** the user pastes into a fresh session. Print it directly, with no question first. To keep going in this session, the user ignores it, so end the reply with one line saying so. No handoff file — the GitHub issue and the last commit body already record durable state; the prompt points at them and carries only what exists nowhere on disk.
 
-Print the launch line from `node ~/code/claude-config/scripts/session-name.mjs <type> <args>` (type: `ticket` for an issue unit, `epic` for an epic, `director` for a director, else `general`). The user runs it from the repo root in a fresh terminal, then pastes the block below as the first message (an agent can't run `/rename`, and `-n` names the session at launch).
+Get the name from `node ~/code/claude-config/scripts/session-name.mjs <type> <args>` (type: `ticket` for an issue unit, `epic` for an epic, `director` for a director, else `general`). In the desktop app, title the session yourself with `mcp__ccd_session_mgmt__set_session_title`, or start the fresh session with `start_session` and that title, so the user relaunches nothing. For a CLI session, print the launch line: the user runs it from the repo root in a fresh terminal, then pastes the block below as the first message (`-n` names the session at launch).
 
 Emit the prompt, fenced, self-contained, first and last lines the literal markers below — the terminal renders fences invisibly, so the markers are the only visible copy boundary:
 

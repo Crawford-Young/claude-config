@@ -40,7 +40,7 @@ First stops whatever listens on the worktree's serve port, read from a serve/dev
 
 ## Session name
 
-`worktree.mjs new` prints the session's launch line and warns (never blocks) when the current session name doesn't match. Lead the worktree slug with the issue number (e.g. `72-issues-tracker`) so the script can derive it.
+`worktree.mjs new` prints the session's launch line and, when the current session name doesn't match, warns in the CLI or tells a desktop session to call `mcp__ccd_session_mgmt__set_session_title` with the expected name (never blocks). Lead the worktree slug with the issue number (e.g. `72-issues-tracker`) so the script can derive it.
 
 ## Rules
 
