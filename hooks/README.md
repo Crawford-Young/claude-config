@@ -127,17 +127,30 @@ fixed false verdict; change them only with a test:
   call binds it to the repo and branch that call ships, in
   `~/.claude/push-gate-approvals.json` (`CLAUDE_PUSH_GATE_STATE` overrides),
   and every later push, CI-fix push, `pr create` and `pr merge` of that
-  branch passes until a merge uses it up. A push, PR or merge of any other
+  branch passes until a merge uses it up (`gh pr merge --auto` doesn't: the
+  merge happens later, so CI-fix pushes still follow). A push, PR or merge of any other
   branch, or of another repo, needs its own answer. The branch is the push
   refspec's destination (else its source, else the checkout's branch),
   `gh pr create --head` (else the checkout's), or `gh pr merge`'s argument —
   a branch name, or a PR number or URL whose head branch the hook looks up
   with `gh pr view` (about 1–2 s; the merge's checkout when there is no
   argument). The repo is the push remote's URL, `-R`, the PR URL, or the
-  checkout's gh remote, as `host/owner/repo`. A call whose branch the guard
-  can't determine (a variable or substitution, an unknown cd, `--all`/
-  `--tags`, a detached HEAD, a failed PR lookup, `GH_REPO`) blocks and binds
-  nothing, with a remedy: name the branch (`gh pr merge <branch>`). A
+  checkout's gh remote, as `host/owner/repo`. Because a bound approval allows
+  repeated pushes, a target the guard can't read with certainty blocks and
+  binds nothing, with a remedy (push with an explicit `<remote> <branch>`,
+  `gh pr merge <branch>`): a variable or substitution, an unknown cd or
+  `env -C`, a detached HEAD, a failed PR lookup, `GH_REPO`/`GH_HOST`; a
+  matching refspec (`:`, `+:`), `--all`/`--tags`/`--mirror`/`--prune`,
+  `--follow-tags` or `--recurse-submodules` (but `=no`/`=check`);
+  `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` in the command or the hook's env,
+  `--git-dir`/`--work-tree`/`--config-env`, `-c` on remote/push/url/branch/
+  alias/include keys (a `-c alias.*` call is gated whatever its subcommand);
+  repo config (read as git does, last value wins) with `remote.<r>.push`,
+  `remote.<r>.mirror`, several push URLs, a matching `url.*.insteadOf`/
+  `pushInsteadOf`, `push.followTags` or `push.recurseSubmodules`, and on a
+  push with no refspec `push.default` upstream/tracking/matching or a
+  `branch.<b>.merge` naming another branch; and `gh pr create -H owner:branch`
+  where the owner isn't the repo's. A
   command holding several gated calls passes when they all ship the bound
   branch. Refunds (#147): a merge whose tool_result is `is_error` is undone,
   and a binding whose every call errored is released to the next branch. A

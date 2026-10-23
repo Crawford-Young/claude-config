@@ -2675,15 +2675,31 @@ function isBranchDelete(args) {
   return refspecs.length > 0 && refspecs.every((r) => /^:[^:]/.test(r));
 }
 
+/** A git call's global options before its subcommand, `-C` aside: each word,
+ *  with a value-taking option's value as the next word. */
+function gitGlobals(w) {
+  const out = [];
+  for (let i = 1; i < w.length && w[i].startsWith('-'); i++) {
+    if (w[i] === '-C') i++;
+    else if (GIT_OPT_WITH_ARG.test(w[i])) out.push(w[i], w[++i] ?? '');
+    else out.push(w[i]);
+  }
+  return out;
+}
+
 /** 8. Every call a command makes that needs a push/PR approval, in order:
- *  `{ verb, args, dir }`, where dir is a git call's repo (cd and -C followed)
- *  or a gh call's dir. `git push --dry-run` and remote branch deletes are exempt. */
+ *  `{ verb, args, dir, opts }`, where dir is a git call's repo (cd and -C
+ *  followed) or a gh call's dir, and opts a git call's global options.
+ *  `git push --dry-run` and remote branch deletes are exempt. A git call that
+ *  defines an alias with `-c alias.*` may be a push, so it is gated too. */
 function gatedCalls(raw, cwd, tool = null) {
   const out = [];
   for (const rec of withPayloads(commands(scrub(raw), cwd, false, false, newScope(cwd, tool)))) {
     if (/^git$/i.test(rec.cmd)) {
       const { sub, args, repo } = gitCallOf(rec);
-      if (sub === 'push' && !args.includes('--dry-run') && !isBranchDelete(args)) out.push({ verb: 'git push', args, dir: repo });
+      const opts = gitGlobals(rec.words);
+      const aliased = opts.some((o, i) => opts[i - 1] === '-c' && /^alias\./i.test(o));
+      if (aliased || (sub === 'push' && !args.includes('--dry-run') && !isBranchDelete(args))) out.push({ verb: 'git push', args, dir: repo, opts });
     } else if (/^gh$/i.test(rec.cmd)) {
       const { sub, action, args, dir } = ghCallOf(rec);
       if (sub === 'pr' && (action === 'create' || action === 'merge')) out.push({ verb: `gh pr ${action}`, args, dir });
@@ -2710,6 +2726,17 @@ const GH_PR_VALUE = {
   'gh pr create': new Set(['-R', '--repo', '-H', '--head', '-B', '--base', '-t', '--title', '-b', '--body', '-F', '--body-file', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-p', '--project', '-r', '--reviewer', '-T', '--template', '--recover']),
   'gh pr merge': new Set(['-R', '--repo', '-t', '--subject', '-b', '--body', '-F', '--body-file', '-A', '--author-email', '--match-head-commit']),
 };
+// Env that points git at another repo or injects config. Read off the command
+// text (inline, `env …`, `export …`, `$env:…`) and the hook's own env, which
+// the command inherits.
+const GIT_ENV_OVERRIDE = /\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|NAMESPACE|CONFIG(?:_COUNT|_KEY_\w*|_PARAMETERS|_GLOBAL|_SYSTEM)?)\b/;
+// `env -C dir` / `env --chdir=dir` runs the command in a dir the guard doesn't follow.
+const ENV_CHDIR = /\benv\b[^;&|\n]*?\s(?:-C|--chdir)\b/;
+// Global git options that move the repo or inject config.
+const GIT_REPO_OPT = /^--(?:git-dir|work-tree|namespace|config-env|exec-path|bare)(?:=|$)/;
+// `git -c` keys that change where a push goes, or what it runs.
+const GIT_PUSH_CFG = /^(?:remote|push|url|branch|alias|include|includeif)\./i;
+const TRUE_CFG = /^(?:true|yes|on|1)$/i;
 
 /** `args` without shell redirections (`2>&1`, `> out.txt`, `<in`). */
 function dropRedirects(args) {
@@ -2731,17 +2758,23 @@ function repoSlug(ref) {
   return s.split('/').length === 2 ? `github.com/${s}` : s;
 }
 
-/** A repo's remote and branch config in one read: `remote.<n>.url`,
- *  `branch.<b>.remote`, … → value (first one wins). Empty when unreadable. */
+/** A repo's remote, branch, push and url config in one read, as git sees it:
+ *  key → every value, in order (git's single-valued keys take the last).
+ *  Section and variable names come lowercased; subsections keep their case.
+ *  Empty when unreadable. */
 function gitConfig(repo) {
-  const r = spawnSync('git', ['-C', repo, 'config', '--get-regexp', '^(remote|branch)\\.'], { encoding: 'utf8', timeout: 4000 });
+  const r = spawnSync('git', ['-C', repo, 'config', '--get-regexp', '^(remote|branch|push|url)\\.'], { encoding: 'utf8', timeout: 4000 });
   const cfg = new Map();
   for (const line of ((r.status === 0 && r.stdout) || '').split('\n')) {
     const sp = line.indexOf(' ');
-    if (sp > 0 && !cfg.has(line.slice(0, sp))) cfg.set(line.slice(0, sp), line.slice(sp + 1).trim());
+    const key = sp > 0 ? line.slice(0, sp) : line.trim();
+    if (key) cfg.set(key, [...(cfg.get(key) || []), sp > 0 ? line.slice(sp + 1).trim() : 'true']);
   }
   return cfg;
 }
+
+/** The value git uses for a single-valued key: the last one set. */
+const last = (cfg, key) => cfg.get(key)?.at(-1);
 
 /** The repo dir a call runs in, or null when the guard can't read it. */
 const knownDir = (dir) => (typeof dir === 'string' && existsSync(dir) ? dir : null);
@@ -2755,22 +2788,54 @@ function ghRemoteSlug(repo) {
   const cfg = gitConfig(repo);
   const names = [...cfg.keys()].map((k) => /^remote\.(.+)\.url$/.exec(k)?.[1]).filter(Boolean);
   const name = names.find((n) => cfg.has(`remote.${n}.gh-resolved`)) || ['upstream', 'github', 'origin'].find((n) => names.includes(n)) || names[0];
-  return name ? repoSlug(cfg.get(`remote.${name}.url`)) : null;
+  return name ? repoSlug(last(cfg, `remote.${name}.url`)) : null;
+}
+
+/** Why push config could send `git push` somewhere other than the computed
+ *  `url` and branches, or null. `bare` is a push with no refspec, which
+ *  push.default and the branch's upstream steer. */
+function pushConfigRisk(cfg, remoteName, url, cur, bare) {
+  const r = `remote.${remoteName}`;
+  if (cfg.has(`${r}.push`)) return `${r}.push maps its refspecs`;
+  if (TRUE_CFG.test(last(cfg, `${r}.mirror`) ?? '')) return `${r}.mirror is set`;
+  if ((cfg.get(`${r}.pushurl`) || []).length > 1 || (!cfg.has(`${r}.pushurl`) && (cfg.get(`${r}.url`) || []).length > 1)) return `${r} pushes to more than one URL`;
+  for (const [k, vs] of cfg) {
+    if (/^url\..+\.(?:push)?insteadof$/.test(k) && vs.some((v) => url.startsWith(v))) return `${k} rewrites its URL`;
+  }
+  if (TRUE_CFG.test(last(cfg, 'push.followtags') ?? '')) return 'push.followTags pushes tags along';
+  const subs = last(cfg, 'push.recursesubmodules');
+  if (subs !== undefined && !/^(?:no|check|false)$/i.test(subs)) return `push.recurseSubmodules=${subs} pushes submodules along`;
+  if (bare) {
+    const mode = last(cfg, 'push.default');
+    if (/^(?:upstream|tracking|matching)$/i.test(mode ?? '')) return `push.default=${mode}`;
+    const merge = cur && last(cfg, `branch.${cur}.merge`);
+    if (merge && merge !== `refs/heads/${cur}`) return `branch.${cur}.merge is ${merge}`;
+  }
+  return null;
 }
 
 /** `git push`'s target, or `{ why }`: the remote's repo and the one branch it
- *  writes (a refspec's destination, else its source, else the checkout's). */
-function pushTarget(args, dir) {
+ *  writes (a refspec's destination, else its source, else the checkout's).
+ *  Anything that could send it elsewhere — a repo or config override on the
+ *  command line, push config, a matching refspec, tags or submodules along —
+ *  is a why. */
+function pushTarget(args, dir, opts = []) {
   const repo = knownDir(dir);
   if (!repo) return { why: "its repo dir is unknown (a cd or -C the guard couldn't follow)" };
+  const override = opts.find((o, i) => GIT_REPO_OPT.test(o) || (opts[i - 1] === '-c' && GIT_PUSH_CFG.test(o)));
+  if (override) return { why: `git ${override} overrides its repo or push config` };
   const own = dropRedirects(args).filter((a, i, all) => !PUSH_VALUE_FLAGS.has(all[i - 1]));
   if (own.some((a) => PUSH_MULTI.has(a.split('=')[0]))) return { why: 'it pushes more than one ref (--all, --tags, --mirror, --prune) or names the remote by --repo' };
+  const rider = own.find((a) => a === '--follow-tags' || (/^--recurse-submodules(?:=|$)/.test(a) && !/=(?:no|check)$/.test(a)));
+  if (rider) return { why: `${rider} pushes more than the branch` };
   const [remote, ...specs] = own.filter((a) => !a.startsWith('-'));
   const head = currentBranch(repo);
   if (head === null) return { why: 'its dir is not a git checkout' };
   const cur = head || null;
   const branches = new Set();
-  for (const spec of specs.filter((s) => !/^\+?:/.test(s))) {
+  for (const spec of specs) {
+    if (/^\+?:$/.test(spec)) return { why: `"${spec}" pushes every matching branch` };
+    if (/^\+?:/.test(spec)) continue; // a remote branch delete
     const [src, dst] = spec.replace(/^\+/, '').split(':');
     // A bare HEAD (or its alias @) pushes the checkout's branch; as a destination it's no branch.
     let name = dst ?? (src === 'HEAD' || src === '@' ? cur : src);
@@ -2783,11 +2848,14 @@ function pushTarget(args, dir) {
     if (!cur) return { why: 'no branch is checked out there (a detached HEAD)' };
     branches.add(cur);
   }
+  if (!branches.size) return { why: 'it names no branch' };
   if (remote !== undefined && !REF_NAME.test(remote) && !/^[\w.+-]+:\/\/|^[\w.-]+@[\w.-]+:/.test(remote)) return { why: `remote "${remote}" is not one the guard can read` };
   const cfg = gitConfig(repo);
-  const remoteName = remote ?? (cur && (cfg.get(`branch.${cur}.pushremote`) || cfg.get('remote.pushdefault') || cfg.get(`branch.${cur}.remote`))) ?? 'origin';
-  const url = /[:/]/.test(remoteName) ? remoteName : cfg.get(`remote.${remoteName}.pushurl`) || cfg.get(`remote.${remoteName}.url`);
+  const remoteName = remote ?? (cur && (last(cfg, `branch.${cur}.pushremote`) || last(cfg, 'remote.pushdefault') || last(cfg, `branch.${cur}.remote`))) ?? 'origin';
+  const url = /[:/]/.test(remoteName) ? remoteName : last(cfg, `remote.${remoteName}.pushurl`) || last(cfg, `remote.${remoteName}.url`);
   if (!url) return { why: `remote "${remoteName}" has no URL there` };
+  const risk = pushConfigRisk(cfg, remoteName, url, cur, !specs.length);
+  if (risk) return { why: risk };
   return { targets: [...branches].map((b) => `${repoSlug(url)}#${b}`) };
 }
 
@@ -2802,17 +2870,19 @@ function ghPrHead(ref, repoFlag, dir) {
 
 /** `gh pr create`/`gh pr merge`'s target, or `{ why }`: the repo from -R (or
  *  a PR URL, or the dir's gh remote) and the branch from --head, the merge's
- *  branch argument, a PR number's head (`prHead`), or the checkout's. */
+ *  branch argument, a PR number's head (`prHead`), or the checkout's. A
+ *  `--head owner:branch` whose owner isn't the repo's is a fork's: a why. */
 function ghTarget(verb, args, dir, prHead) {
   let repoFlag = null;
   let head = null;
+  let headOwner = null;
   const pos = [];
   const own = dropRedirects(args);
   for (let i = 0; i < own.length; i++) {
     const [flag, inline] = own[i].startsWith('--') ? own[i].split(/=(.*)/s) : [own[i]];
     const value = GH_PR_VALUE[verb].has(flag) ? (inline ?? own[++i]) : undefined;
     if (flag === '-R' || flag === '--repo') repoFlag = value;
-    else if (flag === '-H' || flag === '--head') head = value?.replace(/^[^:]*:/, '');
+    else if (flag === '-H' || flag === '--head') [, headOwner = null, head] = /^(?:([^:]*):)?(.*)$/s.exec(value ?? '');
     else if (!flag.startsWith('-')) pos.push(flag);
   }
   const arg = pos.slice(2)[0]; // after `pr` and the action
@@ -2820,8 +2890,9 @@ function ghTarget(verb, args, dir, prHead) {
   const isUrl = /^https?:\/\//i.test(arg ?? '');
   const slug = repoFlag ? repoSlug(repoFlag) : isUrl ? repoSlug(arg) : local && ghRemoteSlug(local);
   if (!slug || (repoFlag && !/^[\w./:@-]+$/.test(repoFlag))) return { why: 'the guard can read no repo for it (no readable -R, and its dir is not a checkout with a remote)' };
+  if (headOwner !== null && headOwner.toLowerCase() !== slug.split('/')[1]) return { why: `its head ${headOwner}:${head} is in another owner's fork` };
   let branch;
-  if (verb === 'gh pr create') branch = head ?? (local && checkedOut(local));
+  if (verb === 'gh pr create') branch = head || (local && checkedOut(local));
   else if (arg === undefined) branch = !repoFlag && local ? checkedOut(local) : null;
   else if (/^#?\d+$/.test(arg) || isUrl) branch = prHead(arg.replace(/^#/, ''), repoFlag, local);
   else branch = arg;
@@ -2839,11 +2910,19 @@ export function shipTargets(raw, cwd, tool = null, deps = {}) {
 
 /** shipTargets over already-parsed gated calls. */
 function targetsOf(calls, raw, prHead) {
+  const text = scrub(raw);
+  // Env the command sets, or the hook's own env it inherits, can repoint git or gh.
+  const gitEnv = GIT_ENV_OVERRIDE.test(text) || ENV_CHDIR.test(text) || Object.keys(process.env).some((k) => GIT_ENV_OVERRIDE.test(k));
+  const ghEnv = /\bGH_(?:REPO|HOST)\b/.test(text) || process.env.GH_REPO || process.env.GH_HOST;
   const out = [];
-  for (const { verb, args, dir } of calls) {
-    // gh reads GH_REPO/GH_HOST from the env: then the repo isn't the one the guard sees.
-    const ghEnv = /\bGH_(?:REPO|HOST)\b/.test(raw) || process.env.GH_REPO || process.env.GH_HOST;
-    const r = verb === 'git push' ? pushTarget(args, dir) : ghEnv ? { why: 'GH_REPO/GH_HOST picks its repo' } : ghTarget(verb, args, dir, prHead);
+  for (const { verb, args, dir, opts } of calls) {
+    const r = gitEnv
+      ? { why: 'the command or its env sets GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_* or env -C' }
+      : verb === 'git push'
+        ? pushTarget(args, dir, opts)
+        : ghEnv
+          ? { why: 'GH_REPO/GH_HOST picks its repo' }
+          : ghTarget(verb, args, dir, prHead);
     if (r.why) out.push({ verb, why: r.why });
     else for (const target of r.targets) out.push({ verb, target });
   }
@@ -3070,7 +3149,7 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
   const verb = verbs.join(' + ');
 
   if (!transcriptPath || !existsSync(transcriptPath)) {
-    return `${verb} needs explicit user approval (CLAUDE.md: "No commit or push without explicit user approval"), but there is no transcript to read it from. ${askRemedy(verb)}`;
+    return `${verb} needs explicit user approval (CLAUDE.md: "Push, PR create, PR merge need explicit user approval (hook-gated); commits need none."), but there is no transcript to read it from. ${askRemedy(verb)}`;
   }
 
   let record;
@@ -3087,14 +3166,18 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
   const shipped = targetsOf(calls, raw, deps.prHead ?? ghPrHead);
   const unknown = shipped.find((s) => s.why);
   if (unknown) {
-    return `${unknown.verb}: the guard can't tell which branch it ships (${unknown.why}), and an approval covers one branch, so it is blocked. Name the branch: \`git push <remote> <branch>\` run in a literal path, \`gh pr create --head <branch>\`, \`gh pr merge <branch>\` (gh takes a branch name in place of the PR number). Nothing was bound.`;
+    return `${unknown.verb}: the guard can't tell which branch it ships (${unknown.why}), and an approval covers one branch, so it is blocked. Name the target plainly: \`git push <remote> <branch>\` run in a literal path with no git-dir/config overrides, \`gh pr create --head <branch>\`, \`gh pr merge <branch>\` (gh takes a branch name in place of the PR number). Nothing was bound.`;
   }
   const targets = [...new Set(shipped.map((s) => s.target))];
-  if (targets.length > 1) {
-    return `This command ships ${targets.join(' and ')}, but one approval covers one branch. Ship each branch in its own Bash call, under its own answer. Nothing was bound.`;
+  if (targets.length !== 1) {
+    return targets.length
+      ? `This command ships ${targets.join(' and ')}, but one approval covers one branch. Ship each branch in its own Bash call, under its own answer. Nothing was bound.`
+      : `${verb}: the guard can't tell which branch it ships (it names none), so it is blocked. Push with an explicit \`<remote> <branch>\`. Nothing was bound.`;
   }
 
-  const held = bind(record.uuid, targets[0], verbs.includes('gh pr merge'), stateFile, toolUseId, transcriptPath);
+  // An auto-merge (or turning one off) merges nothing now: CI-fix pushes still follow it.
+  const merges = calls.some((c) => c.verb === 'gh pr merge' && !c.args.some((a) => a === '--auto' || a === '--disable-auto'));
+  const held = bind(record.uuid, targets[0], merges, stateFile, toolUseId, transcriptPath);
   if (held?.merged) return `This approval's PR (${held.merged}) was merged, which used the approval up — ${verb} needs a new answer. ${askRemedy(verb)}`;
   if (held?.other) {
     return `This approval covers ${held.other} (the branch its first push/PR/merge shipped); ${verb} ships ${targets[0]}. A push, PR or merge of another branch needs its own answer. ${askRemedy(verb)}`;
