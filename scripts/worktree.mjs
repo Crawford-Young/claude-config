@@ -161,7 +161,8 @@ function expectedUnit(repoName, slug, branch) {
 // unit's. A ticket or epic on this repo and issue passes, typed, tree or legacy, and so
 // does an orchestrator cutting a child's worktree (a director, or an epic or tree repo
 // lead, not one of its workers, of this repo); with no issue to check against, any chosen name passes. The fix is the launch line for the
-// next window, or a /rename for this one (agents can't run slash commands). Silent
+// next window, or a /rename for this one (agents can't run slash commands); in a desktop session
+// (entrypoint claude-desktop) it is a line telling the agent to call set_session_title. Silent
 // on non-Claude shells (no CLAUDE_PID / no registry file).
 function warnOnSessionName(unit) {
   const pid = process.env.CLAUDE_PID;
@@ -191,6 +192,11 @@ function warnOnSessionName(unit) {
     if (p.type === 'director' || ((p.type === 'epic' || (p.type === 'repo' && !p.role)) && p.repo === unit.repo)) return;
     problem = `${shown} names another unit`;
   } else return;
+  if (data.entrypoint === 'claude-desktop') {
+    // a script can't call the tool itself, so it tells the agent to
+    log(`TITLE: ${problem} — spend and reflect join on the parsed session name. Call mcp__ccd_session_mgmt__set_session_title with '${unit.name}' now.`);
+    return;
+  }
   log(`WARNING: ${problem} — spend and reflect join on the parsed session name. Launch the unit as:\n  ${launchCommand(unit.name)}\nor name this session now with:\n  /rename ${unit.name}`);
 }
 

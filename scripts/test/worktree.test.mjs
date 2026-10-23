@@ -9,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { commitlintConfig, isHuskyRepo, servePorts } from '../worktree.mjs';
 
-function writeSession(sessionsDir, pid, name, nameSource) {
+function writeSession(sessionsDir, pid, name, nameSource, entrypoint) {
   mkdirSync(sessionsDir, { recursive: true });
-  writeFileSync(join(sessionsDir, `${pid}.json`), JSON.stringify({ pid, name, nameSource }));
+  writeFileSync(join(sessionsDir, `${pid}.json`), JSON.stringify({ pid, name, nameSource, entrypoint }));
 }
 
 const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'worktree.mjs');
@@ -293,6 +293,30 @@ test('new warns, never blocks, when the session names another unit', () => {
     assert.match(out, /claude -n ticket-app-72\n/, name);
     assert.ok(existsSync(join(root, '.worktrees', 'app-72-foo')), 'the worktree is still made');
   }
+});
+
+test('new in a desktop session tells the agent to call set_session_title, not to launch or /rename', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'whatever', 'auto', 'claude-desktop');
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
+
+  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.match(out, /Call mcp__ccd_session_mgmt__set_session_title with 'ticket-app-72'/);
+  assert.doesNotMatch(out, /\/rename/);
+  assert.doesNotMatch(out, /WARNING: session name/);
+});
+
+test('new in a desktop session whose name already matches says nothing', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const sessionsDir = join(root, 'sessions');
+  writeSession(sessionsDir, '4242', 'ticket-app-72', 'user', 'claude-desktop');
+  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
+
+  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.doesNotMatch(out, /set_session_title|WARNING: session/);
 });
 
 test('new warns on an auto name even when the slug has no issue number, with the generic name', () => {

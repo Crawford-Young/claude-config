@@ -45,7 +45,7 @@ implementation parallelizes; that is the real concurrency cap.
 ## Rare path: pasted or `--bg` sessions
 
 Self-contained prompt per unit (the session has no memory of this batch), preceded by the launch
-line from `node ~/code/claude-config/scripts/session-name.mjs ticket <repo> <N>`; a `--bg` launch
+line from `node ~/code/claude-config/scripts/session-name.mjs ticket <repo> <N>` (a desktop session is titled with `set_session_title` or `start_session`'s title instead); a `--bg` launch
 adds `--permission-mode <mode> "<prompt>"` from the repo root. Each prompt names its worktree
 command, singleton and Done-when, and its human owns that session's gated acts: consent never
 travels between sessions. A ticket-<repo>-<N> session works only ticket N.
