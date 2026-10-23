@@ -40,11 +40,10 @@
 // (a /clear or /compact landed), the session's state file is dropped. A session
 // that ends above the line keeps its file, so each write sweeps week-old ones (#217).
 
-import { existsSync, openSync, readdirSync, readFileSync, readSync, closeSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, openSync, readdirSync, readFileSync, readSync, closeSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { isMain } from '../scripts/lib.mjs';
 import { block, claudeDir, pruneOlderThan, readState as readHookState, run, WEEK_MS, withClaim, writeState as writeHookState } from './_hooklib.mjs';
-import { stateFile as nudgeStateFile } from './inline-edit-nudge.mjs';
 
 const stateDir = join(claudeDir, 'context-gauge');
 
@@ -205,8 +204,6 @@ const writeState = (sid, state) => {
 function prune(now) {
   try {
     pruneOlderThan(stateDir, WEEK_MS, now);
-    // One-time pre-#139 migration (inline-edit-nudge's old breakable lock): delete after 2026-11-14 (#228).
-    rmSync(`${nudgeStateFile()}.lock`, { force: true });
   } catch {
     // best-effort, like the write it follows
   }
