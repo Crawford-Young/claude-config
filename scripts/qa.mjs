@@ -16,7 +16,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import net from 'node:net';
-import { die, isMain, log, parseArgs, readIfExists, resolveRepo } from './lib.mjs';
+import { die, isBunRepo, isMain, log, parseArgs, readIfExists, resolveRepo } from './lib.mjs';
 
 if (isMain(import.meta.url)) await main();
 
@@ -72,7 +72,7 @@ export function discoverGates(repoPath) {
   if (pkg) {
     const scripts = JSON.parse(pkg).scripts || {};
     // The lockfile names the runner: pnpm in a Bun repo fails every gate (strate-18).
-    const bun = ['bun.lock', 'bun.lockb'].some((f) => existsSync(join(repoPath, f)));
+    const bun = isBunRepo(repoPath);
     for (const name of ['lint', 'typecheck', 'test', 'e2e']) {
       if (scripts[name]) found.push({ name, cmd: bun ? `bun run ${name}` : `pnpm ${name}` });
     }
