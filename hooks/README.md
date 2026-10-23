@@ -123,11 +123,25 @@ fixed false verdict; change them only with a test:
   approvals. Nothing stops a model appending a forged line to its own
   transcript file; that has been true of the answer path since it was
   written. Each approval (keyed by its record `uuid`; an approving record
-  without one blocks) is single-use per
-  verb — spent from `~/.claude/push-gate-approvals.json`
-  (`CLAUDE_PUSH_GATE_STATE` overrides) — so one approving answer covers
-  `push` → `pr create` → `pr merge` once each, but a second push needs a
-  fresh approval. A missing/unreadable transcript or no approving record
+  without one blocks) covers one branch's whole ship (#305): its first gated
+  call binds it to the repo and branch that call ships, in
+  `~/.claude/push-gate-approvals.json` (`CLAUDE_PUSH_GATE_STATE` overrides),
+  and every later push, CI-fix push, `pr create` and `pr merge` of that
+  branch passes until a merge uses it up. A push, PR or merge of any other
+  branch, or of another repo, needs its own answer. The branch is the push
+  refspec's destination (else its source, else the checkout's branch),
+  `gh pr create --head` (else the checkout's), or `gh pr merge`'s argument —
+  a branch name, or a PR number or URL whose head branch the hook looks up
+  with `gh pr view` (about 1–2 s; the merge's checkout when there is no
+  argument). The repo is the push remote's URL, `-R`, the PR URL, or the
+  checkout's gh remote, as `host/owner/repo`. A call whose branch the guard
+  can't determine (a variable or substitution, an unknown cd, `--all`/
+  `--tags`, a detached HEAD, a failed PR lookup, `GH_REPO`) blocks and binds
+  nothing, with a remedy: name the branch (`gh pr merge <branch>`). A
+  command holding several gated calls passes when they all ship the bound
+  branch. Refunds (#147): a merge whose tool_result is `is_error` is undone,
+  and a binding whose every call errored is released to the next branch. A
+  missing/unreadable transcript or no approving record
   blocks with a message telling the model to ask via AskUserQuestion and
   retry. A non-gated command never reads the transcript.
 

@@ -19,8 +19,8 @@
 //      live FABLE OK marker — the same single-use clearance the Agent and
 //      /model gates spend (_hooklib.mjs), logged to the same dispatch log
 //   8. git push / gh pr create / gh pr merge without the user's approval in
-//      the transcript (CLAUDE.md: "Push, PR create, PR merge need explicit user
-//      approval"). `git push --dry-run` and a remote branch delete are exempt.
+//      the transcript (CLAUDE.md: "Push, PR create, PR merge need explicit
+//      user approval"). `git push --dry-run` and a remote branch delete are exempt.
 //      Approval comes from the latest AskUserQuestion answer
 //      (`toolUseResult.answers`) and the latest prompt the user typed in an
 //      interactive session (#180: origin human, promptSource typed/queued/
@@ -34,15 +34,21 @@
 //      typed prompt defers to the older. A typed approval is ship words only
 //      ("lgtm push and pr", "ok, merge it"), with no question mark.
 //      Rule 11 keeps the model from writing that transcript (#190).
-//      Approval is single-use per verb, spent from a small state file keyed
-//      by the approving record's uuid, so one approval covers push → pr
-//      create → pr merge once each.
-//      A command holding more than one gated verb is blocked outright (one
-//      gated verb per Bash call), so a compound never spends one approval twice.
+//      An approval covers one branch's whole ship (#305): its first gated call
+//      binds it to the repo and branch that call ships (`host/owner/repo#branch`,
+//      in a small state file keyed by the approving record's uuid), and later
+//      pushes, PR create and merge pass only for that same branch. A merge
+//      uses it up. The branch comes from the push refspec or the checkout,
+//      `gh pr create --head`, or `gh pr merge`'s branch argument, PR number
+//      (gh's head lookup) or checkout; the repo from the push remote, -R, a
+//      PR URL or the checkout's gh remote. One the guard can't determine
+//      blocks with a remedy. A compound of gated calls passes when they all
+//      ship the one bound branch.
 //      A remote branch delete (`push --delete`/`-d`, or every refspec `:branch`)
 //      is exempt like --dry-run; a push that also pushes a ref stays gated.
-//      A spend records its call's tool_use_id; if that call's transcript
-//      tool_result is_error, the next gated call refunds the spend (#147).
+//      A binding records its calls' tool_use_ids (#147): a merge whose
+//      tool_result is_error is undone, and a binding whose every call errored
+//      is released to the next branch.
 //   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
 //      codegen, show-report, show-trace, open — need the user's browser consent
 //      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
@@ -54,7 +60,7 @@
 //      auto-memory dirs exempt) or a gate state file (push-gate-approvals,
 //      browser-gate-sessions, fable-clearance): rules 8 and 9 trust those, so
 //      one appended line would forge approval (#190). Deleting or moving away
-//      a state file counts too (it forgets single-use spends); deleting a
+//      a state file counts too (it forgets approval bindings); deleting a
 //      transcript doesn't (it can only take an approval away). Read off parsed
 //      calls — redirects, tee, cp/mv/install/ln (a dir destination judged with
 //      each source's name in it, a link's source too), dd of=, sed/perl -i,
@@ -2621,32 +2627,37 @@ function isGate({ cmd, words: w }) {
  *  no info — callers fail open; UNKNOWN_DIR means a cd the guard couldn't
  *  follow — callRule blocks a commit there. `tool` is the shell (newScope). */
 export function gitCalls(raw, cwd, tool = null) {
-  const out = [];
-  for (const { cmd, words: w, dir, vars, viaOr, loop, arms = [] } of withPayloads(commands(raw, cwd, false, false, newScope(cwd, tool)))) {
-    if (!/^git$/i.test(cmd)) continue;
-    let repo = dir;
-    let i = 1;
-    for (; i < w.length && w[i].startsWith('-'); i++) {
-      if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i], vars);
-      else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
-    }
-    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr, loop, arms });
+  return withPayloads(commands(raw, cwd, false, false, newScope(cwd, tool)))
+    .filter(({ cmd }) => /^git$/i.test(cmd))
+    .map(gitCallOf);
+}
+
+/** One parsed git command as a gitCalls entry. */
+function gitCallOf({ words: w, dir, vars, viaOr, loop, arms = [] }) {
+  let repo = dir;
+  let i = 1;
+  for (; i < w.length && w[i].startsWith('-'); i++) {
+    if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i], vars);
+    else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
   }
-  return out;
+  return { sub: w[i] || null, args: w.slice(i + 1), repo, viaOr, loop, arms };
 }
 
 /** Every `gh` call's subcommand pair (`gh pr create` → sub 'pr', action
- *  'create') and its args, parsed by command word the same way as a git call
- *  — never by substring, so quoted text and commit messages never trigger it. */
+ *  'create'), its args and the dir it runs in, parsed by command word the same
+ *  way as a git call — never by substring, so quoted text and commit messages
+ *  never trigger it. */
 export function ghCalls(raw, cwd, tool = null) {
-  const out = [];
-  for (const { cmd, words: w } of withPayloads(commands(raw, cwd, false, false, newScope(cwd, tool)))) {
-    if (!/^gh$/i.test(cmd)) continue;
-    // `-R x` / `--repo x` take a value, before the subcommand or after it.
-    const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
-    out.push({ sub: nonFlag[0] || null, action: nonFlag[1] || null, args: w.slice(1) });
-  }
-  return out;
+  return withPayloads(commands(raw, cwd, false, false, newScope(cwd, tool)))
+    .filter(({ cmd }) => /^gh$/i.test(cmd))
+    .map(ghCallOf);
+}
+
+/** One parsed gh command as a ghCalls entry. */
+function ghCallOf({ words: w, dir }) {
+  // `-R x` / `--repo x` take a value, before the subcommand or after it.
+  const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
+  return { sub: nonFlag[0] || null, action: nonFlag[1] || null, args: w.slice(1), dir };
 }
 
 const PUSH_VALUE_FLAGS = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo']);
@@ -2664,17 +2675,177 @@ function isBranchDelete(args) {
   return refspecs.length > 0 && refspecs.every((r) => /^:[^:]/.test(r));
 }
 
-/** 8. Every verb a command would spend a push/PR approval on, in order —
- *  empty when nothing here is gated. `git push --dry-run` and remote branch
- *  deletes are exempt. */
-export function gatedVerbs(raw, cwd, tool = null) {
-  const cmd = scrub(raw);
+/** 8. Every call a command makes that needs a push/PR approval, in order:
+ *  `{ verb, args, dir }`, where dir is a git call's repo (cd and -C followed)
+ *  or a gh call's dir. `git push --dry-run` and remote branch deletes are exempt. */
+function gatedCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { sub, args } of gitCalls(cmd, cwd, tool)) {
-    if (sub === 'push' && !args.includes('--dry-run') && !isBranchDelete(args)) out.push('git push');
+  for (const rec of withPayloads(commands(scrub(raw), cwd, false, false, newScope(cwd, tool)))) {
+    if (/^git$/i.test(rec.cmd)) {
+      const { sub, args, repo } = gitCallOf(rec);
+      if (sub === 'push' && !args.includes('--dry-run') && !isBranchDelete(args)) out.push({ verb: 'git push', args, dir: repo });
+    } else if (/^gh$/i.test(rec.cmd)) {
+      const { sub, action, args, dir } = ghCallOf(rec);
+      if (sub === 'pr' && (action === 'create' || action === 'merge')) out.push({ verb: `gh pr ${action}`, args, dir });
+    }
   }
-  for (const { sub, action } of ghCalls(cmd, cwd, tool)) {
-    if (sub === 'pr' && (action === 'create' || action === 'merge')) out.push(`gh pr ${action}`);
+  return out;
+}
+
+/** 8. Every verb in a command that needs a push/PR approval, in order —
+ *  empty when nothing here is gated. */
+export function gatedVerbs(raw, cwd, tool = null) {
+  return gatedCalls(raw, cwd, tool).map((c) => c.verb);
+}
+
+// ---- 8. the repo and branch a gated call ships (#305) ------------------------
+
+// A ref name the guard can read: no variable, substitution, glob or quote left in it.
+const REF_NAME = /^(?!-)(?!.*\.\.)[\w./+@#-]+$/;
+// Push flags that ship more than one ref, or name the remote out of position.
+const PUSH_MULTI = new Set(['--all', '--branches', '--mirror', '--tags', '--prune', '--repo']);
+// Flags that take a value, per gh pr action (the value is not the PR argument;
+// merge's -m/-r/-s are booleans, so the sets differ).
+const GH_PR_VALUE = {
+  'gh pr create': new Set(['-R', '--repo', '-H', '--head', '-B', '--base', '-t', '--title', '-b', '--body', '-F', '--body-file', '-a', '--assignee', '-l', '--label', '-m', '--milestone', '-p', '--project', '-r', '--reviewer', '-T', '--template', '--recover']),
+  'gh pr merge': new Set(['-R', '--repo', '-t', '--subject', '-b', '--body', '-F', '--body-file', '-A', '--author-email', '--match-head-commit']),
+};
+
+/** `args` without shell redirections (`2>&1`, `> out.txt`, `<in`). */
+function dropRedirects(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (/^(?:\d*|&)(?:>>?|<)&?$/.test(args[i])) i++;
+    else if (!/^(?:\d*|&)(?:>>?|<)/.test(args[i])) out.push(args[i]);
+  }
+  return out;
+}
+
+/** A remote URL, a gh `-R` value or a PR URL as one comparable `host/owner/repo`
+ *  string: scheme, credentials, port, `.git` and a `/pull/N` tail dropped,
+ *  lowercased; a bare `owner/repo` is on github.com. */
+function repoSlug(ref) {
+  let s = String(ref).trim().replace(/^[a-z][\w+.-]*:\/\//i, '').replace(/^[^@/]+@/, '');
+  s = s.replace(/^([^/:]+):(?!\d+\/)/, '$1/').replace(/^([^/]+):\d+\//, '$1/');
+  s = s.replace(/\/pull\/\d+.*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+  return s.split('/').length === 2 ? `github.com/${s}` : s;
+}
+
+/** A repo's remote and branch config in one read: `remote.<n>.url`,
+ *  `branch.<b>.remote`, … → value (first one wins). Empty when unreadable. */
+function gitConfig(repo) {
+  const r = spawnSync('git', ['-C', repo, 'config', '--get-regexp', '^(remote|branch)\\.'], { encoding: 'utf8', timeout: 4000 });
+  const cfg = new Map();
+  for (const line of ((r.status === 0 && r.stdout) || '').split('\n')) {
+    const sp = line.indexOf(' ');
+    if (sp > 0 && !cfg.has(line.slice(0, sp))) cfg.set(line.slice(0, sp), line.slice(sp + 1).trim());
+  }
+  return cfg;
+}
+
+/** The repo dir a call runs in, or null when the guard can't read it. */
+const knownDir = (dir) => (typeof dir === 'string' && existsSync(dir) ? dir : null);
+
+/** The branch checked out in `repo`, or null (not a repo, detached HEAD). */
+const checkedOut = (repo) => currentBranch(repo) || null;
+
+/** The `host/owner/repo` gh would act on from `repo`: a remote `gh repo
+ *  set-default` resolved, else upstream, github, origin, then the first. */
+function ghRemoteSlug(repo) {
+  const cfg = gitConfig(repo);
+  const names = [...cfg.keys()].map((k) => /^remote\.(.+)\.url$/.exec(k)?.[1]).filter(Boolean);
+  const name = names.find((n) => cfg.has(`remote.${n}.gh-resolved`)) || ['upstream', 'github', 'origin'].find((n) => names.includes(n)) || names[0];
+  return name ? repoSlug(cfg.get(`remote.${name}.url`)) : null;
+}
+
+/** `git push`'s target, or `{ why }`: the remote's repo and the one branch it
+ *  writes (a refspec's destination, else its source, else the checkout's). */
+function pushTarget(args, dir) {
+  const repo = knownDir(dir);
+  if (!repo) return { why: "its repo dir is unknown (a cd or -C the guard couldn't follow)" };
+  const own = dropRedirects(args).filter((a, i, all) => !PUSH_VALUE_FLAGS.has(all[i - 1]));
+  if (own.some((a) => PUSH_MULTI.has(a.split('=')[0]))) return { why: 'it pushes more than one ref (--all, --tags, --mirror, --prune) or names the remote by --repo' };
+  const [remote, ...specs] = own.filter((a) => !a.startsWith('-'));
+  const head = currentBranch(repo);
+  if (head === null) return { why: 'its dir is not a git checkout' };
+  const cur = head || null;
+  const branches = new Set();
+  for (const spec of specs.filter((s) => !/^\+?:/.test(s))) {
+    const [src, dst] = spec.replace(/^\+/, '').split(':');
+    // A bare HEAD (or its alias @) pushes the checkout's branch; as a destination it's no branch.
+    let name = dst ?? (src === 'HEAD' || src === '@' ? cur : src);
+    if (name === 'HEAD' || name === '@') name = null;
+    name = name?.replace(/^refs\/heads\//, '');
+    if (!name || name.startsWith('refs/') || !REF_NAME.test(name)) return { why: `refspec "${spec}" is not a branch the guard can read` };
+    branches.add(name);
+  }
+  if (!specs.length) {
+    if (!cur) return { why: 'no branch is checked out there (a detached HEAD)' };
+    branches.add(cur);
+  }
+  if (remote !== undefined && !REF_NAME.test(remote) && !/^[\w.+-]+:\/\/|^[\w.-]+@[\w.-]+:/.test(remote)) return { why: `remote "${remote}" is not one the guard can read` };
+  const cfg = gitConfig(repo);
+  const remoteName = remote ?? (cur && (cfg.get(`branch.${cur}.pushremote`) || cfg.get('remote.pushdefault') || cfg.get(`branch.${cur}.remote`))) ?? 'origin';
+  const url = /[:/]/.test(remoteName) ? remoteName : cfg.get(`remote.${remoteName}.pushurl`) || cfg.get(`remote.${remoteName}.url`);
+  if (!url) return { why: `remote "${remoteName}" has no URL there` };
+  return { targets: [...branches].map((b) => `${repoSlug(url)}#${b}`) };
+}
+
+/** A default PR head lookup: `gh pr view <ref> --json headRefName`, run from
+ *  the call's dir. Null on any failure — the caller fails closed. */
+function ghPrHead(ref, repoFlag, dir) {
+  const args = ['pr', 'view', ref, '--json', 'headRefName', '--jq', '.headRefName', ...(repoFlag ? ['-R', repoFlag] : [])];
+  const r = spawnSync('gh', args, { cwd: dir ?? undefined, encoding: 'utf8', timeout: 10000, windowsHide: true });
+  const head = r.status === 0 ? (r.stdout || '').trim() : '';
+  return head || null;
+}
+
+/** `gh pr create`/`gh pr merge`'s target, or `{ why }`: the repo from -R (or
+ *  a PR URL, or the dir's gh remote) and the branch from --head, the merge's
+ *  branch argument, a PR number's head (`prHead`), or the checkout's. */
+function ghTarget(verb, args, dir, prHead) {
+  let repoFlag = null;
+  let head = null;
+  const pos = [];
+  const own = dropRedirects(args);
+  for (let i = 0; i < own.length; i++) {
+    const [flag, inline] = own[i].startsWith('--') ? own[i].split(/=(.*)/s) : [own[i]];
+    const value = GH_PR_VALUE[verb].has(flag) ? (inline ?? own[++i]) : undefined;
+    if (flag === '-R' || flag === '--repo') repoFlag = value;
+    else if (flag === '-H' || flag === '--head') head = value?.replace(/^[^:]*:/, '');
+    else if (!flag.startsWith('-')) pos.push(flag);
+  }
+  const arg = pos.slice(2)[0]; // after `pr` and the action
+  const local = knownDir(dir);
+  const isUrl = /^https?:\/\//i.test(arg ?? '');
+  const slug = repoFlag ? repoSlug(repoFlag) : isUrl ? repoSlug(arg) : local && ghRemoteSlug(local);
+  if (!slug || (repoFlag && !/^[\w./:@-]+$/.test(repoFlag))) return { why: 'the guard can read no repo for it (no readable -R, and its dir is not a checkout with a remote)' };
+  let branch;
+  if (verb === 'gh pr create') branch = head ?? (local && checkedOut(local));
+  else if (arg === undefined) branch = !repoFlag && local ? checkedOut(local) : null;
+  else if (/^#?\d+$/.test(arg) || isUrl) branch = prHead(arg.replace(/^#/, ''), repoFlag, local);
+  else branch = arg;
+  if (!branch || !REF_NAME.test(branch)) return { why: arg && (/^#?\d+$/.test(arg) || isUrl) ? `gh could not look up PR ${arg}'s head branch` : 'its branch is not one the guard can read' };
+  return { targets: [`${slug}#${branch}`] };
+}
+
+/** 8. The repo and branch each gated call in a command ships, in order:
+ *  `{ verb, target: 'host/owner/repo#branch' }`, or `{ verb, why }` when the
+ *  guard can't determine it — the caller fails closed. `deps.prHead(ref,
+ *  repoFlag, dir)` looks up a PR's head branch (gh by default). */
+export function shipTargets(raw, cwd, tool = null, deps = {}) {
+  return targetsOf(gatedCalls(raw, cwd, tool), raw, deps.prHead ?? ghPrHead);
+}
+
+/** shipTargets over already-parsed gated calls. */
+function targetsOf(calls, raw, prHead) {
+  const out = [];
+  for (const { verb, args, dir } of calls) {
+    // gh reads GH_REPO/GH_HOST from the env: then the repo isn't the one the guard sees.
+    const ghEnv = /\bGH_(?:REPO|HOST)\b/.test(raw) || process.env.GH_REPO || process.env.GH_HOST;
+    const r = verb === 'git push' ? pushTarget(args, dir) : ghEnv ? { why: 'GH_REPO/GH_HOST picks its repo' } : ghTarget(verb, args, dir, prHead);
+    if (r.why) out.push({ verb, why: r.why });
+    else for (const target of r.targets) out.push({ verb, target });
   }
   return out;
 }
@@ -2787,7 +2958,7 @@ function assistantBefore(lines, end) {
  *  that approves wins. An answer that doesn't approve blocks, as before #180; a
  *  typed prompt that refuses or can't be read blocks; a neutral typed prompt
  *  ("also fix the typo") defers to the older candidate. An approving record
- *  without a uuid can't be spent, so it blocks. Throws on an unreadable file —
+ *  without a uuid can't be bound, so it blocks. Throws on an unreadable file —
  *  the caller fails closed. */
 export function latestApproval(transcriptPath) {
   const lines = readFileSync(transcriptPath, 'utf8').split('\n');
@@ -2826,65 +2997,77 @@ export function latestApproval(transcriptPath) {
   return null;
 }
 
-/** The state file's side table: `"<uuid>|<verb>"` -> the tool_use_id of the call
- *  that spent it, so a later gated call can refund a spend whose call errored. */
-const IDS_KEY = '@ids';
-
-/** Did the transcript record an errored tool_result for tool_use `id`? */
-function toolResultErrored(transcriptPath, id) {
+/** The tool_use ids among `ids` whose transcript tool_result errored, in one
+ *  read. An unreadable transcript or a torn line counts as no error: no refund
+ *  is the safe answer. */
+function erroredCalls(transcriptPath, ids) {
+  const want = new Set(ids);
+  const out = new Set();
+  let text = '';
   try {
-    for (const l of readFileSync(transcriptPath, 'utf8').split('\n')) {
-      if (!l || l[0] !== '{' || !l.includes(id)) continue;
-      const content = JSON.parse(l)?.message?.content;
-      if (Array.isArray(content) && content.some((b) => b?.type === 'tool_result' && b.tool_use_id === id && b.is_error === true)) return true;
-    }
+    text = readFileSync(transcriptPath, 'utf8');
   } catch {
-    // Unreadable or torn line: no refund is the safe answer.
+    return out;
   }
-  return false;
+  for (const l of text.split('\n')) {
+    if (!l || l[0] !== '{' || !l.includes('"tool_result"')) continue;
+    try {
+      const content = JSON.parse(l)?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const b of content) if (b?.type === 'tool_result' && b.is_error === true && want.has(b.tool_use_id)) out.add(b.tool_use_id);
+    } catch {
+      // torn line
+    }
+  }
+  return out;
 }
 
-/** Has `verb` already been spent against approval `uuid`? Records it spent on
- *  first use, with the spending call's `toolUseId`. A prior spend whose call's
- *  tool_result errored is refunded first — the push never happened. Self-trims
- *  to the newest 200 approval uuids. */
-function spend(uuid, verb, file, toolUseId, transcriptPath) {
+// The tool_use ids a binding remembers; past this it can no longer be released.
+const MAX_BOUND_CALLS = 50;
+
+/** 8. Binds approval `uuid` to `target` (`host/owner/repo#branch`) on its first
+ *  gated call, then checks every later call against that binding. Returns null
+ *  when the call may run, `{ other }` naming the bound target, or `{ merged }`
+ *  once a merge under it used the approval up. Refunds (#147): a merge whose
+ *  call errored is undone (the PR is still open), and a binding whose every
+ *  call errored is released (nothing shipped). A call without a tool_use_id
+ *  makes its binding permanent. Self-trims to the newest 200 approvals. */
+function bind(uuid, target, merges, file, toolUseId, transcriptPath) {
   const state = readState(file);
-  const ids = state[IDS_KEY] || {};
-  const idKey = `${uuid}|${verb}`;
-  let entry = state[uuid] || [];
-  if (entry.includes(verb) && ids[idKey] && toolResultErrored(transcriptPath, ids[idKey])) {
-    entry = entry.filter((v) => v !== verb);
-    delete ids[idKey];
+  delete state['@ids']; // the pre-#305 per-verb side table
+  const prior = state[uuid];
+  let entry = prior && typeof prior === 'object' && !Array.isArray(prior) && typeof prior.target === 'string' ? prior : null;
+  if (typeof entry?.merge === 'string' && erroredCalls(transcriptPath, [entry.merge]).size) delete entry.merge;
+  if (entry?.merge) return { merged: entry.target };
+  if (entry && entry.target !== target) {
+    const calls = Array.isArray(entry.calls) ? entry.calls : [];
+    if (!calls.length || erroredCalls(transcriptPath, calls).size < calls.length) return { other: entry.target };
+    entry = null;
   }
-  if (entry.includes(verb)) return true;
-  state[uuid] = [...entry, verb];
-  if (toolUseId) ids[idKey] = toolUseId;
-  state[IDS_KEY] = ids;
-  const keys = Object.keys(state).filter((k) => k !== IDS_KEY);
-  if (keys.length > 200) {
-    for (const k of keys.slice(0, keys.length - 200)) {
-      delete state[k];
-      for (const v of Object.keys(ids)) if (v.startsWith(`${k}|`)) delete ids[v];
-    }
-  }
+  entry ??= { target, calls: [] };
+  entry.calls = toolUseId && Array.isArray(entry.calls) && entry.calls.length < MAX_BOUND_CALLS ? [...entry.calls, toolUseId] : null;
+  if (merges) entry.merge = toolUseId || true;
+  delete state[uuid]; // re-inserted last: the newest binding survives the trim
+  state[uuid] = entry;
+  const keys = Object.keys(state);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete state[k];
   writeState(file, state);
-  return false;
+  return null;
 }
 
 const askRemedy = (verb) =>
-  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry. A prompt the user typed themselves approves the same way ("lgtm push and pr"); a message from an agent, another session, a hook or a tool never does. One approval covers each gated verb once, so get one for the whole ship (push, PR, merge); a second push of the same verb needs a new one.`;
+  `Ask the user with AskUserQuestion — give it an option that approves this ${verb} (answer wording like "push"/"PR"/"merge", without "hold"/"wait"/"no") — then retry. A prompt the user typed themselves approves the same way ("lgtm push and pr"); a message from an agent, another session, a hook or a tool never does. One approval covers one branch's whole ship — push, PR create, CI-fix pushes, merge — until its PR merges; another branch, or a push after the merge, needs a new one.`;
 
 /** 8. git push / gh pr create / gh pr merge need an approving answer in the
- *  transcript, spent once per verb. `transcriptPath` is read lazily — a
- *  non-gated command never touches disk here. */
-export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined, tool = null) {
-  const verbs = gatedVerbs(raw, cwd, tool);
-  if (!verbs.length) return null;
-  if (verbs.length > 1) {
-    return `This command holds ${verbs.length} gated verbs (${verbs.join(', ')}) — run each gated verb in its own Bash call, so each one is checked against the user's approval on its own. Nothing was spent.`;
-  }
-  const [verb] = verbs;
+ *  transcript; the answer binds to the repo and branch its first gated call
+ *  ships, and covers that branch until its PR merges. `transcriptPath` is
+ *  read lazily — a non-gated command never touches disk here. `deps.prHead`
+ *  replaces gh's PR head lookup (tests). */
+export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateStateFile(), toolUseId = undefined, tool = null, deps = {}) {
+  const calls = gatedCalls(raw, cwd, tool);
+  if (!calls.length) return null;
+  const verbs = [...new Set(calls.map((c) => c.verb))];
+  const verb = verbs.join(' + ');
 
   if (!transcriptPath || !existsSync(transcriptPath)) {
     return `${verb} needs explicit user approval (CLAUDE.md: "No commit or push without explicit user approval"), but there is no transcript to read it from. ${askRemedy(verb)}`;
@@ -2901,10 +3084,21 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
     return `${verb} needs explicit user approval; neither the user's latest typed prompt nor their latest AskUserQuestion answer approves it (a newer reply that doesn't approve overrides an older one that did). ${askRemedy(verb)}`;
   }
 
-  if (spend(record.uuid, verb, stateFile, toolUseId, transcriptPath)) {
-    return `${verb} already spent that approval — one push/PR per approving answer. ${askRemedy(verb)}`;
+  const shipped = targetsOf(calls, raw, deps.prHead ?? ghPrHead);
+  const unknown = shipped.find((s) => s.why);
+  if (unknown) {
+    return `${unknown.verb}: the guard can't tell which branch it ships (${unknown.why}), and an approval covers one branch, so it is blocked. Name the branch: \`git push <remote> <branch>\` run in a literal path, \`gh pr create --head <branch>\`, \`gh pr merge <branch>\` (gh takes a branch name in place of the PR number). Nothing was bound.`;
+  }
+  const targets = [...new Set(shipped.map((s) => s.target))];
+  if (targets.length > 1) {
+    return `This command ships ${targets.join(' and ')}, but one approval covers one branch. Ship each branch in its own Bash call, under its own answer. Nothing was bound.`;
   }
 
+  const held = bind(record.uuid, targets[0], verbs.includes('gh pr merge'), stateFile, toolUseId, transcriptPath);
+  if (held?.merged) return `This approval's PR (${held.merged}) was merged, which used the approval up — ${verb} needs a new answer. ${askRemedy(verb)}`;
+  if (held?.other) {
+    return `This approval covers ${held.other} (the branch its first push/PR/merge shipped); ${verb} ships ${targets[0]}. A push, PR or merge of another branch needs its own answer. ${askRemedy(verb)}`;
+  }
   return null;
 }
 

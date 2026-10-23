@@ -15,7 +15,7 @@ disable-model-invocation: true
 - Docs repo (`~/code/docs`) commits directly to `master`.
 - Board: PR open → Review, merge → Done, by itself. A `prod`-topic merge runs `node ~/code/claude-config/scripts/board.mjs set <repo>#N qa`, a QA pass `set … done`.
 - Auto-fix (`/autofix-pr` on the PR branch, or the toggle at claude.ai/code; needs the Claude GitHub App on the repo) is the unattended lane for "watch checks until green" when a session will end first — the user turning it on is push approval for that one PR only, because it pushes fixes without asking. It gets no webhook for a base-branch conflict, so zero check runs still means check mergeability yourself.
-- A multi-repo ship asks once per repo — one approving answer spends each gated verb (push, PR create, PR merge) once, so the second repo's push needs its own `AskUserQuestion`.
+- A multi-repo ship asks once per repo — one approving answer covers one branch's push, PR create, CI-fix pushes and merge, so the second repo's push needs its own `AskUserQuestion`.
 - Ultrareview (`/code-review ultra`, user-launched): offer it only for high-stakes PRs (auth, payments, migrations, anything that deletes refs, branches or data), because the free runs are few and extra usage is off.
 
 ## claude-config commit lane

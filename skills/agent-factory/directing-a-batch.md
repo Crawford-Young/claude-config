@@ -35,7 +35,7 @@ implementation parallelizes; that is the real concurrency cap.
 
 ## Ship
 
-- Ask one ship question (AskUserQuestion) per PR and finish all its gated verbs (push, PR, merge) before the next ask, because the push gate counts one push per approving answer — a CI-fix push needs a fresh approval. One gated verb per Bash call.
+- Ask one ship question (AskUserQuestion) per PR, covering all its gated verbs (push, PR, merge), because the push gate binds an approving answer to the branch it first ships until that PR merges — CI-fix pushes ride on it, and any other branch needs its own answer (#305).
 - Rebase a branch cut before another PR merged and re-run its gates before its ship question, because a rule that landed in between can fail it (#275's mkdtemp ban vs the #271 A/B tests, 116f2c0).
 - After a merge, sync main: claude-config runs plain `land.mjs sync` (it fast-forwards a clean main and refuses live edits; then name the landed paths), any other repo `git -C <repo> merge --ff-only origin/main`, because land.mjs only ever syncs claude-config (strate stayed 66 behind under its "synced" line, 2026-10-19).
 - A change to a guard gets a bounded fresh-context re-review after each fix round, because green gates and the first review missed the #167 round-1 false allow. Bound each review-fix round to its listed items and file the rest; from round 2 on, list only regressions against main and unticked Done-when items, because 3 of #249's 4 fix-round regressions came from fixing false allows main also had. After 3 NEEDS-FIX reviews, ship the regression-free subset (revert what still regresses) and file the rest (#249 took 6). Its units probe the guard by piping JSON to the hook, never by running the command, and write probe files with Write (reviewers: reviewer.md's single-quoted `node -e`), never a heredoc or double-quoted script, because a #239 reviewer's heredoc ran a real `git push` on main and a #249 implementer's backticks ran `rm -f`.
@@ -55,5 +55,3 @@ travels between sessions. A ticket-<repo>-<N> session works only ticket N.
 Audit once from git and GitHub, never prose: each PR's state (`gh pr view <n> --json state`,
 confirmed by an empty `git diff --stat origin/main <branch-head>`) and each issue's closed state
 (`gh issue view <n> --json state`). No roster file or tooling.
-
-Then Read `~/code/claude-config/skills/reflect/SKILL.md` and run it once for the batch.
