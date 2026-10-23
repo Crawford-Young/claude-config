@@ -21,6 +21,7 @@ Adds the Godot stack. Applies to every project under `~/code/games/`.
 - `export_presets.cfg` can carry signing secrets — gitignore it, or scrub before sharing.
 - `*.import` files are generated per-asset metadata — never hand-edit; they regenerate on reimport.
 - `.gitattributes` routes binary assets through LFS: `*.png *.jpg *.wav *.ogg *.glb *.blend filter=lfs diff=lfs merge=lfs -text`.
+
 ## Architecture Principles
 
 - **Logic in plain `RefCounted`/`Resource` scripts, not `Node._process`** — node-free scripts unit-test headlessly in GUT; logic in per-frame callbacks needs the whole scene tree.
