@@ -127,15 +127,34 @@ fixed false verdict; change them only with a test:
   call binds it to the repo and branch that call ships, in
   `~/.claude/push-gate-approvals.json` (`CLAUDE_PUSH_GATE_STATE` overrides),
   and every later push, CI-fix push, `pr create` and `pr merge` of that
-  branch passes until a merge uses it up (`gh pr merge --auto` doesn't: the
-  merge happens later, so CI-fix pushes still follow). A push, PR or merge of any other
+  branch passes until a merge uses it up. `gh pr create` runs once per
+  binding, and so does `gh pr merge`; `--auto` counts as that merge but
+  leaves CI-fix pushes open, since the merge happens later (`--disable-auto`
+  counts as neither). A push, PR or merge of any other
   branch, or of another repo, needs its own answer. The branch is the push
   refspec's destination (else its source, else the checkout's branch),
   `gh pr create --head` (else the checkout's), or `gh pr merge`'s argument —
   a branch name, or a PR number or URL whose head branch the hook looks up
   with `gh pr view` (about 1–2 s; the merge's checkout when there is no
-  argument). The repo is the push remote's URL, `-R`, the PR URL, or the
-  checkout's gh remote, as `host/owner/repo`. Because a bound approval allows
+  argument). The repo is the push remote's URL (a remote name, even one
+  holding `/`, resolved by `git remote get-url --push --all`; only
+  `scheme://…` or `user@host:path` is read as a URL), `-R`, the PR URL, or the
+  checkout's gh remote, as `host/owner/repo`. The guard reads the checkout,
+  remotes, config and gh default before the command runs, so a gated command
+  may carry only steps that can't change them (`shipStepRisk`): the gated
+  calls, the cd/`-C` it follows, read-only git (`add`, `commit`, `status`,
+  `log`, `diff`, `show`, `fetch`, `rev-parse`, `ls-remote`, …; `branch`,
+  `remote`, `config`, `worktree`, `stash` in their listing forms;
+  `checkout -- <paths>`, `restore`), read-only gh (`pr view/checks/list/
+  status/diff/comment`, `run`, `issue view/list/comment/edit/close`), and
+  commands that only print, read or wait (echo, cat, grep, sed without `-i`,
+  awk without `system`/`|`/`>`, sleep, …; `rm`/`mkdir`/`touch` on literal
+  paths). Any write into a git dir or git config, a redirect or path the
+  guard can't read, a PATH change, and any other command (`git checkout`,
+  `remote set-url`, `config` writes, `pull`, `rebase`, `gh repo
+  set-default`, `node`, `pnpm`, …) blocks with "run <step> in its own Bash
+  call, then retry the push" (48 of 500 real gated commands in a 30-day
+  replay, 24 of them a `node` script chained to a ship). Because a bound approval allows
   repeated pushes, a target the guard can't read with certainty blocks and
   binds nothing, with a remedy (push with an explicit `<remote> <branch>`,
   `gh pr merge <branch>`): a variable or substitution, an unknown cd or
@@ -143,6 +162,7 @@ fixed false verdict; change them only with a test:
   matching refspec (`:`, `+:`), `--all`/`--tags`/`--mirror`/`--prune`,
   `--follow-tags` or `--recurse-submodules` (but `=no`/`=check`);
   `GIT_DIR`/`GIT_WORK_TREE`/`GIT_CONFIG_*` in the command or the hook's env,
+  `HOME`/`XDG_CONFIG_HOME`/`USERPROFILE` set in the command,
   `--git-dir`/`--work-tree`/`--config-env`, `-c` on remote/push/url/branch/
   alias/include keys (a `-c alias.*` call is gated whatever its subcommand);
   repo config (read as git does, last value wins) with `remote.<r>.push`,
@@ -152,7 +172,7 @@ fixed false verdict; change them only with a test:
   `branch.<b>.merge` naming another branch; and `gh pr create -H owner:branch`
   where the owner isn't the repo's. A
   command holding several gated calls passes when they all ship the bound
-  branch. Refunds (#147): a merge whose tool_result is `is_error` is undone,
+  branch. Refunds (#147): a create or merge whose tool_result is `is_error` is undone,
   and a binding whose every call errored is released to the next branch. A
   missing/unreadable transcript or no approving record
   blocks with a message telling the model to ask via AskUserQuestion and

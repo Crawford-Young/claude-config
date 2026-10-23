@@ -38,7 +38,10 @@
 //      binds it to the repo and branch that call ships (`host/owner/repo#branch`,
 //      in a small state file keyed by the approving record's uuid), and later
 //      pushes, PR create and merge pass only for that same branch. A merge
-//      uses it up. The branch comes from the push refspec or the checkout,
+//      uses it up; create and merge (an --auto one too) run once each. The
+//      guard reads checkout, remotes and config before the command runs, so a
+//      gated command may carry only steps that can't change them
+//      (shipStepRisk). The branch comes from the push refspec or the checkout,
 //      `gh pr create --head`, or `gh pr merge`'s branch argument, PR number
 //      (gh's head lookup) or checkout; the repo from the push remote, -R, a
 //      PR URL or the checkout's gh remote. One the guard can't determine
@@ -46,7 +49,7 @@
 //      ship the one bound branch.
 //      A remote branch delete (`push --delete`/`-d`, or every refspec `:branch`)
 //      is exempt like --dry-run; a push that also pushes a ref stays gated.
-//      A binding records its calls' tool_use_ids (#147): a merge whose
+//      A binding records its calls' tool_use_ids (#147): a create or merge whose
 //      tool_result is_error is undone, and a binding whose every call errored
 //      is released to the next branch.
 //   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
@@ -2714,6 +2717,93 @@ export function gatedVerbs(raw, cwd, tool = null) {
   return gatedCalls(raw, cwd, tool).map((c) => c.verb);
 }
 
+// ---- 8. the other steps a gated command may run (#305) ----------------------
+// The guard reads the checkout, remotes, config and gh default BEFORE the
+// command runs, so a step in the same command that changes them changes what
+// ships. Besides the gated calls (and the cd/-C steps the parser follows), a
+// gated command may run only these. Anything else blocks.
+
+// git subcommands that never move HEAD, rename a branch, or write remote/config.
+const GIT_SAFE_SUB = new Set(['add', 'commit', 'status', 'log', 'diff', 'show', 'fetch', 'rev-parse', 'ls-remote', 'ls-files', 'describe', 'shortlog', 'blame', 'cat-file', 'rev-list', 'merge-base', 'for-each-ref', 'show-ref', 'grep', 'check-ignore', 'count-objects']);
+// git subcommands that are safe in their read-only forms only.
+const GIT_READ_FORM = {
+  branch: (a) => a.every((x) => /^(?:--show-current|-a|--all|-r|--remotes|-v|-vv|--verbose|--list|--no-color)$/.test(x)),
+  remote: (a) => a.length === 0 || /^(?:-v|--verbose|get-url|show)$/.test(a[0]),
+  config: (a) => /^(?:get|list)$/.test(a[0] ?? '') || (a.some((x) => /^(?:--get|--get-all|--get-regexp|--list|-l)$/.test(x)) && !a.some((x) => /^(?:--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|-e|--edit)$/.test(x))),
+  worktree: (a) => a[0] === 'list',
+  // A file restore (`checkout -- <paths>`) leaves HEAD where it is.
+  checkout: (a) => a.includes('--') && !a.slice(0, a.indexOf('--')).some((x) => /^(?:-[bB]|--orphan|-t|--track|--detach)$/.test(x)),
+  restore: () => true,
+  stash: (a) => a[0] === 'list' || a[0] === 'show',
+};
+// gh subcommands that leave branches, remotes and gh config alone (the gated
+// pr create/merge are allowed as gated calls).
+const GH_SAFE = new Set(['pr view', 'pr checks', 'pr list', 'pr status', 'pr diff', 'pr comment', 'pr create', 'pr merge', 'run list', 'run view', 'run watch', 'issue view', 'issue list', 'issue comment', 'issue edit', 'issue close', 'repo view', 'auth status']);
+// Other commands that only read, print or wait (writes go through the redirect check).
+const HARMLESS_CMD = new Set(
+  'echo printf cat head tail grep rg wc sort uniq cut tr sed awk jq ls pwd sleep true false test [ [[ date which type cygpath basename dirname : exit return continue break fi done then else elif do esac { } write-host write-output out-null out-string select-object select-string get-content measure-object format-list format-table'.split(' '),
+);
+// Commands that only create or remove the paths they name.
+const PATH_CMD = new Set(['rm', 'mkdir', 'touch']);
+// A path a step may write or remove: none inside a git dir or git config, none unread.
+const GIT_PATH = /\.git|(?:^|[/\\])git[/\\]|[$`]/i;
+
+/** A word as a path once its variables are expanded (the temp-dir env vars
+ *  read as a temp dir), or null when one is left unread. */
+function stepPath(word, rec) {
+  const t = word.replace(/^(?:\$\{?(?:TEMP|TMP|TMPDIR)\}?|\$env:(?:TEMP|TMP))(?=[/\\]|$)/i, '/tmp');
+  const e = expandWord(t, typeof rec.dir === 'string' ? rec.dir : null, rec.vars);
+  return typeof e === 'string' ? e : null;
+}
+
+/** May a step write redirect target `t`? A stream, the null device, or a path
+ *  outside any git dir or git config. */
+function safeRedirect(t, rec) {
+  if (/^(?:&\d|\/dev\/null|nul|\$null)$/i.test(t)) return true;
+  const p = t && stepPath(t, rec);
+  return Boolean(p) && !GIT_PATH.test(p);
+}
+
+/** The first step of a gated command that could change what it ships — an
+ *  unlisted git/gh subcommand, an unclassified command, a PATH change, a
+ *  write into a git dir — as text, or null when every step is allowed. */
+export function shipStepRisk(raw, cwd, tool = null) {
+  const text = scrub(raw);
+  const delims = new Set([...text.matchAll(/<<-?\s*(['"]?)([\w.-]+)\1/g)].map((m) => m[2].toLowerCase()));
+  for (const rec of withPayloads(commands(text, cwd, false, false, newScope(cwd, tool)))) {
+    const w = rec.words;
+    const step = w.join(' ').slice(0, 80);
+    for (let i = 0; i < w.length; i++) {
+      const m = /^(?:\d*|&)>>?(.*)$/.exec(w[i]);
+      if (m && !safeRedirect(m[1] || w[i + 1] || '', rec)) return step;
+    }
+    const cmd = rec.cmd.replace(/\.exe$/i, '').toLowerCase();
+    if (cmd === 'git') {
+      const { sub, args } = gitCallOf(rec);
+      // Every push here is a gated call (checked on its own) or an exempt delete or dry run.
+      if (sub !== null && sub !== 'push' && !GIT_SAFE_SUB.has(sub) && !GIT_READ_FORM[sub]?.(dropRedirects(args))) return step;
+    } else if (cmd === 'gh') {
+      const { sub, action } = ghCallOf(rec);
+      if (!GH_SAFE.has(`${sub} ${action}`)) return step;
+    } else if (/^(?:export|declare|readonly|local|set)$/.test(cmd)) {
+      if (w.some((x) => /^PATH=/i.test(x))) return step;
+    } else if (cmd.startsWith('$')) {
+      // A PowerShell assignment; a PATH one changes which git runs.
+      if (/^\$env:path$/i.test(cmd) || w[1] !== '=') return step;
+    } else if (cmd === 'sed') {
+      if (w.some((x) => /^-[^-]*i|^--in-place/.test(x))) return step;
+    } else if (cmd === 'awk') {
+      // awk can run commands and write files from its program text.
+      if (w.slice(1).some((x) => /system\s*\(|[|>]/.test(x))) return step;
+    } else if (PATH_CMD.has(cmd)) {
+      if (w.slice(1).some((x) => !x.startsWith('-') && (stepPath(x, rec) === null || GIT_PATH.test(stepPath(x, rec))))) return step;
+    } else if (!HARMLESS_CMD.has(cmd) && !delims.has(cmd)) {
+      return step;
+    }
+  }
+  return null;
+}
+
 // ---- 8. the repo and branch a gated call ships (#305) ------------------------
 
 // A ref name the guard can read: no variable, substitution, glob or quote left in it.
@@ -2732,6 +2822,9 @@ const GH_PR_VALUE = {
 const GIT_ENV_OVERRIDE = /\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|NAMESPACE|CONFIG(?:_COUNT|_KEY_\w*|_PARAMETERS|_GLOBAL|_SYSTEM)?)\b/;
 // `env -C dir` / `env --chdir=dir` runs the command in a dir the guard doesn't follow.
 const ENV_CHDIR = /\benv\b[^;&|\n]*?\s(?:-C|--chdir)\b/;
+// Setting HOME, XDG_CONFIG_HOME or USERPROFILE swaps in another global git/gh
+// config (inline, `env`, `export`, `$env:`); reading them is fine.
+const HOME_SET = /(?:^|[\s;&|(])(?:HOME|XDG_CONFIG_HOME|USERPROFILE)=|\$env:(?:HOME|XDG_CONFIG_HOME|USERPROFILE)\s*=/i;
 // Global git options that move the repo or inject config.
 const GIT_REPO_OPT = /^--(?:git-dir|work-tree|namespace|config-env|exec-path|bare)(?:=|$)/;
 // `git -c` keys that change where a push goes, or what it runs.
@@ -2849,15 +2942,26 @@ function pushTarget(args, dir, opts = []) {
     branches.add(cur);
   }
   if (!branches.size) return { why: 'it names no branch' };
-  if (remote !== undefined && !REF_NAME.test(remote) && !/^[\w.+-]+:\/\/|^[\w.-]+@[\w.-]+:/.test(remote)) return { why: `remote "${remote}" is not one the guard can read` };
+  if (remote !== undefined && !REF_NAME.test(remote) && !isRemoteUrl(remote)) return { why: `remote "${remote}" is not one the guard can read` };
   const cfg = gitConfig(repo);
   const remoteName = remote ?? (cur && (last(cfg, `branch.${cur}.pushremote`) || last(cfg, 'remote.pushdefault') || last(cfg, `branch.${cur}.remote`))) ?? 'origin';
-  const url = /[:/]/.test(remoteName) ? remoteName : last(cfg, `remote.${remoteName}.pushurl`) || last(cfg, `remote.${remoteName}.url`);
-  if (!url) return { why: `remote "${remoteName}" has no URL there` };
-  const risk = pushConfigRisk(cfg, remoteName, url, cur, !specs.length);
+  let url = remoteName;
+  if (!isRemoteUrl(remoteName)) {
+    // A name — even one holding a `/` — is a remote: git resolves its push URL, rewrites applied.
+    const r = spawnSync('git', ['-C', repo, 'remote', 'get-url', '--push', '--all', remoteName], { encoding: 'utf8', timeout: 4000 });
+    const urls = r.status === 0 ? (r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean) : [];
+    if (urls.length !== 1) return { why: urls.length ? `remote "${remoteName}" pushes to more than one URL` : `"${remoteName}" is not a remote git can resolve there` };
+    url = urls[0];
+  }
+  const configured = last(cfg, `remote.${remoteName}.pushurl`) || last(cfg, `remote.${remoteName}.url`) || url;
+  const risk = pushConfigRisk(cfg, remoteName, configured, cur, !specs.length) || pushConfigRisk(cfg, remoteName, url, cur, !specs.length);
   if (risk) return { why: risk };
   return { targets: [...branches].map((b) => `${repoSlug(url)}#${b}`) };
 }
+
+/** Is a push's remote argument a URL (`scheme://…` or scp-style `user@host:path`)
+ *  rather than a remote name? Anything else is a name git must resolve. */
+const isRemoteUrl = (s) => /^[a-z][\w+.-]*:\/\//i.test(s) || /^[\w.-]+@[\w.-]+:/.test(s);
 
 /** A default PR head lookup: `gh pr view <ref> --json headRefName`, run from
  *  the call's dir. Null on any failure — the caller fails closed. */
@@ -2912,12 +3016,12 @@ export function shipTargets(raw, cwd, tool = null, deps = {}) {
 function targetsOf(calls, raw, prHead) {
   const text = scrub(raw);
   // Env the command sets, or the hook's own env it inherits, can repoint git or gh.
-  const gitEnv = GIT_ENV_OVERRIDE.test(text) || ENV_CHDIR.test(text) || Object.keys(process.env).some((k) => GIT_ENV_OVERRIDE.test(k));
+  const gitEnv = GIT_ENV_OVERRIDE.test(text) || ENV_CHDIR.test(text) || HOME_SET.test(text) || Object.keys(process.env).some((k) => GIT_ENV_OVERRIDE.test(k));
   const ghEnv = /\bGH_(?:REPO|HOST)\b/.test(text) || process.env.GH_REPO || process.env.GH_HOST;
   const out = [];
   for (const { verb, args, dir, opts } of calls) {
     const r = gitEnv
-      ? { why: 'the command or its env sets GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_* or env -C' }
+      ? { why: 'the command or its env sets GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_*, HOME, XDG_CONFIG_HOME, USERPROFILE or env -C' }
       : verb === 'git push'
         ? pushTarget(args, dir, opts)
         : ghEnv
@@ -3106,26 +3210,36 @@ const MAX_BOUND_CALLS = 50;
 
 /** 8. Binds approval `uuid` to `target` (`host/owner/repo#branch`) on its first
  *  gated call, then checks every later call against that binding. Returns null
- *  when the call may run, `{ other }` naming the bound target, or `{ merged }`
- *  once a merge under it used the approval up. Refunds (#147): a merge whose
- *  call errored is undone (the PR is still open), and a binding whose every
+ *  when the call may run, `{ other }` naming the bound target, `{ merged }`
+ *  once a merge under it used the approval up, or `{ again }` for a second
+ *  create or merge (`use` counts this call's create/auto/merge). Refunds
+ *  (#147): a create or merge whose call errored is undone, and a binding whose every
  *  call errored is released (nothing shipped). A call without a tool_use_id
  *  makes its binding permanent. Self-trims to the newest 200 approvals. */
-function bind(uuid, target, merges, file, toolUseId, transcriptPath) {
+function bind(uuid, target, use, file, toolUseId, transcriptPath) {
   const state = readState(file);
   delete state['@ids']; // the pre-#305 per-verb side table
   const prior = state[uuid];
   let entry = prior && typeof prior === 'object' && !Array.isArray(prior) && typeof prior.target === 'string' ? prior : null;
-  if (typeof entry?.merge === 'string' && erroredCalls(transcriptPath, [entry.merge]).size) delete entry.merge;
+  // A create, auto-merge or merge whose call errored never happened: refund it (#147).
+  const spent = ['merge', 'auto', 'create'].filter((k) => typeof entry?.[k] === 'string');
+  if (spent.length) {
+    const errored = erroredCalls(transcriptPath, spent.map((k) => entry[k]));
+    for (const k of spent) if (errored.has(entry[k])) delete entry[k];
+  }
   if (entry?.merge) return { merged: entry.target };
   if (entry && entry.target !== target) {
     const calls = Array.isArray(entry.calls) ? entry.calls : [];
     if (!calls.length || erroredCalls(transcriptPath, calls).size < calls.length) return { other: entry.target };
     entry = null;
   }
+  if (use.create && entry?.create) return { again: 'gh pr create', target };
+  if ((use.merge || use.auto) && entry?.auto) return { again: 'gh pr merge', target };
   entry ??= { target, calls: [] };
   entry.calls = toolUseId && Array.isArray(entry.calls) && entry.calls.length < MAX_BOUND_CALLS ? [...entry.calls, toolUseId] : null;
-  if (merges) entry.merge = toolUseId || true;
+  // A merge uses the approval up; an auto-merge uses up only the merge verb, so
+  // CI-fix pushes still follow it; a create runs once.
+  for (const k of ['create', 'auto', 'merge']) if (use[k]) entry[k] = toolUseId || true;
   delete state[uuid]; // re-inserted last: the newest binding survives the trim
   state[uuid] = entry;
   const keys = Object.keys(state);
@@ -3163,6 +3277,10 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
     return `${verb} needs explicit user approval; neither the user's latest typed prompt nor their latest AskUserQuestion answer approves it (a newer reply that doesn't approve overrides an older one that did). ${askRemedy(verb)}`;
   }
 
+  const step = shipStepRisk(raw, cwd, tool);
+  if (step) {
+    return `${verb}: this command also runs \`${step}\`, which could change the branch, remote or config it ships (the guard reads them before the command runs), so it is blocked. Run \`${step}\` in its own Bash call, then retry the push. Nothing was bound.`;
+  }
   const shipped = targetsOf(calls, raw, deps.prHead ?? ghPrHead);
   const unknown = shipped.find((s) => s.why);
   if (unknown) {
@@ -3175,10 +3293,21 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
       : `${verb}: the guard can't tell which branch it ships (it names none), so it is blocked. Push with an explicit \`<remote> <branch>\`. Nothing was bound.`;
   }
 
-  // An auto-merge (or turning one off) merges nothing now: CI-fix pushes still follow it.
-  const merges = calls.some((c) => c.verb === 'gh pr merge' && !c.args.some((a) => a === '--auto' || a === '--disable-auto'));
-  const held = bind(record.uuid, targets[0], merges, stateFile, toolUseId, transcriptPath);
+  // Per binding, a create runs once and a merge once; an auto-merge counts as the
+  // merge but merges nothing yet, so CI-fix pushes still follow it. Turning
+  // auto-merge off counts as neither.
+  const count = (verbName, test) => calls.filter((c) => c.verb === verbName && test(c.args)).length;
+  const use = {
+    create: count('gh pr create', () => true),
+    auto: count('gh pr merge', (a) => a.includes('--auto')),
+    merge: count('gh pr merge', (a) => !a.includes('--auto') && !a.includes('--disable-auto')),
+  };
+  if (use.create > 1 || use.auto + use.merge > 1) {
+    return `This command runs ${use.create > 1 ? 'gh pr create' : 'gh pr merge'} more than once; one approval runs it once per branch. Nothing was bound.`;
+  }
+  const held = bind(record.uuid, targets[0], use, stateFile, toolUseId, transcriptPath);
   if (held?.merged) return `This approval's PR (${held.merged}) was merged, which used the approval up — ${verb} needs a new answer. ${askRemedy(verb)}`;
+  if (held?.again) return `This approval already ran ${held.again} for ${held.target}; a second ${held.again} needs a new answer. ${askRemedy(verb)}`;
   if (held?.other) {
     return `This approval covers ${held.other} (the branch its first push/PR/merge shipped); ${verb} ships ${targets[0]}. A push, PR or merge of another branch needs its own answer. ${askRemedy(verb)}`;
   }
