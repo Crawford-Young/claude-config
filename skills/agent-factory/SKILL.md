@@ -15,7 +15,6 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 | Lane | Who holds the plan | Shape | Status |
 |---|---|---|---|
 | subagent | Claude, turn by turn | results return to the caller | GA |
-| teammate | the lead, turn by turn | shared task list plus direct teammate messaging | experimental, off since 2026-10-16 (#272) |
 | Workflow | the script | results live in script variables; dozens to hundreds of agents | user opt-in |
 | agent view (`claude agents`) | you | independent background sessions | research preview, on by default |
 | cloud session / routine | you, or a schedule | unattended session on Anthropic infra (`claude --cloud`, `/schedule`) | research preview |
@@ -23,19 +22,15 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 ## Spawn posture
 
 - **Orchestrator (main session):** dispatch readily — but sweep effort on the current model first (raise your own effort/thinking level before reaching for a child). Dispatch pays off when (a) the pieces are independent, ideally more than one context window each, or (b) there's a long cost tail on routine work. Parallel-safe clusters, cross-repo work, and gate-heavy tasks are cheaper in a child than in your own context. Small docs/config tasks (≤2 files) run inline.
-- **`ultrathink`** deepens reasoning for one turn at unchanged API effort — the cheapest escalation available (cheaper than switching models or dispatching a child). "think", "think hard", "think more" are casual English, not recognized keywords with any effect.
 - **Spawned agents:** inline is the default; spawn only when the task exceeds what you can do well (missing tools/skills, context blowout, real parallelism). A lead (repo, epic or ticket) spawns its own subtree; a worker (`impl`, `review`, `recon`) is a leaf, since no tree name extends a worker's, so it reports a need up to its lead. Only the director asks the user, because AskUserQuestion is absent in subagents, with agent teams on or off (#272 probes).
 - **Depth limit:** the harness sets `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=5` in `~/.claude/settings.json` (platform default 3; #272), room for dir → repo → epic → ticket → worker — at the wall a subagent loses the `Agent` tool outright, and a `fork` keeps it listed but the call errors, so no lane spawns past the wall. Depth is about nesting, not foreground vs background, and an agent cannot observe its own current depth from inside itself. Before planning any spawn, confirm `Agent` is in your tool list. If it is absent, report `NEEDS_CONTEXT: no Agent tool in this dispatch` — do not plan around it. If present, spawn only when the situation genuinely calls for it (missing tools, context blowout, real parallelism).
 - **No self-verification:** a reviewer (or any agent) must not judge or validate its own prior output — that's a fresh-context subagent's job. Objective gates the orchestrator can run itself (tests, lint, typecheck — read by exit line) are unaffected.
 - **Worktree isolation** (`isolation: "worktree"`) when parallel children mutate files — disjoint file sets required; a shared registry (`harness-map.json`) gets one owner per wave, and other children report their map changes as `ISSUE:` lines because parallel map edits conflict at integration.
 - **Workflow tool** for enumeration-shaped fan-outs (consumer sweeps, adversarial verify rounds, migrations over a file list). User opt-in: propose it in one line (agent count, rough cost), wait for the go.
-- **`ultracode`** diverts a task into the Workflow tool around the factory's dispatch path two ways: (a) a typed prompt keyword — including the word in a prompt opts that turn into Workflow, governed by the `workflowKeywordTriggerEnabled` setting (default true); (b) the session setting `ultracode` / `/effort ultracode` — xhigh effort plus standing workflow orchestration. Both carry the same user-opt-in rule as manually proposing Workflow, a stronger gate to respect since either is session/prompt-wide rather than per-proposal.
-- **Workflow limits:** 1,000-agent hard cap on a single run. If an agent mid-run fails, resuming reruns every agent started after the failed one, including ones that already finished successfully — resume is not free.
-- **Workflow-lane settings:** `workflowSizeGuideline` is `medium` (<10 agents, platform default — user decision 2026-09-21, keeps runs inside the Max plan with no extra usage); `subagentPromptCacheTtl` stays unset until a Workflow run is actually proposed.
 
 ### The named tree
 
-Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call is a plain subagent, its name kept in its `meta.json`, and names nest (probe: a named child of a named child at spawnDepth 2). SendMessage by name still resumes a finished agent. Gone with teams: the flat roster, the shared task list, peer messaging and idle notifications.
+Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call is a plain subagent, its name kept in its `meta.json`, and names nest (probe: a named child of a named child at spawnDepth 2). SendMessage by name still resumes a finished agent.
 
 - Inside a director's tree (a director-titled session and every tree-named agent below it), name every spawn with its tree name, `<dir>_<repo>[_e<N>][_t<N>][_<impl|review|recon>[-r<K>]]`, from `node ~/code/claude-config/scripts/session-name.mjs tree <dir> <repo> [--epic N] [--ticket N] [--worker W]`, because audit and reflect group its spend under its ticket by that name. `agent-name-guard.mjs` blocks a missing or off-grammar name there, a subagent's spawn outside its own subtree, and a director's spawn outside its scope; outside a director's tree it lets every spawn through, named or not.
 - A fresh dispatch on a worker name already used adds `--round K` (`-r2`), so the name you dispatch is the name you address.
@@ -43,12 +38,7 @@ Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call i
 
 ## Model routing
 
-Roster: `implementer` (code via TDD, and docs/prose edits), `reviewer` (read-only review), `recon` (read-only local and web lookups). See [`agents/ROUTING.md`](../../agents/ROUTING.md) for the evidence-distilled table. Short form:
-
-- **sonnet at `effort: low`** — recon, existence checks, single-fact read-and-report, doc fetches, verbatim batches. We do not route to haiku (2026-09-04): effort was silently dropped on Haiku 4.5; Haiku 5.5 now documents effort support, so #112 re-tests this. Lower the effort, not the model.
-- **sonnet** — scoped implementation with a clear brief; verbatim/mechanical batches; adjudication-style reviews with enumerated probes.
-- **opus** — reviews the orchestrator can't pre-frame; 3+ file integration; novel patterns; high-stakes code (auth, payments, migrations). Dispatch an opus implementer as `implementer-opus` (effort high by frontmatter, survives `name:`; #233, ROUTING.md).
-- **fable** — usage-billed; per-run user clearance required (the Agent hook enforces it — user replies `FABLE OK`). Reserve for diagnostics after an opus failure or exceptional-stakes review.
+Roster: `implementer`, `implementer-opus`, `reviewer`, `recon`. The pick per situation lives in [`agents/ROUTING.md`](../../agents/ROUTING.md), the measured source: read its table before dispatching. Fable is usage-billed and hook-gated (per-run user clearance, `FABLE OK`).
 
 Set `model:` explicitly on every dispatch of a type without a frontmatter default (hook-enforced). Any brief, any model: omit "verify your work" scaffolding (over-verification — the harness's verifier is a fresh-context subagent regardless of which model wrote the brief); add one scope line that fixes the file boundary (parallel safety) and fixes what's broken inside it; cap delegation explicitly when the dispatched type carries the `Agent` tool.
 
