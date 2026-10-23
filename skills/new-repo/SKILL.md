@@ -95,7 +95,7 @@ Work through the chosen path in order. Check each off as it completes.
 
 #### CI & Publishing
 - [ ] `.github/workflows/ci.yml` — check job + e2e job, see TEMPLATES.md's 'GitHub Actions CI' section
-- [ ] `.github/dependabot.yml` — npm + github-actions, weekly schedule
+- [ ] `.github/dependabot.yml` — npm + github-actions, weekly schedule, npm grouped (`groups: { dependencies: { patterns: ['*'] } }`)
 - [ ] Once the GitHub repo exists: `gh label create in-progress`, `gh label create debt`, `gh repo edit --add-topic board` (board sweep)
 - [ ] If published package: `tsup.config.ts`, Changesets init, `src/index.ts` barrel export
 
@@ -117,7 +117,7 @@ Derived from strate's scaffold (strate#9, PR #28). Package manager + runtime is 
 - [ ] Root `Cargo.toml`: `[workspace]` (`members`, `resolver = "3"`) + `[workspace.package]` (`edition = "2024"`, `rust-version = "1.90"`); `rust-toolchain.toml` (`channel = "stable"`, components `rustfmt`, `clippy`)
 - [ ] ESLint + Prettier; Husky (`pre-commit` lint-staged, `commit-msg` commitlint — no `pre-push` hook); `commitlint.config.ts`
 - [ ] `.github/workflows/ci.yml` on `windows-latest`: `oven-sh/setup-bun@v2`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2` → `bun ci`, `bun audit --audit-level=high`, typecheck, lint, test, **`bun run build` before any cargo step** (`generate_context!` embeds `dist/`), `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-- [ ] `.github/dependabot.yml` — bun + cargo + github-actions
+- [ ] `.github/dependabot.yml` — bun + cargo + github-actions, each with `groups: { all: { patterns: ['*'] } }`: ungrouped, every bump is its own PR, rebased and re-run after each merge (strate's 7, 2026-10-19)
 
 **Final gate (Tauri):** `bun run typecheck && bun run lint && bun run test && bun run build && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run tauri build --debug --no-bundle`
 
