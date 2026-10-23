@@ -16,17 +16,6 @@ Adds the Godot stack. Applies to every project under `~/code/games/`.
 | Error monitoring | Sentry — shipped builds only |
 | Commits | Conventional Commits — enforced by commitlint |
 
-## Project Layout
-
-```
-project.godot      # engine project file — the equivalent of package.json
-scenes/             # .tscn scene files — composition, node trees
-scripts/            # .gd script files — logic attached to nodes
-assets/             # sprites, audio, models — routed through Git LFS
-tests/              # GUT test suites
-addons/gut/         # the GUT testing framework itself
-```
-
 ## Version Control
 
 - `export_presets.cfg` can carry signing secrets — gitignore it, or scrub before sharing.
@@ -34,10 +23,7 @@ addons/gut/         # the GUT testing framework itself
 - `.gitattributes` routes binary assets through LFS: `*.png *.jpg *.wav *.ogg *.glb *.blend filter=lfs diff=lfs merge=lfs -text`.
 ## Architecture Principles
 
-- **One responsibility per scene** — a scene doing two unrelated jobs can be neither reused nor tested in isolation.
 - **Logic in plain `RefCounted`/`Resource` scripts, not `Node._process`** — node-free scripts unit-test headlessly in GUT; logic in per-frame callbacks needs the whole scene tree.
-- **Signals up, method calls down** — child emits signals its parent listens for; parent calls methods on children it owns.
-- **Autoload singletons for genuinely global state only** — overuse recreates uncontrolled global mutable state.
 
 ## Godot Gotchas
 
