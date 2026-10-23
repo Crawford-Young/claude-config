@@ -66,7 +66,7 @@ function treeContext(payload) {
   if (!dir) return null;
   const agentId = payload.agent_id;
   if (agentId) {
-    const parent = PLAIN_ID.test(agentId) ? spawnName(readJson(join(dir, 'subagents', `agent-${agentId}.meta.json`))) : null;
+    const parent = PLAIN_ID.test(agentId) ? spawnName(readJson(join(dir, 'subagents', `agent-${agentId}.meta.json`)))?.trim() : null;
     const p = parseSessionName(parent);
     return p.tree ? { parent: parent.toLowerCase(), worker: Boolean(p.role) } : null;
   }

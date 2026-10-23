@@ -123,7 +123,7 @@ test("a subagent caller's tree name may sit in its meta.json description when th
   assert.equal(as('both', 'harness_repo_t7_impl').code, 0, 'meta name wins over description');
 });
 
-test('a worker is a leaf:its spawn is refused with a pointer to its lead', () => {
+test('a worker is a leaf: its spawn is refused with a pointer to its lead', () => {
   const f = fixture();
   meta(f, 'w1', { name: 'harness_repo_t5_impl' });
   const r = spawn(f, 'harness_repo_t5_recon', { agent_id: 'w1' });
