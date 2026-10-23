@@ -446,9 +446,11 @@ function expandHome(p) {
   return p;
 }
 
-/** Is a gate command among `cmds` piped onward? Rule 3's test. */
+/** Is a gate command among `cmds` piped onward? Rule 3's test. A later stage
+ *  counts through its own chain too, so a call inside `| bash -c "…"` or
+ *  `| eval …` masks the gate like a bare `| tail`. */
 function gatePiped(cmds) {
-  const masked = (g) => stagesOf(g).some((s) => cmds.some((t) => t.pipe === s.pipe && t.seg > s.seg));
+  const masked = (g) => stagesOf(g).some((s) => cmds.some((t) => stagesOf(t).some((u) => u.pipe === s.pipe && u.seg > s.seg)));
   return cmds.some((g) => isGate(g) && masked(g));
 }
 

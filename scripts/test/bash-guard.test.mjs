@@ -2206,7 +2206,11 @@ test('#239, #295: a gate behind a kept prefix, in a group or in a shell line, pi
   for (const c of ['timeout 300 npm test | tail -5', 'env CI=1 pnpm test | tail', `bash -c 'pnpm test' | tail`, '{ pnpm test; } | tail -5', `echo x | bash -c 'pnpm test | cat'`]) {
     assert.match(staticCheck(c, '/work', 'Bash') ?? '', piped, c);
   }
-  for (const c of [`bash -c 'pnpm test'; echo x | tail`, `echo x | bash -c 'pnpm test'`]) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
+  for (const c of [`bash -c 'pnpm test'; echo x | tail`, `echo x | bash -c 'pnpm test'`, 'echo a | { pnpm test; }']) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
+  // A later stage that is a shell line or eval is a stage too, redirected or not (#291 r2).
+  for (const c of ['pnpm test | bash -c "tail -5" > out.txt', `pnpm test | sh -c 'grep x' >> log`, 'pnpm test | powershell -c "Select -Last 5" > f', 'pnpm test | eval tail > f', 'pnpm test | bash -c "cat" 2>/dev/null', 'pnpm test | bash -c "cat > f"', 'pnpm test | bash -c "cat"']) {
+    for (const tool of ['Bash', null]) assert.match(staticCheck(c, '/work', tool) ?? '', piped, `${tool} ${c}`);
+  }
 });
 
 // --- #258: a node eval script the caller's shell substitutes into ---------------
