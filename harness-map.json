@@ -307,7 +307,7 @@
    "kind": "hook",
    "label": "bash-guard",
    "file": "hooks/bash-guard.mjs",
-   "summary": "PreToolUse:Bash|PowerShell — eleven rules, incl. gate output piped onward with a runnable rewrite (rule 3, #295), shell-launched fable (rule 7, added in C8), push/PR approval (rule 8, #75) and headed-Playwright browser consent (rule 9, #75); gate-record forgery (rule 11, #190) went with #291.",
+   "summary": "PreToolUse:Bash|PowerShell — ten rules, incl. gate output piped onward with a runnable rewrite (rule 3, #295), shell-launched fable (rule 7, added in C8), push/PR approval (rule 8, #75) and headed-Playwright browser consent (rule 9, #75); gate-record forgery (rule 11, #190) went with #291, the heredoc doubled-backslash block (rule 10) with #293.",
    "rules": [
     "No git add -A / commit -a",
     "No .env in git",
