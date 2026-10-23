@@ -99,6 +99,16 @@ export function readIfExists(p) {
   }
 }
 
+/** True when the lockfile names Bun as the package manager (pnpm in a Bun repo fails, strate-18). */
+export function isBunRepo(dir) {
+  return ['bun.lock', 'bun.lockb'].some((f) => existsSync(join(dir, f)));
+}
+
+/** [bin, ...args] that installs dependencies in dir: bun in a Bun repo, else pnpm. */
+export function installCommand(dir) {
+  return [isBunRepo(dir) ? 'bun' : 'pnpm', 'install'];
+}
+
 /** Env-file names to copy into a new worktree when no .worktreeinclude exists. */
 export const DEFAULT_ENV_FILES = ['.env', '.env.local'];
 

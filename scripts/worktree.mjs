@@ -34,6 +34,7 @@ import {
   git,
   gitOrDie,
   log,
+  installCommand,
   isChosenName,
   isMain,
   issueNumber,
@@ -88,8 +89,9 @@ function cmdNew() {
   }
 
   if (args.install) {
-    const r = spawnSync('pnpm', ['install'], { cwd: wtPath, stdio: 'inherit', shell: true });
-    if (r.status !== 0) log('WARNING: pnpm install failed — run it manually before gates.');
+    const [bin, ...installArgs] = installCommand(wtPath);
+    const r = spawnSync(bin, installArgs, { cwd: wtPath, stdio: 'inherit', shell: true });
+    if (r.status !== 0) log(`WARNING: ${bin} install failed — run it manually before gates.`);
   }
 
   const husky = huskyStubs(repo, wtPath);
