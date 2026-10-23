@@ -6,7 +6,7 @@
 // agent and tool latency, retry cost. --session keeps only the windows named <name>,
 // legacy, typed and tree forms alike: a file splits at each custom title (#115), and its
 // subagents follow the window they ran in, except a named one, which goes by its own
-// meta.json name (#272).
+// meta.json name, else a tree-name description (#272, #318).
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
 // Agent spend is also split per type × model × effort (#113). --stamps reads no
 // transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, workspace/docs/,
