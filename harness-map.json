@@ -307,7 +307,7 @@
    "kind": "hook",
    "label": "bash-guard",
    "file": "hooks/bash-guard.mjs",
-   "summary": "PreToolUse:Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit — eleven rules, incl. shell-launched fable (rule 7, added in C8), push/PR approval (rule 8, #75), headed-Playwright browser consent (rule 9, #75) and gate-record forgery (rule 11, #190).",
+   "summary": "PreToolUse:Bash|PowerShell — eleven rules, incl. gate output piped onward with a runnable rewrite (rule 3, #295), shell-launched fable (rule 7, added in C8), push/PR approval (rule 8, #75) and headed-Playwright browser consent (rule 9, #75); gate-record forgery (rule 11, #190) went with #291.",
    "rules": [
     "No git add -A / commit -a",
     "No .env in git",
@@ -320,7 +320,6 @@
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
     "One gated verb per Bash call — a compound with two is blocked unspent",
     "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated",
-    "No write into a session transcript or gate state file (push-gate-approvals, browser-gate-sessions, fable-clearance), nor a delete/move-away of a state file, by shell, PowerShell, a runner payload, inline interpreter or Write/Edit tool; auto-memory exempt; a script file is out of reach",
     "A command nesting blocks, groups or substitutions more than 100 levels deep is blocked unread (#167)"
    ]
   },

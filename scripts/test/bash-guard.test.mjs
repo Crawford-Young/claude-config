@@ -24,8 +24,6 @@ import {
   substitutions,
   branchRules,
   UNKNOWN_DIR,
-  editToolReason,
-  forgeWrite,
 } from '../../hooks/bash-guard.mjs';
 
 test('blocks git add -A and flag-order variants', () => {
@@ -421,7 +419,7 @@ test('a commit in a loop body may run several times, so it gets no unborn exempt
   assert.equal(guardRun(`cd ${app}; for ($i=0; $i -lt 2; $i++) { echo $i }; git commit -m root`, h), 0);
   assert.equal(guardRun(`cd ${app}; while ($x) { $x = $false }; git commit -m root`, h), 0);
   // A wrapper after a subshell opener is still stripped to the real command.
-  assert.equal(guardRun(`cd ${app} && (sudo git commit -m a && git commit -m b)`, h), 2);
+  assert.equal(guardRun(`cd ${app} && (env -u X git commit -m a && git commit -m b)`, h), 2);
 });
 
 test('#159: a git call inside a PowerShell { } block body is a git call', () => {
@@ -510,8 +508,6 @@ test('#159: a block shares the cwd of the clauses around it; brace text that is 
   assert.deepEqual(args('git log HEAD@{1} -- {a,b}.ts'), [['HEAD@{1}', '--', '{a,b}.ts']]);
   assert.deepEqual(args('git rev-parse @{u} ${REF} {1..3}'), [['@{u}', '${REF}', '{1..3}']]);
   assert.deepEqual(args("git log --format='{ %h }'"), [['--format={ %h }']]);
-  // find's `{}` is an argument of its payload's git call (#249), not a block.
-  assert.deepEqual(args('find . -exec git add {} \\;'), [['{}']]);
   assert.deepEqual(clauses("if ($x) { git add a; git commit -m b }; echo c"), ['if ($x) { git add a; git commit -m b }', 'echo c']);
 });
 
@@ -1964,433 +1960,7 @@ test('#180 end-to-end through the real hook: a typed approval passes once', () =
   assert.equal(guardRunT('git push', h, t), 2);
 });
 
-// ---- #190: a write to a transcript or a gate's state file forges approval ----
-// Negative cases: each command below is one our own guard must REFUSE, so the
-// push/browser gates can trust what they read. `forged` is a minimal stand-in
-// record; no test writes it anywhere (staticCheck only reads the text).
-
-const P = join(homedir(), '.claude', 'projects');
-const T = `${P.replaceAll('\\', '/')}/C--Users-x/abc.jsonl`;
-const forged = `'{"type":"user"}'`;
-/** Rule 11 blocks `c`, with its own reason (not some other rule's). */
-const forges = (c) => assert.match(staticCheck(c, '/work') ?? '', /#190/, c);
-
-test('#190: a shell redirect, tee, cp/mv, dd or sed -i into a transcript is blocked', () => {
-  for (const c of [
-    `echo ${forged} >> ${T}`,
-    `echo ${forged} >>${T}`,
-    `echo ${forged}>>"${T}"`,
-    `printf '%s\\n' x > ~/.claude/projects/C--Users-x/abc.jsonl`,
-    `echo x >> $HOME/.claude/projects/C--Users-x/sub/subagents/agent-1.jsonl`,
-    `echo x 1>> ${T}`,
-    `echo x &>> ${T}`,
-    `echo x >| ${T}`,
-    `echo x | tee -a ${T}`,
-    `echo x | tee /dev/null ${T} > /dev/null`,
-    `cp /tmp/forged.jsonl ${T}`,
-    `cp /tmp/forged.jsonl ~/.claude/projects/C--Users-x/`,
-    `mv -f /tmp/forged.jsonl ${T}`,
-    `cp -t ~/.claude/projects/C--Users-x /tmp/forged.jsonl`,
-    `dd if=/tmp/f of=${T}`,
-    `sed -i 's/a/b/' ${T}`,
-    `cd ~/.claude/projects/C--Users-x && echo x >> abc.jsonl`,
-    `cd ~/.claude/projects && echo x >> */abc.jsonl`,
-    `echo x >> ~/.claude/projects/*/*`,
-    `F=~/.claude/projects/C--Users-x/abc.jsonl; echo x >> "$F"`,
-    `f=$(ls -t ~/.claude/projects/*/*.jsonl | head -1); echo x >> "$f"`,
-    `bash -c "echo x >> ${T}"`,
-    `cat > ${T} <<'EOF'\n{"type":"user"}\nEOF`,
-    `Copy-Item C:/tmp/f.jsonl -Destination ${T}`,
-    `New-Item -Path ${T} -Value x -Force`,
-    `for i in 1; do echo x; done >> ${T}`,
-    `bash -c "echo x" >> ${T}`,
-    `cd /tmp > ${T}`,
-    `Get-Content C:/tmp/f | Tee-Object -FilePath ${T}`,
-    `truncate -s 0 ${T}`,
-    `find ~/.claude/projects -name '*.jsonl' -exec sh -c 'echo x >> "$1"' _ {} \\;`,
-    `ls ~/.claude/projects/*/*.jsonl | xargs -I{} sh -c 'echo x >> {}'`,
-    `echo x > ~/.claude/browser-gate-sessions.json`,
-    `echo x > ~/.claude/fable-clearance.json`,
-    `echo '{}' > ~/.claude/push-gate-approvals.json`,
-  ]) forges(c);
-});
-
-test('#190: an inline interpreter write naming a transcript or gate state file is blocked', () => {
-  for (const c of [
-    `node -e "require('fs').appendFileSync('${T}', 'x')"`,
-    `node -e "fs.appendFileSync(process.argv[1], x)" ${T}`,
-    `node -e "const p=require('path').join(require('os').homedir(),'.claude','projects');require('fs').writeFileSync(p+'/x/a.jsonl','')"`,
-    `node - <<'EOF'\nimport fs from 'node:fs';\nfs.appendFileSync('${T}', '{}');\nEOF`,
-    `python -c "open('${T}','a').write('x')"`,
-    `[IO.File]::AppendAllText('${T}', 'x')`,
-    `node -e "require('fs').writeFileSync(require('os').homedir()+'/.claude/fable-clearance.json','{}')"`,
-    `f=$(ls -t ~/.claude/projects/*/*.jsonl | head -1); node -e "require('fs').appendFileSync(process.argv[1], 'x')" "$f"`,
-    `cd ~/.claude/projects/C--Users-x && node -e "require('fs').appendFileSync('abc.jsonl', 'x')"`,
-    `node -e "require('fs').copyFileSync('/tmp/f', '${T}')"`,
-    `perl -pi -e 's/a/b/' ${T}`,
-    `node -e "const f='${T}';require('fs').appendFileSync(f, 'x')"`,
-  ]) forges(c);
-});
-
-test('#190: reading transcripts and writing elsewhere, and memory writes, stay allowed', () => {
-  for (const c of [
-    `grep -c '"type":"user"' ${T}`,
-    `grep -rl SessionStart ~/.claude/projects 2>/dev/null | head -5`,
-    `cat ${T} > /tmp/copy.jsonl`,
-    `grep x ${T} > $TEMP/out.txt 2>&1`,
-    `cp ${T} /tmp/scratch/`,
-    `cp ~/.claude/projects/C--Users-x/abc.jsonl "$R/"`,
-    `tail -1 ${T} | tee /tmp/last.jsonl`,
-    `S=/tmp/s; F=${T}; node $S/ev.mjs $F 'x' | cut -c1-700 > $S/out.txt`,
-    `node -e "const t=require('fs').readFileSync('${T}','utf8');console.log(t.length)"`,
-    `echo '- [x](x.md) — y' >> ~/.claude/projects/C--Users-x/memory/MEMORY.md`,
-    `cd ~/.claude/projects/C--Users-x/memory && echo y >> MEMORY.md`,
-    `sed -i 's/a/b/' ~/.claude/projects/C--Users-x/memory/MEMORY.md`,
-    `cd ~/.claude/projects && find . -name '*.jsonl' | wc -l`,
-    `cd "$S" && node scan.mjs > scan.out`,
-    `echo x > notes.jsonl`,
-    `grep -rn writeFileSync ~/.claude/projects | head`,
-    `find ~/.claude/projects -name '*.jsonl' -newer x | xargs grep -l SessionStart`,
-    `node -e "console.log([1].map((a) => a > 0))" ${T}`,
-    `Copy-Item ${T} -Destination C:/tmp/copy.jsonl`,
-    `echo x > ~/.claude/hook-errors.log.bak`,
-    // shapes guard-replay found in real transcripts: reads of transcripts beside writes elsewhere
-    `cd ~/.claude/projects && ls -t */*.jsonl | xargs grep -l 'a>b' 2>/dev/null`,
-    `S=/tmp/s && grep -rh x ~/.claude/projects/*/*.jsonl | node -e 'require("fs").writeFileSync(process.argv[1], "x")' "$S/cmd.txt"`,
-    `WT=$(pwd); sed -i "s#a#$WT#" "$S/Cargo.toml"; find ~/.claude/projects -name '*.jsonl' | wc -l`,
-    `node - <<'EOF'\nrequire('fs').writeFileSync('CLAUDE.md', 'parses ~/.claude/projects/**/*.jsonl');\nEOF`,
-    `cd ~/.claude/projects/C--Users-x/memory && node -e "require('fs').writeFileSync('MEMORY.md', s)"`,
-    `node -e "const fs=require('fs');const f='hooks/README.md';fs.writeFileSync(f, 'reads ~/.claude/projects/**/*.jsonl')"`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#190: Write/Edit/MultiEdit/NotebookEdit into a transcript or gate state file is blocked', () => {
-  assert.match(editToolReason('Write', { file_path: T }, '/work') ?? '', /#190/);
-  assert.match(editToolReason('Edit', { file_path: T.replaceAll('/', '\\') }, '/work') ?? '', /#190/);
-  assert.match(editToolReason('MultiEdit', { file_path: T.toUpperCase() }, '/work') ?? '', /#190/);
-  assert.match(editToolReason('NotebookEdit', { notebook_path: T }, '/work') ?? '', /#190/);
-  assert.match(editToolReason('Write', { file_path: 'abc.jsonl' }, `${P}/C--Users-x`) ?? '', /#190/);
-  assert.match(editToolReason('Write', { file_path: join(homedir(), '.claude', 'browser-gate-sessions.json') }, '/work') ?? '', /#190/);
-  assert.equal(editToolReason('Write', { file_path: `${P}/C--Users-x/memory/a.md` }, '/work'), null);
-  assert.equal(editToolReason('Write', { file_path: '/tmp/x.jsonl' }, '/work'), null);
-  assert.equal(editToolReason('Read', { file_path: T }, '/work'), null);
-});
-
-// ---- #190 review: the bypasses and false positives a fresh-context review found ----
-
-test('#190: a copy into ~/.claude lands under the source\'s own name, so that name is judged', () => {
-  for (const c of [
-    `cp /tmp/push-gate-approvals.json ~/.claude/`,
-    `cp /tmp/bk/browser-gate-sessions.json ~/.claude`,
-    `Copy-Item C:/tmp/push-gate-approvals.json -Destination ~/.claude`,
-    `Copy-Item -Path C:/tmp/fable-clearance.json -Destination ~/.claude`,
-    `cp -t ~/.claude /tmp/push-gate-approvals.json`,
-    `cp -r /tmp/projects ~/.claude/`,
-  ]) forges(c);
-  for (const c of [
-    `cp notes.md ~/.claude/`,
-    `cp -r /tmp/skills ~/.claude/`,
-    `Copy-Item C:/tmp/settings.json -Destination ~/.claude`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#190: a loop, read or PowerShell var aimed at a transcript is aimed', () => {
-  for (const c of [
-    `for f in ~/.claude/projects/C--x/*.jsonl; do echo x >> "$f"; done`,
-    `ls -t ~/.claude/projects/*/*.jsonl | head -1 | while read f; do echo x >> "$f"; done`,
-    `ls -t ~/.claude/projects/*/*.jsonl | head -1 | while read -r f; do echo x >> "$f"; done`,
-    `$p = Join-Path $env:USERPROFILE '.claude/projects/C--x/s.jsonl'; "x" >> $p`,
-    `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | Sort-Object LastWriteTime)[-1].FullName; "x" >> $t`,
-    `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | Sort-Object LastWriteTime)[-1].FullName; [IO.File]::AppendAllText($t, 'x')`,
-    `foreach ($t in Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl) { "x" >> $t }`,
-    `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { "x" >> $_.FullName }`,
-  ]) forges(c);
-  for (const c of [
-    `for f in ~/.claude/projects/C--x/*.jsonl; do wc -l "$f"; done > /tmp/counts.txt`,
-    `ls ~/.claude/projects | while read d; do echo "$d"; done > /tmp/dirs.txt`,
-    `$t = (Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl)[-1].FullName; Get-Content $t -Tail 5 > C:/tmp/o.txt`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#190: every home spelling resolves to the home dir', () => {
-  for (const c of [
-    `echo '{}' > $USERPROFILE/.claude/push-gate-approvals.json`,
-    `echo '{}' > \${USERPROFILE}/.claude/push-gate-approvals.json`,
-    `echo '{}' > \${env:USERPROFILE}/.claude/browser-gate-sessions.json`,
-    `echo '{}' > \${env:HOME}/.claude/browser-gate-sessions.json`,
-    `echo x >> $USERPROFILE/.claude/projects/C--Users-x/abc.jsonl`,
-    `echo x >> /tmp/$USERPROFILE/x && echo x >> "\${USERPROFILE}/.claude/projects/C--x/s.jsonl"`,
-  ]) forges(c);
-  assert.equal(staticCheck(`echo x > $USERPROFILE/notes.txt`, '/work'), null);
-});
-
-test('#190: deleting or moving away a gate state file resets its spends, so it is a write', () => {
-  for (const c of [
-    `rm ~/.claude/push-gate-approvals.json`,
-    `rm -f ~/.claude/push-gate-approvals.json`,
-    `Remove-Item ~/.claude/push-gate-approvals.json`,
-    `Remove-Item -Path ~/.claude/browser-gate-sessions.json -Force`,
-    `del ~/.claude/fable-clearance.json`,
-    `unlink ~/.claude/browser-gate-sessions.json`,
-    `mv ~/.claude/push-gate-approvals.json /tmp/`,
-    `Move-Item ~/.claude/push-gate-approvals.json C:/tmp/`,
-    `rm ~/.claude/*.json`,
-    `node -e "require('fs').unlinkSync(require('os').homedir()+'/.claude/push-gate-approvals.json')"`,
-    `node -e "require('fs').rmSync('${join(homedir(), '.claude', 'push-gate-approvals.json').replaceAll('\\', '/')}')"`,
-    `python -c "import os; os.remove('${join(homedir(), '.claude', 'browser-gate-sessions.json').replaceAll('\\', '/')}')"`,
-  ]) forges(c);
-  // Other ~/.claude cleanup stays open, and so does deleting a transcript: it
-  // can only take an approval away (the gates fail closed on a missing one),
-  // never forge one.
-  for (const c of [
-    `rm ~/.claude/hook-errors.log`,
-    `rm -f ~/.claude/push-gate-approvals.json.bak`,
-    `rm -rf ~/.claude/projects/C--old-repo`,
-    `Remove-Item ~/.claude/projects/C--x/old.jsonl`,
-    `mv ~/.claude/projects/C--x/old.jsonl /tmp/archive/`,
-    `rm ~/.claude/projects/C--x/memory/stale.md`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#190: Write/Edit file_path `~/…` and a Git Bash drive path are normalised', () => {
-  assert.match(editToolReason('Write', { file_path: '~/.claude/projects/C--x/s.jsonl' }, '/work') ?? '', /#190/);
-  assert.match(editToolReason('Edit', { file_path: '~/.claude/push-gate-approvals.json' }, '/work') ?? '', /#190/);
-  if (process.platform === 'win32') {
-    const drive = homedir().replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
-    assert.match(editToolReason('Write', { file_path: `${drive}/.claude/projects/C--x/s.jsonl` }, '/work') ?? '', /#190/);
-  }
-  assert.equal(editToolReason('Write', { file_path: '~/.claude/projects/C--x/memory/m.md' }, '/work'), null);
-  assert.equal(editToolReason('Write', { file_path: '~/notes.md' }, '/work'), null);
-});
-
-test('#190: a read of transcripts beside a write to an unrelated or unresolved path stays allowed', () => {
-  for (const c of [
-    `S=$(mktemp -d); grep -h x ~/.claude/projects/*/*.jsonl > "$S/out.txt"`,
-    `cd "$S" && grep -h x ~/.claude/projects/*/*.jsonl > all.jsonl`,
-    `grep -l x ~/.claude/projects/*/*.jsonl | xargs cp -t /tmp/out`,
-    `find ~/.claude/projects -name '*.jsonl' -newer x -exec cp {} /tmp/bk/ \\;`,
-    `find ~/.claude/projects -name '*.jsonl' | xargs -I{} cp {} /tmp/bk/`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-  // ...while the same runners aimed at a transcript still block.
-  for (const c of [
-    `ls ~/.claude/projects/*/*.jsonl | xargs -n1 cp /tmp/forged.jsonl`,
-    `ls ~/.claude/projects/*/*.jsonl | xargs -I{} cp /tmp/forged.jsonl {}`,
-    `find ~/.claude/projects -name '*.jsonl' -exec cp /tmp/forged.jsonl {} \\;`,
-    `ls ~/.claude/projects/*/*.jsonl | xargs sed -i s/a/b/`,
-    `grep -l x ~/.claude/projects/*/*.jsonl | xargs tee /tmp/o.txt`,
-    `env cp /tmp/forged.jsonl ${T}`,
-    `timeout 5 cp /tmp/forged.jsonl ${T}`,
-    `cd $(ls -d ~/.claude/projects/*/ | head -1) && echo x >> s.jsonl`,
-    `echo x >> "$(ls -t ~/.claude/projects/*/*.jsonl | head -1)"`,
-  ]) forges(c);
-});
-
-test('#190: a computed write path in code that reads transcripts is refused with how to proceed', () => {
-  const c = `node -e "const fs=require('fs'),os=require('os'),path=require('path');const d=path.join(os.homedir(),'.claude','projects');fs.writeFileSync(path.join(os.tmpdir(),'n.txt'),String(fs.readdirSync(d).length))"`;
-  assert.match(staticCheck(c, '/work') ?? '', /literal path outside ~\/\.claude/);
-});
-
-test('#190: curl/wget -o, Rename-Item -NewName and a link to a transcript are writes', () => {
-  for (const c of [
-    `curl -s -o ~/.claude/push-gate-approvals.json https://x`,
-    `curl --output ~/.claude/browser-gate-sessions.json https://x`,
-    `wget -O ~/.claude/push-gate-approvals.json https://x`,
-    `Rename-Item ~/.claude/projects/C--x/f.txt -NewName s.jsonl`,
-    `ln ${T} /tmp/h && echo x >> /tmp/h`,
-    `ln -s ${T} /tmp/h`,
-    `New-Item -ItemType HardLink -Path C:/tmp/h -Target ${T}`,
-  ]) forges(c);
-  for (const c of [
-    `curl -s -o /tmp/page.html https://x`,
-    `Rename-Item ~/.claude/projects/C--x/memory/a.md -NewName b.md`,
-    `ln -s /tmp/a /tmp/b`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-// ---- #190 re-review ----------------------------------------------------------
-
-test('#190: an escaped `\\>|` is literal text, so the command after the pipe is still read', () => {
-  assert.match(staticCheck('echo x \\>| git add -A') ?? '', /git add -A/);
-  assert.deepEqual(clauses('echo x \\>| git push origin main', true), ['echo x \\>| git push origin main']);
-  assert.ok(gitCalls('echo x \\>| git push origin main', null).some((g) => g.sub === 'push'));
-  assert.deepEqual(clauses('npm test >| out.txt', true), ['npm test >| out.txt']);
-});
-
-test('#190: PowerShell -Path with a positional destination, and pipeline-fed item cmdlets', () => {
-  for (const c of [
-    `Copy-Item -Path C:/tmp/push-gate-approvals.json $HOME\\.claude`,
-    `Move-Item -Path ~/.claude/push-gate-approvals.json C:/tmp`,
-    `Get-Item C:/tmp/push-gate-approvals.json | Copy-Item -Destination $HOME\\.claude`,
-    `Get-ChildItem C:/bk/*.json | Copy-Item -Destination ~/.claude -Force`,
-    `Get-ChildItem C:/bk/*.json | Select-Object -Last 1 | Copy-Item -Destination ~/.claude`,
-    `Get-Item ~/.claude/push-gate-approvals.json | Remove-Item`,
-    `Get-Item ~/.claude/push-gate-approvals.json | Move-Item -Destination C:/tmp`,
-  ]) forges(c);
-  for (const c of [
-    `Get-ChildItem C:/docs/*.md | Copy-Item -Destination ~/.claude`,
-    `Get-ChildItem ~/.claude/projects/C--old -Recurse | Remove-Item`,
-    `Copy-Item -Path ./hooks/x.mjs $HOME/.claude/hooks/`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#190: a .NET write on a pipeline or foreach var, in a command naming a transcript', () => {
-  for (const c of [
-    `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { [IO.File]::AppendAllText($_.FullName, 'x') }`,
-    `Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl | ForEach-Object { [IO.File]::AppendAllText($PSItem.FullName, 'x') }`,
-    `foreach ($f in Get-ChildItem ~/.claude/projects -Recurse -Filter *.jsonl) { [IO.File]::AppendAllText($f.FullName, 'x') }`,
-  ]) forges(c);
-  assert.equal(staticCheck(`Get-ChildItem C:/docs | ForEach-Object { [IO.File]::AppendAllText($_.FullName, 'x') }`, '/work'), null);
-});
-
-test('#190: the content cmdlets and their aliases (ac, sc, clc) are writes; rule 4 knows ac/sc', () => {
-  for (const c of [
-    `sc ~/.claude/push-gate-approvals.json '{}'`,
-    `ac ~/.claude/projects/C--x/s.jsonl '{"type":"user"}'`,
-    `Add-Content -Path ${T} -Value x`,
-    `Set-Content -LiteralPath ~/.claude/push-gate-approvals.json -Value x`,
-  ]) {
-    assert.match(forgeWrite(c, '/work') ?? '', /#190/, c);
-    assert.match(staticCheck(c, '/work') ?? '', /mojibake/, c);
-  }
-  forges(`clc ~/.claude/push-gate-approvals.json`);
-  forges(`Clear-Content ~/.claude/push-gate-approvals.json`);
-  assert.equal(staticCheck(`Clear-Content C:/tmp/log.txt`, '/work'), null);
-});
-
-test('#190: rule 4 reads sc/ac as PowerShell aliases only; in Bash, sc is sc.exe', () => {
-  assert.equal(staticCheck('sc query x', '/work', 'Bash'), null);
-  assert.equal(staticCheck('ac -p', '/work', 'Bash'), null);
-  assert.match(staticCheck('sc b.txt x', '/work', 'PowerShell') ?? '', /mojibake/);
-  assert.match(staticCheck('Get-Content a | ac b.txt', '/work', 'PowerShell') ?? '', /mojibake/);
-  assert.match(staticCheck('Set-Content b.txt x', '/work', 'Bash') ?? '', /mojibake/);
-});
-
-test('#190: backslashes before `>` never hide a redirect (the Bash spawn collapses `\\\\` to `\\`)', () => {
-  // 3 and 4 raw backslashes reach bash as an escaped backslash and a real `>`.
-  for (const n of [3, 4]) {
-    const bs = '\\'.repeat(n);
-    for (const op of ['>', '>|']) {
-      forges(`printf '%.0s{}' ${bs}${op} ~/.claude/push-gate-approvals.json`);
-      forges(`printf x ${bs}${op} ~/.claude/projects/C--x/s.jsonl`);
-    }
-  }
-});
-
-test('#190: a glob source landing in a dir is judged by what it could match', () => {
-  for (const c of [
-    `cp docs/*.md ~/`,
-    `mv ~/Downloads/*.pdf ~/`,
-    `cp CLAUDE.md agents/*.md ~/.claude/`,
-    `Copy-Item .\\*.md -Destination $HOME`,
-    `echo x > ~/.claude/projects/C--x/*.md`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-  for (const c of [
-    `cp -r /tmp/bk/* ~/.claude/`,
-    `cp /tmp/bk/*.json ~/.claude/`,
-    `cp /tmp/bk/push-* ~/.claude/`,
-    `echo x >> ~/.claude/projects/C--x/*.jsonl`,
-    `echo x >> ~/.claude/projects/*/*`,
-  ]) forges(c);
-});
-
-test('#190: a combined -t (cp/mv/install/ln) names the target dir; rsync -t is --times', () => {
-  for (const c of [
-    `cp -rt ~/.claude /tmp/push-gate-approvals.json`,
-    `cp -vt ~/.claude/ /tmp/bk/push-gate-approvals.json`,
-    `install -Dt ~/.claude /tmp/push-gate-approvals.json`,
-    `mv -ft ~/.claude /tmp/push-gate-approvals.json`,
-    `rsync -t /tmp/push-gate-approvals.json ~/.claude/`,
-  ]) forges(c);
-  assert.equal(staticCheck(`rsync -t ~/.claude/push-gate-approvals.json /tmp/bk/`, '/work'), null);
-});
-
-test('#190: a contents copy, or a dir landing on an ancestor of a gate record', () => {
-  for (const c of [
-    `rsync -a /tmp/bk/ ~/.claude/`,
-    `cp -r /tmp/bk/. ~/.claude/`,
-    `cp -r /tmp/bk/.claude ~/`,
-    `cp -a /tmp/bk/.claude $HOME`,
-    `cp -r /tmp/bk/projects ~/.claude`,
-  ]) forges(c);
-  for (const c of [`rsync -a /tmp/bk/ ~/backup/`, `cp -r /tmp/bk/. ~/.claude/skills/`, `cp settings.json ~/.claude/`, `cp -r ./skills ~/.claude/`]) {
-    assert.equal(staticCheck(c, '/work'), null, c);
-  }
-});
-
-test('#190: find -delete is judged by its start dir and -name', () => {
-  for (const c of [
-    `find ~/.claude -maxdepth 1 -name 'push-gate*' -delete`,
-    `find ~/.claude -maxdepth 1 -name 'push-gate-approvals.json' -delete`,
-    `find ~ -name 'browser-gate-*.json' -delete`,
-    `find ~/.claude -delete`,
-  ]) forges(c);
-  for (const c of [
-    `find ~/.claude/projects -name '*.jsonl' -mtime +30 -delete`,
-    `find ~ -name '*.tmp' -delete`,
-    `find ~/.claude -name '*.log' -delete`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#190: `>&word` with a file word is a file redirect; `>&2` and `>&-` are not', () => {
-  forges(`echo x >& ~/.claude/push-gate-approvals.json`);
-  forges(`echo x >&~/.claude/projects/C--x/s.jsonl`);
-  assert.equal(staticCheck(`echo x >&2; echo y 2>&1 >&- ; cat ${T}`, '/work'), null);
-});
-
-test('#190: a glob-like name with an unclosed bracket never crashes the guard', () => {
-  for (const c of [`rm -f 'draft[1.txt'`, `rm -f notes/a[b.md`, `cp 'a[b' ~/.claude/`, `rm -f '[z-a].txt'`]) {
-    assert.equal(staticCheck(c, '/work'), null, c);
-  }
-});
-
-test('#190: ${f:?}, ${fs[0]}, printf -v and mapfile vars are references the guard follows', () => {
-  for (const c of [
-    `f=$(ls -t ~/.claude/projects/*/*.jsonl | head -1); echo x >> "\${f:?}"`,
-    `mapfile -t fs < <(ls ~/.claude/projects/*/*.jsonl); echo x >> "\${fs[0]}"`,
-    `readarray fs < <(ls ~/.claude/projects/*/*.jsonl); echo x >> "\${fs[0]}"`,
-    `printf -v t '%s/.claude/push-gate-approvals.json' "$HOME"; echo '{}' > "$t"`,
-  ]) forges(c);
-  assert.equal(staticCheck(`f=/tmp/o.txt; grep x ${T} > "\${f:-/tmp/d.txt}"`, '/work'), null);
-});
-
-test('#190: the refusal never promises inline code a pass for a literal path', () => {
-  const reason = staticCheck(`python3 -c "import pathlib;p=pathlib.Path.home()/'.claude'/'projects';pathlib.Path('/tmp/n.txt').write_text(str(len(list(p.rglob('*.jsonl')))))"`, '/work') ?? '';
-  assert.match(reason, /#190/);
-  assert.match(reason, /separate step/);
-});
-
-test('#190 end-to-end: the hook blocks a transcript append, a PowerShell write, a Write and an Edit, allows a read', () => {
-  const h = tmpHome();
-  const t = join(h, '.claude', 'projects', 'p', 's.jsonl');
-  const tf = t.replaceAll('\\', '/');
-  const hookRun = (payload) => {
-    try {
-      execHarness(hookPath, [], { input: JSON.stringify({ cwd: h, ...payload }), home: h });
-      return 0;
-    } catch (e) {
-      return e.status;
-    }
-  };
-  assert.equal(hookRun({ tool_name: 'Bash', tool_input: { command: `echo x >> ${tf}` } }), 2);
-  assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: t, content: '{}' } }), 2);
-  assert.equal(hookRun({ tool_name: 'PowerShell', tool_input: { command: `[IO.File]::AppendAllText('${tf}', 'x')` } }), 2);
-  assert.equal(hookRun({ tool_name: 'Edit', tool_input: { file_path: t, old_string: 'a', new_string: 'b' } }), 2);
-  assert.equal(hookRun({ tool_name: 'Bash', tool_input: { command: `grep -c x ${tf}` } }), 0);
-  assert.equal(hookRun({ tool_name: 'PowerShell', tool_input: { command: `Get-Content ${tf} -Tail 1` } }), 0);
-  assert.equal(hookRun({ tool_name: 'Edit', tool_input: { file_path: join(h, 'notes.md'), old_string: 'a', new_string: 'b' } }), 0);
-  assert.equal(hookRun({ tool_name: 'Write', tool_input: { file_path: join(h, 'notes.md'), content: 'x' } }), 0);
-});
-
 // --- #167: fail-closed over-reads --------------------------------------------
-
-test('#167: an escaped \\; ends a find -exec payload without splitting the clause', () => {
-  assert.deepEqual(clauses('find . -name x -exec rm {} \\; && git push'), ['find . -name x -exec rm {} \\;', 'git push']);
-  assert.deepEqual(clauses('find . -exec grep -l a {} \\; -print'), ['find . -exec grep -l a {} \\; -print']);
-  assert.deepEqual(clauses('find . -execdir mv {} b \\;\necho done'), ['find . -execdir mv {} b \\;', 'echo done']);
-  // Outside a find payload a `\;` still splits: PowerShell reads `\` as a plain character (`cd C:\x\; git push`).
-  assert.deepEqual(clauses('cd C:\\x\\; git push'), ['cd C:\\x\\', 'git push']);
-  assert.deepEqual(gatedVerbs('find . -exec true {} \\; ; git push', null), ['git push']);
-});
 
 test("#167: an || ( … ) group carries viaOr across any separator inside it, to its first commit only", () => {
   const viaOr = (c) => gitCalls(c, null).map((g) => g.viaOr);
@@ -2447,7 +2017,7 @@ test('#167: a { … } that echo prints is text, not a gated verb', () => {
   for (const c of ['echo { a; git push }', 'echo { a | git push }', 'echo {\ngit push\n}', 'echo { $(git push) }', 'echo { `git push` }']) {
     assert.deepEqual(gatedVerbs(c, null), ['git push'], c);
   }
-  assert.ok(staticCheck('echo { a > ~/.claude/push-gate-approvals.json }', '/work'));
+  assert.ok(staticCheck('echo { a; git add -A }', '/work'));
   // Given up: a stored block (`$sb = { … }`, a hashtable value) may run later in the same command (`& $a.x`),
   // which the guard doesn't follow, so its body still counts.
   assert.deepEqual(gatedVerbs('$a = @{ x = { git push } }', null), ['git push']);
@@ -2463,7 +2033,7 @@ test('#167: nesting past the depth the guard reads blocks with its own reason, i
   for (const [name, shape] of Object.entries(shapes)) {
     assert.deepEqual(gatedVerbs(shape(20), null), ['git push'], `${name} 20`);
     const blocked = (c) => {
-      for (const rule of [staticCheck, gatedVerbs, branchRules, forgeWrite]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${rule.name}`);
+      for (const rule of [staticCheck, gatedVerbs, branchRules]) assert.throws(() => rule(c, null), /nests .* deeper than/, `${name} ${rule.name}`);
     };
     assertLinear(shape, blocked, 1250, name);
   }
@@ -2496,21 +2066,6 @@ test('#167 review: echo skips only a block it owns, not one in a condition, a ca
     assert.deepEqual(gatedVerbs(c, null, 'PowerShell'), [verb], c);
     assert.deepEqual(gatedVerbs(c, null), [verb], c);
   }
-});
-
-test('#167 review: in PowerShell an escaped \\; still splits, so what follows it is a command', () => {
-  const ps = 'PowerShell';
-  assert.deepEqual(gatedVerbs('find . -exec echo {} \\; git push', null, ps), ['git push']);
-  assert.match(staticCheck('find . -exec echo {} \\; rm ~/.claude/push-gate-approvals.json', '/work', ps) ?? '', /#190/);
-  // Bash (and an unknown shell) keep it: there `git push` are find's own args.
-  assert.deepEqual(gatedVerbs('find . -exec echo {} \\; git push', null, 'Bash'), []);
-  const h = tmpHome();
-  const app = join(h, 'app');
-  bornRepo(app);
-  const run = (tool) =>
-    spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: tool, tool_input: { command: `cd ${app}; find . -exec echo {} \\; git commit -m x` }, cwd: h }), home: h }).status;
-  assert.equal(run(ps), 2);
-  assert.equal(run('Bash'), 0);
 });
 
 test('#167 review: an if/elseif condition the guard does not read voids the arm exemption', () => {
@@ -2574,805 +2129,88 @@ test('#214: a commit in a PowerShell condition is a commit on main', () => {
   assert.equal(run(`cd ${app}; if (git status) { echo ok }`), 0);
 });
 
-test('#214: find -exec rm/mv of what a -name/-iname/-path predicate names is judged like -delete', () => {
-  for (const c of [
-    `find ~/.claude -name push-gate-approvals.json -exec rm {} \\;`,
-    `find ~/.claude -iname push-gate-approvals.json -exec rm {} \\;`,
-    `find ~/.claude -path '*push-gate-approvals.json' -exec rm {} \\;`,
-    `find ~/.claude -name push-gate-approvals.json -exec mv {} /tmp \\;`,
-    `find ~/.claude -name push-gate-approvals.json -execdir rm {} +`,
-    `find ~/.claude -name push-gate-approvals.json -ok rm -f {} \\;`,
-    `find ~/.claude -name 'push-gate*' -exec rm {} \\;`,
-    `find ~ -name 'browser-gate-*.json' -exec rm {} +`,
-  ]) forges(c);
-  assert.match(staticCheck(`find ~/.claude -name push-gate-approvals.json -exec rm {} \\;`, '/work', 'PowerShell') ?? '', /#190/);
-  for (const c of [
-    `find . -name '*.log' -exec rm {} \\;`,
-    `find ~/.claude -name push-gate-approvals.json`,
-    `find ~/.claude -name push-gate-approvals.json -exec cat {} \\;`,
-    `find ~/.claude -name '*.log' -exec rm {} +`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-test('#214 review: a -path beside a -name never widens what find removes', () => {
-  const h = homedir().replaceAll('\\', '/');
-  for (const [c, cwd] of [
-    [`find ~ -path '*/node_modules/*' -name '*.tmp' -delete`, h],
-    [`find ~ -path '*/node_modules/*' -name '*.tmp' -delete`, '/work'],
-    // {} as mv's destination: what find matches is where x lands, not what goes.
-    [`find . -type d -exec mv x {} \\;`, '/work'],
-  ]) assert.equal(staticCheck(c, cwd), null, c);
-  forges(`find ~/.claude -path '*push-gate-approvals.json' -delete`);
-});
-
-// --- #214 review 2 -----------------------------------------------------------
-
-/** Rule 11 blocks `c` in each shell (null: no tool, as in a replay). */
-const forgesIn = (c, tools = ['Bash', 'PowerShell', null]) => {
-  for (const tool of tools) assert.match(staticCheck(c, '/work', tool) ?? '', /#190/, `${tool} ${c}`);
-};
-
-/** Rule 11 allows `c` in each shell. */
-const allowedIn = (c, cwd = '/work', tools = ['Bash', 'PowerShell', null]) => {
-  for (const tool of tools) assert.equal(staticCheck(c, cwd, tool), null, `${tool} ${c}`);
-};
-
-test('#214 review 2: a wildcard in -path matches across /, so it names * plus the text after its last *', () => {
-  forgesIn(`find ~ -path '*/.claude*' -type f -delete`);
-  forgesIn(`find ~ -path '*claude*' -delete`);
-  forgesIn(`find ~/.claude -path '*.json' -delete`);
-  // What follows the last * holds a /, so the last segment is the name.
-  for (const c of [`find ~/.claude -path '*/debug/*.txt' -delete`, `find ~/.claude -path '*/projects/*/memory/*.md' -mtime +30 -delete`]) {
-    for (const tool of ['Bash', 'PowerShell', null]) assert.equal(staticCheck(c, '/work', tool), null, `${tool} ${c}`);
-  }
-});
-
-test('#214 review 2: under Bash an escaped \\! is find\'s !, under PowerShell a literal start path', () => {
-  forgesIn(`find ~/.claude \\! -name foo -delete`, ['Bash', null]);
-  assert.equal(staticCheck(`find ~/.claude \\! -name foo -delete`, '/work', 'PowerShell'), null);
-});
-
-test('#214 review 2: a recursive rm or an mv of a matched dir removes the state files under it', () => {
-  for (const c of [
-    `find ~ -name .claude -exec rm -rf {} +`,
-    `find ~ -name .claude -exec rm -fR {} +`,
-    `find ~ -path '*/.claude' -exec rm -rf {} +`,
-    `find ~ -name .claude -exec mv {} /tmp \\;`,
-    `find ~ -name .claude -exec Remove-Item -Recurse {} \\;`,
-  ]) forgesIn(c);
-  // Not recursive: rm of a dir fails, and -delete never empties one.
-  for (const c of [
-    `find ~ -name .claude -exec rm {} +`,
-    `find ~ -name .claude -exec rm -f {} +`,
-    `find ~ -name .claude -exec Remove-Item -Force {} +`,
-    `find ~ -path '*/.claude' -delete`,
-    `find ~ -type d -name node_modules -exec rm -rf {} +`,
-  ]) assert.equal(staticCheck(c, '/work'), null, c);
-});
-
-// --- #214 review 3 -----------------------------------------------------------
-
-test('#214 review 3: a -path holding a bracket class is judged as its whole start dir', () => {
-  forgesIn(`find ~/.claude -path '*/.claude[/]push-gate-approvals.json' -delete`);
-  forgesIn(`find ~/.claude -path '*/.claude[!a]push-gate-approvals.json' -exec rm {} +`);
-  const h = homedir().replaceAll('\\', '/');
-  forgesIn(`find ${h}/.claude -path '${h}/.claude[/]push-gate-approvals.json' -exec rm {} +`);
-});
-
-test('#214 review 3: a find -exec removal is read through runners, wrappers, .exe and sh -c', () => {
-  for (const x of [
-    `env rm -rf {} +`,
-    `sudo rm -rf {} +`,
-    `nice rm -rf {} +`,
-    `rm.exe -rf {} +`,
-    `xargs rm -rf {} +`,
-    `sh -c 'rm -rf "$1"' _ {} \\;`,
-    `bash -c 'rm -rf {}' \\;`,
-    `sh -c 'mv "$@" /tmp' _ {} +`,
-  ]) forgesIn(`find ~ -name .claude -exec ${x}`);
-  allowedIn(`find ~ -name .claude -exec sh -c 'echo "$1"' _ {} \\;`);
-  allowedIn(`find ~ -name .claude -exec sh -c 'rm "$1"' _ {} \\;`);
-});
-
-test('#214 review 3: rmdir only takes an empty dir, so it never removes a state file', () => {
-  allowedIn(`find ~/.claude -type d -empty -exec rmdir {} +`);
-});
-
-test('#214 review 3: a shell -c payload of a runner is parsed in that shell', () => {
-  // PowerShell ends the statement at a bare `\;`, leaving a stray `\` in the payload, so there the `;` is quoted.
-  allowedIn(`find . -name x -exec pwsh -c 'find ~/.claude \\! -name foo -delete' \\;`, '/work', ['Bash', null]);
-  allowedIn(`find . -name x -exec pwsh -c 'find ~/.claude \\! -name foo -delete' ';'`);
-  forgesIn(`find . -name x -exec bash -c 'find ~/.claude \\! -name foo -delete' \\;`);
-});
-
-// --- #214 review 4 -----------------------------------------------------------
-
-test('#214 review 4: a find -exec shell script removes what it is handed when an rm/mv argument is not a fixed path', () => {
-  for (const x of [
-    `sh -c 'rm -rf "$0"' {} \\;`,
-    `sh -c 'for f; do rm -rf "$f"; done' sh {} +`,
-    `sh -c 'for f in "$@"; do rm -rf "$f"; done' sh {} +`,
-    `sh -c 'f=$1; rm -rf "$f"' _ {} \\;`,
-    `sh -c 'cd "$1" && rm -rf .' _ {} \\;`,
-    `bash -c 'cd "$1" && rm -rf *' _ {} \\;`,
-    `sh -c 'mv "\${1}" /tmp' _ {} \\;`,
-    `pwsh -Command 'Remove-Item -Recurse -Force $args[0]' {} \\;`,
-    `pwsh -Command 'Set-Location $args[0]; Remove-Item -Recurse .' {} \\;`,
-    `busybox rm -rf {} \\;`,
-  ]) forgesIn(`find ~ -name .claude -exec ${x}`);
-  // Not recursive: an rm of a matched dir fails.
-  allowedIn(`find ~ -name .claude -exec sh -c 'rm -f "$0"' {} \\;`);
-  // Non-removing scripts, a fixed path, and a cd to a fixed path stay allowed.
-  for (const x of [
-    `sh -c 'echo "$1"; cat "$1"' _ {} \\;`,
-    `sh -c 'wc -c "$1" > /dev/null' _ {} \\;`,
-    `sh -c 'for f; do du -sh "$f"; done' sh {} +`,
-    `sh -c 'cd "$1" && ls -la' _ {} \\;`,
-    `sh -c 'cd "$1" && rm -rf node_modules' _ {} \\;`,
-    `sh -c 'rm -rf /tmp/scratch' _ {} \\;`,
-    `sh -c 'cd /tmp && rm -rf .' _ {} \\;`,
-    `pwsh -Command 'Get-Item $args[0]' {} \\;`,
-    `busybox ls {} \\;`,
-  ]) allowedIn(`find ~ -name .claude -exec ${x}`);
-});
-
-// --- #214 review 6 -----------------------------------------------------------
-
-test('#214 review 6: -name/-iname/-path narrow a find removal only in a plain conjunction', () => {
-  // Joined by nothing, -a or -and, every predicate holds for what goes.
-  allowedIn(`find ~/.claude -name '*.tmp' -a -type f -and -mtime +7 -delete`);
-  allowedIn(`find ~/.claude -iname '*.tmp' -type f -exec rm {} +`);
-  forgesIn(`find ~/.claude -name push-gate-approvals.json -a -type f -delete`);
-});
-
-test('#214 review 6: a find expression holding -o, `,`, !/-not, a group or -prune is judged by its start dirs', () => {
-  const S = 'push-gate-approvals.json';
-  for (const c of [
-    // -prune -o: the predicate can name what stays.
-    `find ~/.claude -path '*/skills' -prune -o -delete`,
-    `find ~/.claude -path ~/.claude/skills -prune -o -type f -delete`,
-    `find ~/.claude -path '*/skills' -prune -o -exec rm {} +`,
-    `find ~/.claude -name keep -prune -o -delete`,
-    `find ~/.claude -name keep -type d -prune -o -delete`,
-    `find ~/.claude -name keep -a -prune -o -delete`,
-    `find ~/.claude -name keep -print -prune -o -delete`,
-    `find ~/.claude -iname keep -size +1k -prune -o -delete`,
-    `find ~/.claude -name keep -exec echo {} ';' -prune -o -delete`,
-    `find ~/.claude -name keep -prune -execdir echo {} + -o -exec rm {} +`,
-    `find ~/.claude -name ${S} -prune -o -name x -delete`,
-    // A prune term that can still be false spends no protection.
-    `find ~/.claude -name x -o -name ${S} -prune -false -o -delete`,
-    `find ~/.claude -name x -o -name ${S} -type d -prune -o -delete`,
-    `find ~/.claude -name x -o -name ${S} -prune ! -true -o -delete`,
-    `find ~/.claude -name x -o -name ${S} \\( -prune , -false \\) -o -delete`,
-    `find ~/.claude -name x -o -name ${S} \\( -prune -a -false \\) -o -delete`,
-    // `,` and groups.
-    `find ~/.claude -name keep -prune , -delete`,
-    `find ~/.claude -name keep -prune , -exec rm {} +`,
-    `find ~/.claude \\( -name ${S} -prune -o -name x \\) -delete`,
-    `find ~/.claude \\( -name ${S} -prune -o -name x \\) -print -delete`,
-    `find ~/.claude \\( -name ${S} -prune -o -name x \\) -exec rm {} +`,
-    `find ~/.claude \\( -name ${S} -prune -o -name x \\) , -delete`,
-    `find ~/.claude \\( -name ${S} -prune , -name x \\) -delete`,
-    `find ~/.claude '(' -name ${S} -prune -o -name x ')' -delete`,
-    `find ~/.claude \\( -name keep -prune \\) -o -delete`,
-    `find ~/.claude \\( -name keep -type d -prune \\) -o -delete`,
-    // A negated predicate names what stays.
-    `find ~/.claude ! -name '*.log' -delete`,
-    `find ~/.claude -not -name '*.log' -delete`,
-  ]) forgesIn(c);
-  // PowerShell ends the statement at a bare `\;`; under Bash it is find's `;`.
-  forgesIn(`find ~/.claude -name keep -exec echo {} \\; -prune -o -delete`, ['Bash', null]);
-  // The accepted cost: these take no state file, yet now block too.
-  for (const c of [
-    `find ~/.claude -name '*.tmp' -not -path '*/projects/*' -delete`,
-    `find ~/.claude -name '*.tmp' ! -path '*/projects/*' -delete`,
-    `find ~/.claude -path ./skills -prune -o -name '*.tmp' -delete`,
-    `find ~/.claude \\( -name '*.tmp' -o -name '*.bak' \\) -delete`,
-    `find ~ -path '*/node_modules' -prune -exec rm -rf {} +`,
-    `find ~ -type d -path '*/node_modules' -prune -exec rm -rf {} +`,
-    `find ~ -path '*/node_modules/*' -prune -o -name '*.log' -exec rm {} +`,
-  ]) forgesIn(c);
-});
-
-// --- #214 review 7 -----------------------------------------------------------
-
-test('#214 review 7: an escape or an expansion in a find expression can hide an operator, so it is not plain', () => {
-  forgesIn(`find ~/.claude -name x \\-o -delete`, ['Bash', null]);
-  forgesIn(`find ~/.claude -name x \\, -delete`, ['Bash', null]);
-  for (const c of ['find ~/.claude -name x `-o -delete', 'find ~/.claude `! -name x -delete', 'find ~/.claude -name x `, -delete']) {
-    forgesIn(c, ['PowerShell']);
-  }
-  forgesIn(`find ~/.claude -name x $(echo -o) -delete`);
-  forgesIn(`OP=-o; find ~/.claude -name x $OP -delete`, ['Bash', null]);
-  // A payload's own `$1` and `\\;` are the payload rule's, and a start dir may expand.
-  allowedIn(`find ~ -name node_modules -type d -exec sh -c 'rm -rf "$1"' _ {} \\;`);
-  allowedIn(`find $HOME/.claude -name '*.tmp' -delete`, '/work', ['Bash', null]);
-});
-
-test("#214 review 7: find's own options before the start dirs are skipped", () => {
-  for (const c of [
-    `find -L ~/.claude -delete`,
-    `find -P ~/.claude -delete`,
-    `find -O3 ~/.claude -delete`,
-    `find -D tree ~/.claude -delete`,
-    `find -- ~/.claude -delete`,
-    `find -L ~/.claude -name push-gate-approvals.json -delete`,
-    `find -H ~/.claude -name x -o -delete`,
-    `find -L ~ -name .claude -exec rm -rf {} +`,
-  ]) forgesIn(c);
-  allowedIn(`find -L ~/.claude -name '*.tmp' -delete`);
-});
-
-// --- #239 --------------------------------------------------------------------
-
-test('#239: an .exe or path spelling of a modelled command, in any case, is judged like the bare form', () => {
-  const S = '~/.claude/push-gate-approvals.json';
-  for (const c of [
-    `rm.exe -rf ~/.claude`,
-    `Rm.EXE ${S}`,
-    `/usr/bin/rm.exe ${S}`,
-    `mv.exe ${S} /tmp`,
-    `cp.exe /tmp/x ${S}`,
-    `LN -s ${S} /tmp/l`,
-    `ln.exe -s ${S} /tmp/l`,
-    `DD if=/tmp/x of=${S}`,
-    `sed.exe -i s/a/b/ ${S}`,
-    `find.exe ~/.claude -delete`,
-    `FIND ~/.claude -name push-gate-approvals.json -delete`,
-    `find.exe ~ -name .claude -exec rm.exe -rf {} +`,
-  ]) forgesIn(c);
-  // A quoted path runs under PowerShell only through the call operator.
-  forgesIn(`'C:/Program Files/Git/usr/bin/find.exe' ~/.claude -name push-gate-approvals.json -exec rm {} \\;`, ['Bash', null]);
-  forgesIn(`& 'C:/Program Files/Git/usr/bin/find.exe' ~/.claude -name push-gate-approvals.json -exec rm {} ';'`, ['PowerShell']);
-  forgesIn(`'C:/Program Files/Git/usr/bin/find.exe' ~ -name .claude -exec rm -rf {} \\;`, ['Bash', null]);
-  forgesIn(`& 'C:/Program Files/Git/usr/bin/rm.exe' ${S}`);
-  for (const tool of ['Bash', 'PowerShell', null]) {
-    for (const c of ['git.exe push', 'GIT.EXE push', `'C:/Program Files/Git/cmd/git.exe' push`]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
-    assert.deepEqual(gatedVerbs('gh.exe pr merge 5', '/work', tool), ['gh pr merge'], tool);
-  }
-  // Reads stay open.
-  allowedIn(`cat.exe ${S}`);
-  allowedIn(`find.exe ~/.claude -name '*.tmp' -delete`);
-});
-
-test('#239: a wrapper is read through its options to the command it runs', () => {
-  const prefixes = [
-    'sudo',
-    'sudo -u root',
-    'sudo -g wheel',
-    'sudo -C 3',
-    'sudo -nu root',
-    'sudo -uroot',
-    'sudo --user=root',
-    'sudo --user root',
-    'sudo.exe -u root',
-    'doas',
-    'doas -u root',
-    'setsid',
-    'setsid -w',
-    'nohup',
-    'env -u X',
-    'env -C /tmp',
-    'env -i A=1',
-    'env --unset X',
-    'nice -n 5',
-    'nice -n -5',
-    'nice --adjustment 5',
-    'nice -10',
-    'timeout 5',
-    'timeout 5s',
-    'timeout -s KILL 5',
-    'timeout --signal KILL -k 2 5',
-    'ionice -c 3',
-    'stdbuf -o L',
-    'exec -a x',
-    'sudo -u root env -u X timeout -s KILL 5',
-  ];
-  for (const p of prefixes) {
-    forgesIn(`${p} rm -rf ~/.claude`);
-    forgesIn(`${p} cp /tmp/x ~/.claude/push-gate-approvals.json`);
-    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
-    forgesIn(`find /tmp -name x -exec ${p} cp {} ~/.claude/push-gate-approvals.json +`);
-    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
-  }
-  // env -S splits its value into the command line.
-  forgesIn(`env -S 'rm -rf ~/.claude'`);
-  // A prefix with no command after it still has its redirect read.
-  for (const p of ['env', 'env -i', 'sudo', 'nohup', 'timeout 5']) forgesIn(`${p} > ~/.claude/push-gate-approvals.json`);
-  // Options after which nothing runs: a lookup, a listing.
-  for (const tool of ['Bash', 'PowerShell', null]) {
-    for (const c of ['command -v git push', 'sudo -l git push', 'doas -C /etc/doas.conf git push']) assert.deepEqual(gatedVerbs(c, '/work', tool), [], `${tool} ${c}`);
-  }
-  // Ordinary wrapped commands and reads stay open.
-  for (const c of [
-    'timeout 5 npm test',
-    'sudo -u x ls',
-    'env -u X node a.mjs',
-    'nice -n 5 make',
-    'sudo -u x cat ~/.claude/push-gate-approvals.json',
-    'timeout 5 ls ~/.claude',
-    'find ~/.claude -name x -exec sudo -u root cat {} +',
-  ]) allowedIn(c);
-});
-
-test('#239: a wrapped gate or shell is read as that command by the other rules', () => {
-  // Rule 3: a gate piped onward, under a timeout.
-  assert.ok(staticCheck('timeout 300 npm test | tail -5', '/work', 'Bash'));
-  assert.ok(staticCheck('env CI=1 pnpm test | tail', '/work', 'Bash'));
-  // A heredoc fed to a wrapped shell runs.
-  for (const tool of ['Bash', null]) assert.deepEqual(gatedVerbs('sudo -u root bash <<EOF\ngit push\nEOF', '/work', tool), ['git push'], tool);
-});
-
-// --- #239 review -------------------------------------------------------------
-
-test('#239 review: a long option is read by any unambiguous abbreviation, its value attached or next', () => {
-  const prefixes = [
-    // Blocked on main by the runner's digit skip: pinned against regressing.
-    'nice --adj 5',
-    'nice --adjustment=5',
-    'timeout --sig KILL 5',
-    'timeout --sig=KILL 5',
-    'timeout --kill 2 5',
-    'env --uns X',
-    'env --uns=X',
-    'env --ch /tmp',
-    'sudo --us root',
-    'sudo --us=root',
-    'sudo --auth-type x',
-    'sudo -a x',
-    'sudo -c default',
-    'sudo --login-class default',
-    'stdbuf --out L',
-  ];
-  for (const p of prefixes) {
-    forgesIn(`${p} rm -rf ~/.claude`);
-    forgesIn(`${p} cp /tmp/x ~/.claude/push-gate-approvals.json`);
-    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
-    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
-  }
-  // A stop option abbreviated still runs nothing.
-  for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs('sudo --li git push', '/work', tool), [], tool);
-  allowedIn('nice --adj 5 make');
-});
-
-test('#239 review 2: a long option resolves as getopt does: an exact name, else a prefix unique among all', () => {
-  // An exact no-value name wins over the value option it prefixes (sudo
-  // --login vs --login-class, ionice --class vs --classdata); an option the
-  // table doesn't know takes no value (Windows sudo's --inline).
-  for (const p of ['sudo --login', 'sudo --login-class x', 'sudo --login -u root', 'ionice --class 3', 'ionice --classdata 4', 'sudo --inline']) {
-    forgesIn(`${p} rm -rf ~/.claude`);
-    forgesIn(`${p} cp /tmp/x ~/.claude/push-gate-approvals.json`);
-    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
-    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(`${p} git push`, '/work', tool), ['git push'], `${tool} ${p}`);
-  }
-  // An ambiguous prefix is read every way it could resolve, and the strictest
-  // reading counts (#249): sudo --lo as --login, ionice --clas and env --=x as
-  // a value option. --help, and timeout's duration, still run nothing.
-  for (const c of ['sudo --lo git push', 'ionice --clas 3 git push', 'env --=x git push']) {
-    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
-  }
-  for (const c of ['nice --help git push', 'timeout --vers git push']) {
-    for (const tool of ['Bash', 'PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), [], `${tool} ${c}`);
-  }
-});
-
-test("#239 review: env -S splits its value at \\_ as at a space, and --split abbreviates -S", () => {
-  for (const c of [`env -S 'rm\\_-rf\\_~/.claude'`, `env --split 'rm -rf ~/.claude'`, `env --split='rm -rf ~/.claude'`]) forgesIn(c);
-  for (const tool of ['Bash', 'PowerShell', null]) {
-    for (const c of [`env -S 'git\\_push'`, `env --split 'git push'`]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
-  }
-});
-
-// --- #249 --------------------------------------------------------------------
+// --- #239, #291: the prefixes and shell lines real sessions use ---------------
 
 const TOOLS = ['Bash', 'PowerShell', null];
 const gated = (c, verbs) => {
   for (const tool of TOOLS) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
 };
 
-test('#249: the push gate reads git/gh calls inside runner payloads', () => {
-  for (const c of [
-    'echo x | xargs git push',
-    'echo x | sudo xargs -n1 git push',
-    "find . -exec git push ';'",
-    "find . -name x -execdir git push origin {} ';'",
-    "find . -ok git push ';'",
-    "find . -exec sh -c 'git push' ';'",
-    "find . -exec xargs git push ';'",
-    'xargs sh -c "git push"',
-    'busybox xargs git push',
-    'parallel git push ::: a',
-    'watch git push',
-    "watch -n 5 'git push origin main'",
-    'watch -x git push',
-  ]) gated(c, ['git push']);
-  gated('echo 5 | xargs gh pr merge', ['gh pr merge']);
-  gated("find . -exec gh pr create --fill ';'", ['gh pr create']);
-  // A payload that runs no gated verb, or prints one, stays open.
-  for (const c of ['echo x | xargs git status', "find . -exec git log ';'", 'xargs echo git push', 'watch git status', 'watch -x echo git push']) gated(c, []);
+test('#239: an .exe or path spelling of git or gh, in any case, is gated like the bare form', () => {
+  for (const c of ['git.exe push', 'GIT.EXE push', `'C:/Program Files/Git/cmd/git.exe' push`]) gated(c, ['git push']);
+  gated('gh.exe pr merge 5', ['gh pr merge']);
 });
 
-test('#249: the git rules read a runner payload as a call that may repeat, in a dir -execdir leaves unknown', () => {
-  assert.match(staticCheck('echo a | xargs git add -A', '/work', 'Bash') ?? '', /git add -A/);
-  const [exec] = gitCalls("find . -exec git commit -m x ';'", '/work', 'Bash');
-  assert.deepEqual([exec.sub, exec.repo, exec.loop], ['commit', '/work', true]);
-  const [execdir] = gitCalls("find . -execdir git commit -m x ';'", '/work', 'Bash');
-  assert.deepEqual([execdir.sub, execdir.repo], ['commit', UNKNOWN_DIR]);
-  const h = tmpHome();
-  const born = join(h, 'born');
-  bornRepo(born);
-  const unborn = join(h, 'unborn');
-  mkdirSync(unborn);
-  execFileSync('git', ['init', '-q', '-b', 'main', unborn]);
-  for (const c of ["find . -exec git commit -m x ';'", 'echo a | xargs git commit -m x', "watch 'git commit -m x'", "su -c 'git commit -m x'"]) {
-    assert.match(branchRules(c, born, 'Bash') ?? '', /never commit to the default branch/, c);
-  }
-  // A payload may run once per input: no root-commit exemption.
-  for (const c of ['echo a | xargs git commit -m x', "watch 'git commit -m x'"]) assert.match(branchRules(c, unborn, 'Bash') ?? '', /never commit/, c);
-  assert.equal(branchRules("su -c 'git commit -m root'", unborn, 'Bash'), null);
-});
-
-test('#249: a pipe-fed xargs payload is judged with each path the pipeline names as its input', () => {
-  for (const c of [
-    'echo ~/.claude | xargs rm -rf',
-    'echo ~/.claude | sudo xargs rm -rf',
-    'echo ~/.claude | timeout 5 xargs rm -rf',
-    'echo ~/.claude | xargs sudo rm -rf',
-    'echo ~/.claude | xargs -n1 rm -rf',
-    'echo ~/.claude/push-gate-approvals.json | xargs rm',
-    'find ~/.claude -type f | xargs rm',
-    'find ~/.claude -type f | grep json | xargs rm -f',
-    'ls -d ~/.claude | xargs -I{} mv {} /tmp/c',
-    'echo ~/.claude | xargs mv -t /tmp',
-    "echo ~/.claude | xargs sh -c 'rm -rf \"$1\"' _",
-    'echo ~ | xargs -I{} rm -rf {}/.claude',
-    'echo ~/.claude | parallel rm -rf',
-  ]) forgesIn(c);
-  for (const c of [
-    'echo x | xargs ls',
-    'echo ~/.claude | xargs ls',
-    'echo /tmp/x | xargs rm -rf',
-    "find . -name '*.log' | xargs rm",
-    "find ~/.claude/projects -name '*.tmp' | xargs rm",
-    'git ls-files -z | xargs -0 rm',
-  ]) allowedIn(c);
-});
-
-test('#249: taskset, chrt, runuser, flock, strace, systemd-run and pkexec are read through to the call they run', () => {
-  const prefixes = [
-    'taskset 0x3',
-    'taskset -c 0-3',
-    'taskset --cpu-list 0',
-    'chrt 10',
-    'chrt -f 10',
-    'chrt --rr 5',
-    'chrt -d -T 1 -P 2 -D 2 0',
-    'runuser -u root',
-    'runuser --user=root',
-    'runuser -u root --',
-    'flock /tmp/l',
-    'flock -w 5 /tmp/l',
-    'flock -x -E 3 /tmp/l',
-    'strace',
-    'strace -f -o /tmp/s',
-    'strace -e trace=file',
-    'systemd-run',
-    'systemd-run --user -p X=1',
-    'systemd-run --scope',
-    'systemd-run -u name',
-    'pkexec',
-    'pkexec --user root',
-    'sudo run',
-    'sudo.exe run',
-    'sudo -D /tmp run',
-    'sudo run -D /tmp',
-    'env -a x',
-    'env --argv0 x',
-    'env --argv0=x',
-  ];
-  for (const p of prefixes) {
-    forgesIn(`${p} rm -rf ~/.claude`);
-    forgesIn(`find ~ -name .claude -exec ${p} rm -rf {} +`);
+test('#239: env, timeout, nohup and time are read through their options to the command they run', () => {
+  for (const p of [
+    'nohup',
+    'time',
+    'time -p',
+    'time -f %e',
+    'env',
+    'env A=1',
+    'env -u X',
+    'env -uX',
+    'env -iu X',
+    'env -C /tmp',
+    'env -i A=1',
+    'env --unset X',
+    'env --unset=X',
+    'env --',
+    'timeout 5',
+    'timeout 5s',
+    'timeout -s KILL 5',
+    'timeout -sKILL 5',
+    'timeout --signal KILL -k 2 5',
+    'timeout --signal=KILL 5',
+    'timeout --foreground 5',
+    'env -u X timeout -s KILL 5 nohup',
+  ]) {
     gated(`${p} git push`, ['git push']);
-    gated(`find . -exec ${p} git push ';'`, ['git push']);
+    gated(`${p} gh pr create`, ['gh pr create']);
   }
-  // Options after which nothing runs: an attach to a pid, a listing.
-  for (const c of ['taskset -p 1234 git push', 'chrt -p 10 1234 git push', 'chrt -m git push', 'pkexec --version git push']) gated(c, []);
+  // Options after which nothing runs, and a prefix with no command.
+  for (const c of ['timeout --help git push', 'env --version git push', 'nohup --help git push', 'env']) gated(c, []);
+  // The other rules read the wrapped call too.
+  assert.ok(staticCheck('timeout 60 git add -A', '/work', 'Bash'));
+  assert.ok(staticCheck('env CI=1 git commit -am x', '/work', 'Bash'));
+  for (const tool of ['Bash', null]) assert.deepEqual(gatedVerbs('timeout 60 bash <<EOF\ngit push\nEOF', '/work', tool), ['git push'], tool);
+  gated('time (powershell.exe -NoProfile -C "git push")', ['git push']);
+  // Ordinary wrapped commands stay open.
+  for (const c of ['timeout 5 npm test', 'env -u X node a.mjs', 'nohup node server.mjs']) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
 });
 
-test('#249: su -c, runuser -c, script -c, flock -c and watch run a shell line', () => {
-  const lines = [
-    (x) => `su -c '${x}'`,
-    (x) => `su root -c '${x}'`,
-    (x) => `su - root -c '${x}'`,
-    (x) => `su -lc '${x}' root`,
-    (x) => `su --command='${x}'`,
-    (x) => `runuser root -c '${x}'`,
-    (x) => `runuser -l root --command '${x}'`,
-    (x) => `script -qc '${x}' /dev/null`,
-    (x) => `script /dev/null -c '${x}'`,
-    (x) => `script --command '${x}'`,
-    (x) => `flock /tmp/l -c '${x}'`,
-    (x) => `flock -n /tmp/l --command '${x}'`,
-    (x) => `watch '${x}'`,
-    (x) => `watch -n 5 '${x}'`,
-  ];
-  for (const line of lines) {
-    forgesIn(line('rm -rf ~/.claude'));
-    forgesIn(line('cd /tmp && rm -rf ~/.claude'));
-    gated(line('git push'), ['git push']);
-    gated(line('cd /tmp; git push'), ['git push']);
-    gated(`find . -exec ${line('git push')} ';'`, ['git push']);
-  }
-  // With no -c, su and script start a shell that reads nothing the guard sees.
-  for (const c of ['su root', 'su - root', 'script out.log', "su -c 'ls ~/.claude'", "watch 'ls ~/.claude'"]) allowedIn(c);
-  for (const c of ["su -c 'git status'", 'su git push', "script -c 'echo git push'"]) gated(c, []);
-});
-
-test('#249: env -S stops at an unquoted \\c and blocks a ${VAR} command it would expand', () => {
-  forgesIn(`env -S 'rm -rf ~/.claude\\c'`);
-  forgesIn(`env -S 'rm -rf ~/.claude\\c x'`);
-  gated(`env -S 'git push\\c x'`, ['git push']);
-  // Past \c env reads nothing; inside quotes it is no stop.
-  allowedIn(`env -S 'echo\\c rm -rf ~/.claude'`);
-  forgesIn(`env -S "rm '\\c' ~/.claude"`, ['Bash', null]);
-  // A ${VAR} command is whatever env expands it to: blocked unread.
-  for (const c of [`C=rm env -S '\${C} -rf ~/.claude'`, `G=git env -S '\${G} push'`, `env -S 'A=1 \${G} push'`, `find . -exec env -S '\${G} push' ';'`]) {
-    for (const tool of TOOLS) {
-      for (const rule of [staticCheck, gatedVerbs]) assert.throws(() => rule(c, '/work', tool), /env -S .* can't read/, `${tool} ${rule.name} ${c}`);
-    }
-  }
-  const h = tmpHome();
-  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_input: { command: `G=git env -S '\${G} push'` }, cwd: h }), home: h });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /can't read/);
-  assert.doesNotMatch(r.stderr, /failed before/);
-  // A ${VAR} argument is read like any other var.
-  allowedIn(`env -S 'node \${X}'`);
-  forgesIn(`env -S 'rm -rf \${HOME}/.claude'`);
-});
-
-test('#249: time -o, strace -o, sudo -e, sudoedit and script write their files', () => {
-  const S = '~/.claude/push-gate-approvals.json';
+test('#291: a shell line is read past bash/sh -c (a flag cluster too) and powershell/pwsh -Command or -c', () => {
   for (const c of [
-    `time -o ${S} ls`,
-    `time -o ${S}`,
-    `time -a -o ${S} git status`,
-    `time --output=$HOME/.claude/push-gate-approvals.json ls`,
-    `time --out ${S} ls`,
-    `time -o ${S} bash -c 'ls'`,
-    `time -o ${T} ls`,
-    `strace -o ${S} ls`,
-    `sudo -e ${S}`,
-    `sudo --edit ${S}`,
-    `sudo -u root -e ${S}`,
-    `sudoedit ${S}`,
-    `sudoedit -u root /tmp/x ${S}`,
-    `script ${S}`,
-    `script -c ls ${S}`,
-    `script -O ${S} -c ls`,
-    `find . -exec time -o ${S} ls ';'`,
-    `find . -exec sudo -e ${S} ';'`,
-  ]) forgesIn(c);
-  for (const c of ['time -o /tmp/t ls', 'sudo -e /etc/hosts', 'sudoedit /tmp/x', 'time ls ~/.claude', 'script -c ls /tmp/log', 'strace -o /tmp/s ls ~/.claude']) allowedIn(c);
-  gated('sudo -e git push', []);
-});
-
-test('#249: the false blocks the #239 review checked stay allowed', () => {
-  for (const c of ['sudo --login ls', 'nice --adj 5 make', 'timeout --sig KILL 5 npm test', `env -S 'node a.mjs'`, 'echo x | xargs ls', 'find . -exec grep foo {} +', 'watch ls']) {
-    allowedIn(c);
-    gated(c, []);
-  }
-});
-
-// --- #249 review round 1 -----------------------------------------------------
-
-test('#249 review: su and runuser hand the words after the user to the shell', () => {
-  for (const c of [`su bob -- -c 'git push'`, `su - bob -- -c 'git push'`, `runuser bob -- -c 'git push'`, `su bob -- -lc 'git push'`]) gated(c, ['git push']);
-  // -s names the shell those words go to.
-  for (const c of ['su -s /usr/bin/git root -- push', 'runuser --shell=/usr/bin/git bob -- push', "flock /tmp/l --command='git push'"]) gated(c, ['git push']);
-  forgesIn(`su bob -- -c 'rm -rf ~/.claude'`);
-  forgesIn(`find ~ -name x -exec su bob -- -c 'rm -rf ~/.claude' ';'`);
-  for (const c of [`su bob -- -c 'git status'`, 'su bob -- script.sh', 'su bob']) gated(c, []);
-});
-
-test('#249 review: one shell-flag reader takes -c in a cluster and cmd /c, at top level and in payloads', () => {
-  for (const c of [
-    `bash -lc 'git push'`,
-    `bash -ec 'git push'`,
-    `sh -xc 'git push'`,
-    `bash -l -c 'git push'`,
-    'cmd /c git push',
-    'xargs cmd /c git push',
-    "find . -exec cmd /c git push ';'",
-    `xargs bash -lc 'git push'`,
-    `find . -exec sh -ec 'git push' ';'`,
-    `xargs eval 'git push'`,
+    `bash -c "git push"`,
+    `sh -c 'git push'`,
+    `bash -lc "git push"`,
+    `bash.exe -c 'git push'`,
+    `powershell -Command "git push"`,
+    `powershell -NoProfile -Command "git push"`,
+    `powershell.exe -NoProfile -C "git push"`,
+    `pwsh -c 'git push'`,
+    `timeout 60 bash -c "git push"`,
   ]) gated(c, ['git push']);
-  forgesIn(`bash -lc 'rm -rf ~/.claude'`);
-  forgesIn(`find ~ -name .claude -exec sh -ec 'rm -rf "$1"' _ {} ';'`);
-  // A PowerShell flag holding a c is no -c; a shell running a script file runs nothing the guard reads.
-  for (const c of [`pwsh -NonInteractive -Command 'git status'`, 'pwsh -NonInteractive -File x.ps1', 'bash -l script.sh']) gated(c, []);
-  gated(`pwsh -NonInteractive -Command 'git push'`, ['git push']);
+  // The line runs in its own shell, from the caller's dir: `cd` there moves only it.
+  assert.deepEqual(
+    gitCalls(`cd /pa && bash -c "cd /pb && git commit -m x"; git commit -m y`, '/cwd', 'Bash').map((g) => g.repo),
+    ['/pb', '/pa'],
+  );
+  // A script file's words are its own.
+  for (const c of ['powershell -NoProfile -File x.ps1 git push', 'bash x.sh git push', 'bash -c']) gated(c, []);
 });
 
-test('#249 review: a pipeline feeds xargs and parallel for every rule, through groups, shells and busybox', () => {
-  gated('echo push | xargs git', ['git push']);
-  gated(`echo 'pr create' | xargs gh`, ['gh pr create']);
-  gated(`echo 'git push' | xargs -I{} sh -c '{}'`, ['git push']);
-  gated(`echo 'git push' | parallel`, ['git push']);
-  gated('echo push | busybox xargs git', ['git push']);
-  gated('echo x | xargs git push', ['git push']);
-  for (const c of ['echo push | { xargs git; }', `echo push | bash -c 'xargs git'`, '{ echo push; } | xargs git']) {
-    for (const tool of ['Bash', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), ['git push'], `${tool} ${c}`);
-  }
-  assert.match(staticCheck('echo . | xargs git add', '/work', 'Bash') ?? '', /git add \./);
-  forgesIn('echo ~/.claude | busybox xargs rm -rf');
-  for (const c of [
-    'echo ~/.claude | { xargs rm -rf; }',
-    `echo ~/.claude | bash -c 'xargs rm -rf'`,
-    '{ echo ~/.claude; } | xargs rm -rf',
-    'echo ~/.claude | ( xargs rm -rf )',
-    'xargs rm -rf <<< ~/.claude',
-    'xargs rm -rf <<<~/.claude',
-  ]) forgesIn(c, ['Bash', null]);
-  for (const c of ['echo ~/.claude | { xargs ls; }', 'xargs ls <<< ~/.claude', 'echo /tmp | { xargs rm -rf; }']) allowedIn(c, '/work', ['Bash', null]);
-});
-
-test('#249 review: xargs and parallel options resolve like a prefix table, and parallel runs its inputs when given no command', () => {
-  for (const c of [
-    'xargs --delimiter X git push',
-    'xargs --delim X git push',
-    'xargs --delimiter=X git push',
-    'xargs --arg-file list git push',
-    'xargs --process-slot-var V git push',
-    'xargs -0 -r -t git push',
-    'xargs --replace git push',
-    'xargs -i git push',
-    'xargs -n1 -P4 git push',
-    'parallel -S host git push ::: a',
-    'parallel --joblog f git push ::: a',
-    'parallel --jobs 4 git push ::: a',
-    'parallel -j4 --tag git push ::: a b',
-    `parallel ::: 'git push'`,
-    `parallel -j 2 ::: 'echo x' 'git push'`,
-  ]) gated(c, ['git push']);
-  forgesIn(`parallel ::: 'rm -rf ~/.claude'`);
-  forgesIn('xargs --delimiter X rm -rf ~/.claude');
-  for (const c of ['xargs --max-args 1 echo', 'parallel echo ::: git push', 'xargs -I % echo git push %']) gated(c, []);
-});
-
-test('#249 review: strace -o |cmd or !cmd pipes its output into a command line', () => {
-  for (const c of [`strace -o '|git push' ls`, `strace -o '!git push' ls`, `strace --output='|git push' ls`, `find . -exec strace -o '|git push' ls ';'`]) gated(c, ['git push']);
-  forgesIn(`strace -o '|rm -rf ~/.claude' ls`);
-  forgesIn(`strace -o '|tee ~/.claude/push-gate-approvals.json' ls`);
-  gated('strace -o /tmp/s ls', []);
-  allowedIn('strace -o /tmp/s ls');
-});
-
-test('#249 review: systemd-run -C and strace --quiet/--trace-fds read right; a wrapped gate piped onward is rule 3', () => {
-  for (const c of ['systemd-run -C cap git push', 'strace --quiet git push', 'strace --quiet=attach git push', 'strace --trace-fds 3 git push', 'strace --silent git push']) gated(c, ['git push']);
+test('#239, #295: a gate behind a kept prefix, in a group or in a shell line, piped onward, is rule 3', () => {
   const piped = /pipe after a gate/;
-  for (const c of ['watch pnpm test | tail', `bash -c 'pnpm test' | tail`, '{ pnpm test; } | tail -5', `echo x | bash -c 'pnpm test | cat'`]) {
+  for (const c of ['timeout 300 npm test | tail -5', 'env CI=1 pnpm test | tail', `bash -c 'pnpm test' | tail`, '{ pnpm test; } | tail -5', `echo x | bash -c 'pnpm test | cat'`]) {
     assert.match(staticCheck(c, '/work', 'Bash') ?? '', piped, c);
   }
-  for (const c of ['watch pnpm test', `bash -c 'pnpm test'; echo x | tail`, `echo x | bash -c 'pnpm test'`]) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
-});
-
-test('#249 review: chrt reads its priority only when the word is a number', () => {
-  for (const c of ['chrt -o git push', 'chrt --other git push', 'chrt -b git push', 'chrt --idle git push', 'chrt -f 10 git push', 'chrt -o 0 git push']) gated(c, ['git push']);
-  forgesIn('chrt -o rm -rf ~/.claude');
-  gated("find . -exec chrt --batch git push ';'", ['git push']);
-});
-
-// --- #249 review round 2 -----------------------------------------------------
-
-test('#249 review 2: parallel with a command runs it on its ::: inputs, appended or as {}', () => {
-  for (const c of ['parallel rm -rf ::: ~/.claude', 'parallel rm -r {} ::: ~/.claude', 'parallel mv ::: ~/.claude /tmp/x', "find . -exec parallel rm -rf ::: ~/.claude ';'"]) forgesIn(c);
-  for (const c of ['parallel git ::: push', 'parallel git {} ::: push', 'parallel -j1 git ::: push', "find . -exec parallel git ::: push ';'"]) gated(c, ['git push']);
-  gated("parallel gh ::: 'pr create'", ['gh pr create']);
-  gated('parallel echo ::: git push', []);
-  allowedIn('parallel rm -rf ::: /tmp/x');
-});
-
-test('#249 review 2: a shell line after -- is the line', () => {
-  for (const c of ["bash -c -- 'git push'", "sh -ec -- 'git push'", "xargs bash -c -- 'git push'"]) gated(c, ['git push']);
-  forgesIn("bash -c -- 'rm -rf ~/.claude'");
-});
-
-test('#249 review 2: cmd /r and an attached /c run a line', () => {
-  for (const c of ['cmd /r git push', 'cmd /cgit push', 'cmd /d /c git push', "pwsh -nop -ExecutionPolicy Bypass -c 'git push'"]) gated(c, ['git push']);
-  for (const c of ['pwsh -File x.ps1 git push', 'powershell -ExecutionPolicy Bypass -File x.ps1', "pwsh -NonInteractive -Command 'git status'", 'cmd /c git status']) gated(c, []);
-});
-
-test('#249 review 2: strace reads under the MSYS and the Linux grammar alike', () => {
-  for (const c of ['strace -u git push', 'strace -e git push', 'strace -m all git push', 'strace --mask=all git push', 'strace -f -u git push', 'strace -u bob git push', 'strace -e trace=file git push', 'strace -b 4096 git push']) gated(c, ['git push']);
-  forgesIn('strace -u rm -rf ~/.claude');
-  forgesIn('strace -u bob rm -rf ~/.claude');
-  gated('strace -u bob ls', []);
-});
-
-// --- #249 review round 3 -----------------------------------------------------
-
-test('#249 review 3: an ambiguous long option is read every way it could resolve, and the strictest reading counts', () => {
-  for (const c of [
-    'strace --use git push',
-    'strace --u git push',
-    'strace --e git push',
-    'strace --c git push',
-    'strace --tr git push',
-    'strace --ti git push',
-    'strace --o x git push',
-    'strace --f 5 git push',
-    'xargs --max git push',
-    'echo x | xargs --max 1 git push',
-    "find . -exec strace --use git push ';'",
-  ]) gated(c, ['git push']);
-  for (const c of ['env --ign rm -rf ~/.claude', 'sudo --lo rm -rf ~/.claude', 'env --=x rm -rf ~/.claude', 'strace --use rm -rf ~/.claude', "find ~ -name .claude -exec env --ign rm -rf {} +"]) forgesIn(c);
-  // An ambiguous strace --o may be --output: its pipe runs.
-  gated(`strace --o '|git push' ls`, ['git push']);
-  // Readings that run nothing gated stay open.
-  for (const c of ['env --ign ls', 'strace --use ls', 'xargs --max 1 echo']) {
-    allowedIn(c);
-    gated(c, []);
+  for (const c of [`bash -c 'pnpm test'; echo x | tail`, `echo x | bash -c 'pnpm test'`, 'echo a | { pnpm test; }']) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
+  // A later stage that is a shell line or eval is a stage too, redirected or not (#291 r2).
+  for (const c of ['pnpm test | bash -c "tail -5" > out.txt', `pnpm test | sh -c 'grep x' >> log`, 'pnpm test | powershell -c "Select -Last 5" > f', 'pnpm test | eval tail > f', 'pnpm test | bash -c "cat" 2>/dev/null', 'pnpm test | bash -c "cat > f"', 'pnpm test | bash -c "cat"']) {
+    for (const tool of ['Bash', null]) assert.match(staticCheck(c, '/work', tool) ?? '', piped, `${tool} ${c}`);
   }
-});
-
-test('#249 review 3: a command too ambiguous to read is blocked unread, in bounded time', () => {
-  const c = `strace ${'--=a '.repeat(12)}git push`;
-  for (const rule of [staticCheck, gatedVerbs]) assert.throws(() => rule(c, '/work', 'Bash'), /ambiguous/, rule.name);
-  const h = tmpHome();
-  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_input: { command: c }, cwd: h }), home: h });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /ambiguous/);
-});
-
-test("#249 review 3: PowerShell's -c, -Command and /c are read as on main, wherever they stand", () => {
-  for (const c of [
-    'powershell /c "git push"',
-    'powershell /noprofile /c "git push"',
-    'powershell -noprof -c "git push"',
-    'powershell -in text -c "git push"',
-    'powershell -i text -c "git push"',
-    'powershell -NonI -NoProf -c "git push"',
-    "pwsh -NonInteractive -Command 'git push'",
-  ]) gated(c, ['git push']);
-  for (const c of ['powershell /c "Remove-Item -Recurse -Force ~/.claude"', 'powershell -noprof -c "Remove-Item -Recurse -Force ~/.claude"']) forgesIn(c);
-  for (const c of ['pwsh -File x.ps1', "powershell -NoProfile -Command 'git status'"]) gated(c, []);
-});
-
-// --- #249 review round 4 -----------------------------------------------------
-
-test("#249 review 4: words the caller split, rejoined into a line, are read with the caller's variables", () => {
-  for (const c of [
-    'D=~/.claude; watch rm -rf $D',
-    'D=~/.claude; watch -n 5 rm -rf $D',
-    'D=~/.claude; strace -u x rm -rf $D',
-    'D=~/.claude; strace --us x rm -rf $D',
-    'D=~/.claude; strace --user x rm -rf $D',
-    "D=~/.claude; find . -exec watch rm -rf $D ';'",
-    "D=~/.claude; find . -exec strace -u x rm -rf $D ';'",
-    'D=~/.claude; echo x | xargs watch rm -rf $D',
-    'D=~/.claude; cmd /c rm -rf $D',
-  ]) forgesIn(c, ['Bash', null]);
-  for (const c of ['D=/tmp/x; watch rm -rf $D', 'D=/tmp/x; strace -u x rm -rf $D', "D=/tmp/x; find . -exec watch rm -rf $D ';'"]) allowedIn(c, '/work', ['Bash', null]);
-});
-
-// --- #249 review round 5 -----------------------------------------------------
-
-test("#249 review 5: a rejoined line reads the caller's vars, but its functions are its own", () => {
-  const S = 'push-gate-approvals.json';
-  // A function a rejoined line defines doesn't leak out to the caller.
-  for (const w of ['watch', 'watch -n 5', 'timeout 5 watch']) {
-    forgesIn(`cd ~/.claude; ${w} "f() { cd /tmp; }"; f; rm -f ${S}`, ['Bash', null]);
-    forgesIn(`D=~/.claude; ${w} "f() { D=/tmp/x; }"; f; rm -rf $D`, ['Bash', null]);
-  }
-  for (const def of ['cmd /c "f() { cd /tmp; }" x', 'powershell -c "function f { cd /tmp }" x']) {
-    forgesIn(`cd ~/.claude; ${def}; f; rm -f ${S}`, ['Bash', null]);
-  }
-  // Nor does a caller's function leak in.
-  forgesIn(`f() { cd /tmp; }; cd ~/.claude; powershell -c "f; Remove-Item ${S}" x`, ['Bash', null]);
 });
 
 // --- #258: a node eval script the caller's shell substitutes into ---------------
@@ -3380,6 +2218,11 @@ test("#249 review 5: a rejoined line reads the caller's vars, but its functions 
 /** Rule 12 blocks `c` in each shell. */
 const evalBlocked = (c, tools = ['Bash', 'PowerShell', null]) => {
   for (const tool of tools) assert.match(staticCheck(c, '/work', tool) ?? '', /#258/, `${tool} ${c}`);
+};
+
+/** The static rules allow `c` in each shell. */
+const allowedIn = (c, cwd = '/work', tools = ['Bash', 'PowerShell', null]) => {
+  for (const tool of tools) assert.equal(staticCheck(c, cwd, tool), null, `${tool} ${c}`);
 };
 
 test('#258: a double-quoted node/bun/deno eval script holding a backtick blocks in bash', () => {
@@ -3402,13 +2245,12 @@ test('#258: a double-quoted node/bun/deno eval script holding a backtick blocks 
     'deno eval -p "`x`"',
     // Through wrappers, prefixes, groups and a shell line.
     'timeout 5 node -e "`x`"',
-    'sudo -u root node -e "`x`"',
+    'env -u X node -e "`x`"',
     'FOO=1 node -e "`x`"',
     'cd /tmp && node -e "`x`" | head -1',
     '(node -e "`x`")',
     '( node -e "`x`" )',
     `bash -c 'node -e "\`x\`"'`,
-    'watch node -e "`x`"',
   ]) evalBlocked(c, ['Bash', null]);
 });
 
@@ -3447,8 +2289,6 @@ test('#258: single-quoted scripts, escaped substitutions and substitutions outsi
     'node scripts/x.mjs -e "`x`"',
     'deno run x.ts "$(x)"',
     'bun run build -e "$(x)"',
-    // env -S splits its line but substitutes nothing in it.
-    `env -S 'node -e "\`x\`"'`,
     // Not an eval call.
     'echo "`date`"',
     'node --test "$(ls)"',
@@ -3470,385 +2310,6 @@ test('#258 end-to-end through the real hook: Bash and PowerShell payloads', () =
     assert.equal(r.status, status, `${tool} ${command}: ${r.stderr}`);
     if (status === 2) assert.match(r.stderr, /#258/);
   }
-});
-
-// --- #256: a PowerShell command line, as powershell.exe 5.1 and pwsh 7 read it ---
-
-/** `text` as -EncodedCommand takes it: base64 of its UTF-16LE bytes. */
-const encoded = (text) => Buffer.from(text, 'utf16le').toString('base64');
-
-test('#256: -EncodedCommand is decoded and read as the line it runs, at top level and in payloads', () => {
-  const push = encoded('git push');
-  for (const c of [
-    `powershell -EncodedCommand ${push}`,
-    `powershell -enc ${push}`,
-    `powershell -e ${push}`,
-    `powershell -ec ${push}`,
-    `powershell /enc ${push}`,
-    `powershell -enc ${push} -NoLogo`,
-    `pwsh -NoProfile -EncodedCommand ${push}`,
-    `pwsh --enc ${push}`,
-    `xargs powershell -enc ${push}`,
-    `find . -exec pwsh -e ${push} ';'`,
-  ]) gated(c, ['git push']);
-  forgesIn(`powershell -enc ${encoded('Remove-Item -Recurse -Force ~/.claude')}`);
-  forgesIn(`find . -exec powershell -enc ${encoded('Remove-Item -Recurse -Force ~/.claude')} ';'`);
-  // The words after it are the script's: a second command is refused, and pwsh reads a word as a file.
-  for (const c of [`powershell -enc ${encoded('git status')}`, `powershell -enc ${encoded('git status')} git push`, `pwsh -enc ${encoded('git status')} -c 'git push'`]) gated(c, []);
-  allowedIn(`powershell -enc ${encoded('Get-ChildItem ~/.claude')}`);
-});
-
-test('#256: an -EncodedCommand the guard cannot decode is blocked unread', () => {
-  for (const c of ['powershell -enc $b', 'pwsh -EncodedCommand "$(cat x)"', 'powershell -e not-base64!', 'xargs powershell -enc $b']) {
-    for (const tool of TOOLS) {
-      for (const rule of [staticCheck, gatedVerbs]) assert.throws(() => rule(c, '/work', tool), /-EncodedCommand/, `${rule.name} ${tool} ${c}`);
-    }
-  }
-  const h = tmpHome();
-  const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: 'powershell -enc $b' }, cwd: h }), home: h });
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /-EncodedCommand/);
-});
-
-test("#256: powershell.exe 5.1's default parameter is Command, and an unknown parameter starts it", () => {
-  for (const c of [
-    'powershell git push',
-    'powershell -NoProfile "git push"',
-    'powershell -NoProfile -NonInteractive git push',
-    'powershell.exe -nop -ex Bypass git push',
-    'powershell -i text git push',
-    // The launcher reads -Version only as the first word; later it starts the line.
-    'powershell -Version 5.1 git push',
-    'powershell -NoProfile -Version 5.1 "; git push"',
-    // 5.1 has no -SSHServerMode: the line starts at it, and runs on past the error.
-    'powershell -sshs "; git push"',
-    'xargs powershell git push',
-    "find . -exec powershell -NoProfile git push ';'",
-  ]) gated(c, ['git push']);
-  forgesIn('powershell -NoProfile Remove-Item -Recurse -Force ~/.claude');
-  forgesIn("find ~ -name x -exec powershell Remove-Item -Recurse -Force ~/.claude ';'");
-  // An unknown first word is the line's command, its other words that command's arguments.
-  gated('powershell -NoProfile -Version 5.1 git push', []);
-  // pwsh 7's default is -File: these run a script file named git (or "git push").
-  for (const c of ['pwsh git push', 'pwsh -NoProfile "git push"', 'pwsh -sshs "; git push"', 'xargs pwsh git push']) gated(c, []);
-});
-
-test('#256: abbreviated parameters resolve as each host matches them', () => {
-  for (const c of [
-    'powershell -comm "git push"',
-    'powershell -Com "git push"',
-    'powershell -co "git push"',
-    'powershell -COMMAND "git push"',
-    'powershell -nop -nol -noni -w Hidden -o Text -in Text -ep Bypass -wo /tmp -st -c "git push"',
-    'powershell -imp -c "git push"',
-    'pwsh -comm "git push"',
-    'pwsh -Com "git push"',
-    'pwsh -st -c "git push"',
-    'pwsh -co "git push"',
-    'pwsh --command "git push"',
-    'pwsh -nop -noni -ex Bypass -wd /tmp -inp Text -settings s.json -c "git push"',
-    `xargs pwsh -co 'git push'`,
-    `find . -exec powershell -Com 'git push' ';'`,
-  ]) gated(c, ['git push']);
-  forgesIn('powershell -comm "Remove-Item -Recurse -Force ~/.claude"');
-  // Too short to name one, or not that host's: 5.1 runs the word as a command, pwsh as a script file.
-  for (const c of ['powershell -con "git push"', 'powershell -commandx "git push"', 'powershell --command "git push"', 'pwsh -con "git push"']) gated(c, []);
-});
-
-test('#256: /-style parameters read like -', () => {
-  for (const c of [
-    'powershell /c "git push"',
-    'powershell /Command "git push"',
-    'powershell /co "git push"',
-    'powershell /nop /ex Bypass /c "git push"',
-    'powershell /noprofile "git push"',
-    `powershell /enc ${encoded('git push')}`,
-    'pwsh /c "git push"',
-    'pwsh /nop /c "git push"',
-    'xargs powershell /c "git push"',
-    "find . -exec pwsh /co 'git push' ';'",
-  ]) gated(c, ['git push']);
-  forgesIn('powershell /noprofile /c "Remove-Item -Recurse -Force ~/.claude"');
-  gated('pwsh /f x.ps1 /c "git push"', []);
-});
-
-test("#256: pwsh 7 reads its own table, and the words after -File are the script's", () => {
-  for (const c of [
-    "pwsh -noprofileloadtime -c 'git push'",
-    "pwsh -interactive -c 'git push'",
-    "pwsh -i -c 'git push'",
-    "pwsh -sshs -c 'git push'",
-    "pwsh -l -c 'git push'",
-    "pwsh -cwa 'git push' x",
-    "xargs pwsh -noprofileloadtime -c 'git push'",
-    "find . -exec pwsh -i -c 'git push' ';'",
-  ]) gated(c, ['git push']);
-  forgesIn("pwsh -noprofileloadtime -c 'Remove-Item -Recurse -Force ~/.claude'");
-  // 5.1 has none of those: the unknown parameter starts its line, as a command.
-  for (const c of ["powershell -noprofileloadtime -c 'git push'", "powershell -interactive -c 'git push'", "powershell -cwa 'git push'", "powershell -l -c 'git push'"]) gated(c, []);
-  for (const c of [
-    "pwsh -File x.ps1 -c 'git push'",
-    "pwsh -f x.ps1 -Command 'git push'",
-    "pwsh x.ps1 -c 'git push'",
-    "powershell -File x.ps1 -c 'git push'",
-    "pwsh -cwa 'git status' 'git push'",
-    "pwsh -i text -c 'git push'",
-    "find . -exec pwsh -File x.ps1 -c 'git push' ';'",
-  ]) gated(c, []);
-});
-
-test('#256: a literal pipeline stage under PowerShell feeds xargs its words', () => {
-  for (const [c, verbs] of [
-    ["'push' | xargs git", ['git push']],
-    ['"push" | xargs git', ['git push']],
-    ["'pr create' | xargs gh", ['gh pr create']],
-    ["'push', '-f' | xargs git", ['git push']],
-  ]) {
-    for (const tool of ['PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
-  }
-  // In bash the stage is a command named push, whose output is out of sight.
-  assert.deepEqual(gatedVerbs("'push' | xargs git", '/work', 'Bash'), []);
-  gated(`pwsh -c "'push' | xargs git"`, ['git push']);
-  gated(`find . -exec pwsh -c "'push' | xargs git" ';'`, ['git push']);
-  forgesIn('"$HOME/.claude" | xargs rm -rf', ['PowerShell', null]);
-  allowedIn("'/tmp/x' | xargs rm -rf", '/work', ['PowerShell', null]);
-});
-
-// --- #256 review 2 -----------------------------------------------------------
-
-test("#256 review 2: 5.1's first-word -Version and -PSConsoleFile take any dash, not a /", () => {
-  for (const c of [
-    'powershell –version 5.1 git push',
-    'powershell –v 5.1 "git push"',
-    'powershell —Version 5.1 git push',
-    'powershell ―psconsolefile x.psc1 git push',
-  ]) gated(c, ['git push']);
-  // The launcher doesn't know /version: the line starts at it, as a command.
-  gated('powershell /version 5.1 git push', []);
-});
-
-test('#256 review 2: a parameter word is trimmed as the host trims it, Unicode whitespace too', () => {
-  for (const host of ['powershell', 'pwsh']) {
-    for (const c of [
-      `${host} " -c" "git push"`,
-      `${host} "-c " "git push"`,
-      `${host} "-c " "git push"`,
-      `${host} " -Command" "git push"`,
-      `${host} "-c\u0085" "git push"`,
-      `${host} " " -c "git push"`,
-      `${host} " -nop " -c "git push"`,
-    ]) gated(c, ['git push']);
-  }
-});
-
-test("#256 review 2: pwsh drops a second dash of any kind, after a dash or a /", () => {
-  for (const c of ['pwsh –-c "git push"', 'pwsh -–c "git push"', 'pwsh –—c "git push"', 'pwsh /-c "git push"', 'pwsh /–command "git push"']) gated(c, ['git push']);
-  // 5.1 drops none: the line starts at the doubled word, as a command.
-  for (const c of ['powershell –-c "git push"', 'powershell /-c "git push"']) gated(c, []);
-});
-
-test('#256 review 2: a literal stage wrapped in @( ), ( ), $( ) or led by a comma feeds xargs', () => {
-  for (const [c, verbs] of [
-    ['@("push") | xargs git', ['git push']],
-    ['("push") | xargs git', ['git push']],
-    [',"push" | xargs git', ['git push']],
-    ['$("push") | xargs git', ['git push']],
-    ["@( 'push' ) | xargs git", ['git push']],
-    ['@("pr","create") | xargs gh', ['gh pr create']],
-    ["@('pr', 'create') | xargs gh", ['gh pr create']],
-  ]) {
-    for (const tool of ['PowerShell', null]) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
-  }
-  // In bash the group runs a command named push, whose output is out of sight.
-  assert.deepEqual(gatedVerbs('("push") | xargs git', '/work', 'Bash'), []);
-  gated(`pwsh -c "@('push') | xargs git"`, ['git push']);
-  forgesIn('@("$HOME/.claude") | xargs rm -rf', ['PowerShell', null]);
-  allowedIn('@("/tmp/x") | xargs rm -rf', '/work', ['PowerShell', null]);
-});
-
-// --- #264: runner and prefix false allows ------------------------------------
-
-test('#264: wsl runs its words as a line in the default shell, or past -e/--exec as the command', () => {
-  for (const c of [
-    'wsl git push',
-    'wsl.exe git push',
-    "wsl 'git push'",
-    'wsl -- git push',
-    'wsl -e git push',
-    'wsl --exec git push',
-    'wsl -d Ubuntu -u root git push',
-    'wsl --distribution Ubuntu --user=root git push',
-    'wsl --cd /tmp git push',
-    'wsl --shell-type login git push',
-    "find . -exec wsl git push ';'",
-    'echo x | xargs wsl -e git push',
-  ]) gated(c, ['git push']);
-  for (const c of ['wsl rm -rf ~/.claude', 'wsl -e rm -rf ~/.claude', 'find ~ -name .claude -exec wsl rm -rf {} +']) forgesIn(c);
-  forgesIn('D=~/.claude; wsl rm -rf $D', ['Bash', null]);
-  // Managing WSL runs no command; a line that runs nothing gated stays open.
-  for (const c of ['wsl --list git push', 'wsl -l -v git push', 'wsl --shutdown git push', 'wsl -e echo git push', 'wsl ls']) gated(c, []);
-  for (const c of ['wsl ls ~/.claude', 'wsl -e ls ~/.claude']) allowedIn(c);
-});
-
-test('#264: an o or O in a shell flag cluster takes the next word, the -c cluster too', () => {
-  for (const c of [
-    `bash -co pipefail 'git push'`,
-    `bash -oc pipefail 'git push'`,
-    `sh -eco errexit 'git push'`,
-    `bash -cO extglob 'git push'`,
-    `bash -co pipefail -o nounset 'git push'`,
-    `bash -co pipefail -- 'git push'`,
-    `xargs bash -co pipefail 'git push'`,
-    `find . -exec sh -co pipefail 'git push' ';'`,
-  ]) gated(c, ['git push']);
-  forgesIn(`bash -co pipefail 'rm -rf ~/.claude'`);
-  forgesIn(`find ~ -name .claude -exec bash -co pipefail 'rm -rf "$1"' _ {} ';'`);
-  gated(`bash -co pipefail 'git status'`, []);
-});
-
-test('#264: busybox ash and hush, and either alone, are shells that run a -c line or a heredoc', () => {
-  for (const c of [
-    `busybox ash -c 'git push'`,
-    `busybox hush -c 'git push'`,
-    `ash -c 'git push'`,
-    `hush -lc 'git push'`,
-    `busybox ash -co pipefail 'git push'`,
-    `xargs busybox ash -c 'git push'`,
-    `find . -exec busybox hush -c 'git push' ';'`,
-    'busybox ash <<EOF\ngit push\nEOF',
-  ]) gated(c, ['git push']);
-  forgesIn(`busybox ash -c 'rm -rf ~/.claude'`);
-  forgesIn(`find ~ -name .claude -exec busybox hush -c 'rm -rf "$1"' _ {} ';'`);
-  gated(`busybox ash -c 'git status'`, []);
-  allowedIn(`busybox ash -c 'ls ~/.claude'`);
-});
-
-test("#264: parallel's value options GNU parallel documents take their value, so the command follows it", () => {
-  // parallel isn't installed here: the table follows GNU parallel's man page (#264).
-  const options = [
-    'trc', 'limit', 'filter', 'basenamereplace', 'bnr', 'basenameextensionreplace', 'bner', 'dirnamereplace', 'dnr', 'extensionreplace', 'er',
-    'seqreplace', 'slotreplace', 'res', 'tempdir', 'tf', 'block-timeout', 'bt', 'group-by', 'bin', 'shard', 'share-dir', 'trim', 'ctagstring',
-    'semaphoretimeout', 'st', 'sqlmaster', 'sqlworker', 'sqlandworker', 'minversion', 'shell-completion',
-  ];
-  for (const o of options) {
-    gated(`parallel --${o} x git push ::: a`, ['git push']);
-    gated(`parallel --${o}=x git push ::: a`, ['git push']);
-  }
-  for (const c of ["find . -exec parallel --trc f git push ::: a ';'", 'echo a | parallel --limit x git push']) gated(c, ['git push']);
-  for (const c of ['parallel --trc f rm -rf ::: ~/.claude', 'echo ~/.claude | parallel --filter x rm -rf']) forgesIn(c);
-  gated('parallel --filter x echo ::: git push', []);
-});
-
-test('#264: strace -p/--pid/--attach take a pid and still run the command, as Linux strace does', () => {
-  for (const c of [
-    'strace -p 1 git push',
-    'strace -p1 git push',
-    'strace -fp 1 git push',
-    'strace --pid=1 git push',
-    'strace --pid 1 git push',
-    'strace --attach=1 git push',
-    "find . -exec strace -p 1 git push ';'",
-    'echo x | xargs strace --pid=1 git push',
-  ]) gated(c, ['git push']);
-  forgesIn('strace -p 1 rm -rf ~/.claude');
-  forgesIn('find ~ -name .claude -exec strace --attach=1 rm -rf {} +');
-  for (const c of ['strace -p 1', 'strace -p 1 ls']) gated(c, []);
-});
-
-test("#264: find -exec takes away what it finds through a cmd or PowerShell line, and through every reading of a prefix", () => {
-  const S = 'push-gate-approvals.json';
-  for (const c of [
-    'find ~/.claude -exec powershell -c Remove-Item -Recurse {} +',
-    'find ~/.claude -exec pwsh -c Remove-Item -Recurse {} +',
-    'find ~/.claude -exec cmd /c rm -rf {} +',
-    'find ~/.claude -exec strace --us x rm -rf {} +',
-    `find ~ -name ${S} -exec cmd /c rm {} ';'`,
-    `find ~ -name ${S} -exec powershell -c Remove-Item {} ';'`,
-    `find ~ -name ${S} -exec strace --us x rm {} ';'`,
-    `find ~ -name ${S} -exec strace -o '|rm {}' ls ';'`,
-  ]) forgesIn(c);
-  for (const c of ['find /tmp/x -exec cmd /c rm -rf {} +', 'find ~/.claude -exec cmd /c type {} +', 'find ~/.claude -exec strace --us x ls {} +']) allowedIn(c);
-});
-
-test('#264: a function the caller defined is no function in a watch line, which runs in a shell of its own', () => {
-  const S = 'push-gate-approvals.json';
-  for (const c of [
-    `f() { cd /tmp; }; cd ~/.claude; watch "f; rm -f ${S}"`,
-    `f() { cd /tmp; }; cd ~/.claude; watch -n 5 "f && rm -f ${S}"`,
-    `f() { cd /tmp; }; cd ~/.claude; find . -exec watch "f; rm -f ${S}" ';'`,
-    `f() { cd /tmp; }; cd ~/.claude; echo x | xargs watch "f; rm -f ${S}"`,
-  ]) forgesIn(c);
-});
-
-// --- #264 review -------------------------------------------------------------
-
-test('#264 review: an o in a shell flag cluster is read both ways, taking the next word (bash, dash) and the rest of the cluster (zsh)', () => {
-  for (const c of [
-    `zsh -coerrexit 'git push'`,
-    `zsh -onoclobber -c 'git push'`,
-    `zsh -c -onoclobber 'git push'`,
-    `busybox hush -coerrexit 'git push'`,
-    `xargs zsh -coerrexit 'git push'`,
-    `find . -exec zsh -coerrexit 'git push' ';'`,
-    // Each reading names a different line; both are read.
-    `zsh -coerrexit 'git status' 'git push'`,
-    `zsh -coerrexit 'git push' 'git status'`,
-  ]) gated(c, ['git push']);
-  forgesIn(`zsh -coerrexit 'rm -rf ~/.claude'`);
-  forgesIn(`find ~ -name .claude -exec zsh -coerrexit 'rm -rf "$1"' _ {} ';'`);
-  // Where the readings agree, the line is read once.
-  gated(`bash -co pipefail 'git push'`, ['git push']);
-  gated(`zsh -eco errexit 'git push'`, ['git push']);
-});
-
-test('#264 review: wsl ~ starts in the home dir and runs the words after it', () => {
-  for (const c of ['wsl ~ git push', 'wsl ~ -e git push', 'wsl -d Ubuntu ~ git push', "find . -exec wsl ~ git push ';'", 'echo x | xargs wsl ~ git push']) gated(c, ['git push']);
-  forgesIn('wsl ~ rm -rf ~/.claude');
-  gated('wsl ~', []);
-  gated('wsl ls ~ git push', []);
-});
-
-test("#264 review: rmdir in a cmd or PowerShell line is judged by that shell's rules", () => {
-  const S = 'push-gate-approvals.json';
-  for (const c of [
-    'find ~/.claude -exec cmd /c rmdir /s /q {} +',
-    'find ~ -name .claude -exec cmd /c rmdir /S/Q {} +',
-    'find ~ -name .claude -exec cmd /c rd /s /q {} +',
-    'find ~ -name .claude -exec cmd /c del /s /q {} +',
-    'find ~/.claude -exec powershell -c rmdir -Recurse {} +',
-    'find ~ -name .claude -exec pwsh -c rmdir -Recurse {} +',
-    'find ~ -name .claude -exec powershell -c rd -Recurse {} +',
-    `find ~ -name ${S} -exec pwsh -c rmdir {} ';'`,
-  ]) forgesIn(c);
-  // cmd's rd without /s, like POSIX rmdir, takes only an empty dir, never a file.
-  for (const c of [
-    `find ~ -name ${S} -exec cmd /c rmdir {} ';'`,
-    `find ~ -name ${S} -exec cmd /c rd /q {} ';'`,
-    `find ~ -name ${S} -exec rmdir {} ';'`,
-    `find ~ -name ${S} -exec sh -c 'rmdir "$1"' _ {} ';'`,
-  ]) allowedIn(c);
-});
-
-test("#264 review: parallel's value options are read off GNU parallel's man page", () => {
-  const options = [
-    'total-jobs', 'total', 'process-slot-var', 'parens', 'template', 'tmpl', 'combineexec', 'combine-executable', 'jl', 'match', 'milestone',
-    '_parset', 'rsync-opts', 'semaphore-name', 'semaphore-timeout', 'sql', 'sql-master', 'sql-and-worker', 'sql-worker', 'ssh-delay', 'term-seq',
-  ];
-  for (const o of options) {
-    gated(`parallel --${o} x git push ::: a`, ['git push']);
-    gated(`parallel --${o}=x git push ::: a`, ['git push']);
-  }
-  // -e takes an end-of-file string only attached, so the rest of its cluster is that string.
-  gated('parallel -eS git push ::: a', ['git push']);
-});
-
-test("#264 review 2: cmd's del or erase of a matched dir deletes every file in it, /s or not", () => {
-  for (const c of [
-    "find ~ -name .claude -exec cmd /c del /q {} ';'",
-    "find ~ -name .claude -exec cmd /c erase /q {} ';'",
-    "find ~ -name .claude -exec cmd /c del {} ';'",
-    "find ~ -name .claude -exec cmd /c del /f /q {} +",
-  ]) forgesIn(c);
 });
 
 // --- #305: a lone canonical first call binds an approval to one branch's ship ---

@@ -10,7 +10,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, dirname, resolve } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 
 export const claudeDir = join(homedir(), '.claude');
 
@@ -104,7 +104,7 @@ export function run(hookName, fn, { failClosed = false } = {}) {
       logError(hookName, err);
       if (failClosed) {
         block(
-          `${hookName} failed before it could check this action (${err?.message || err}) — this guard fails closed, so the action is blocked rather than silently allowed. Fix hooks/${hookName}.mjs with the Edit tool (a guard wired on the file tools fails open for them, so the fix stays reachable) or ask the user; the trace is in ~/.claude/hook-errors.log.`,
+          `${hookName} failed before it could check this action (${err?.message || err}) — this guard fails closed, so the action is blocked rather than silently allowed. Fix hooks/${hookName}.mjs with the Edit tool or ask the user; the trace is in ~/.claude/hook-errors.log.`,
         );
       }
     })
@@ -127,116 +127,12 @@ export function appendTrimmed(file, line, { maxBytes = 512 * 1024, keepLines = 2
 
 // ---- user-approval gates (bash-guard push/PR, browser-gate) -----------------
 // Approval is the user's most recent AskUserQuestion answer (or typed prompt),
-// read from the session transcript. Claude Code writes that file, but so could
-// the model — one appended line would read as approval — so bash-guard refuses
-// any write it can see into a transcript or a gate's state file (#190,
-// isGateRecord). Shared so every gate reads approvals, and refusals, alike.
+// read from the session transcript. Claude Code writes that file; a model could
+// too, and no hook can stop one that would (#291). Shared so every gate reads
+// approvals, and refusals, alike.
 
 export const browserGateStateFile = () => process.env.CLAUDE_BROWSER_GATE_STATE || join(claudeDir, 'browser-gate-sessions.json');
 export const pushGateStateFile = () => process.env.CLAUDE_PUSH_GATE_STATE || join(claudeDir, 'push-gate-approvals.json');
-
-/** A path as one comparable string: forward slashes, absolute, lowercased —
- *  case-folded everywhere, since a Windows path matches in any case and a
- *  Linux false match under ~/.claude costs only a refused write. */
-const normPath = (p) => resolve(String(p).replaceAll('\\', '/')).replaceAll('\\', '/').toLowerCase();
-const under = (p, root) => p === root || p.startsWith(`${root}/`);
-
-const gateStates = () =>
-  [clearanceFile, browserGateStateFile(), pushGateStateFile(), join(claudeDir, 'browser-gate-sessions.json'), join(claudeDir, 'push-gate-approvals.json')].map(normPath);
-
-/** One glob path segment (`*.md`, `push-*`, `a[bc]`) as an anchored RegExp.
- *  A `[` with no closing `]` is a literal (`draft[1.txt`), and a class the
- *  engine rejects (`[z-a]`) matches anything, so a refusal errs toward the
- *  gate and a typo'd name never crashes a fail-closed guard. */
-function segmentRe(glob) {
-  let src = '';
-  for (let i = 0; i < glob.length; i++) {
-    const ch = glob[i];
-    const close = ch === '[' ? glob.indexOf(']', i + 2) : -1;
-    if (ch === '*') src += '[^/]*';
-    else if (ch === '?') src += '[^/]';
-    else if (close !== -1) {
-      src += `[${glob.slice(i + 1, close).replace(/^!/, '^').replaceAll('\\', '\\\\')}]`;
-      i = close;
-    } else src += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-  try {
-    return new RegExp(`^${src}$`);
-  } catch {
-    return /^/;
-  }
-}
-
-/** The glob in `n` (normalised) split as { dir, name }: `dir` the part before
- *  the segment holding the first wildcard, `name` the rest; null for no glob. */
-function globParts(n) {
-  const glob = n.search(/[*?[]/);
-  if (glob === -1) return null;
-  const dir = n.slice(0, n.lastIndexOf('/', glob)) || '/';
-  return { dir, name: n.slice(dir.length + 1) };
-}
-
-/** Could a last-segment glob `re` in `dir` name `f` or a dir on its way down
- *  (`~/*` names `~/.claude`, `~/.claude/*.json` a state file)? */
-const globReaches = (re, dir, f) => under(f, dir) && f !== dir && re.test(f.slice(dir.length + 1).split('/')[0]);
-
-/** Is `p` (absolute) a file the approval gates trust — a session transcript
- *  (`*.jsonl` anywhere under a projects dir, subagent ones included) or a gate
- *  state file (push spends, browser grants, the billed-model clearance)? A
- *  `dirTarget` (a cp/mv destination) counts anywhere under a projects dir; a
- *  `tree` (a dir a copy lands as: `cp -r bk/.claude ~/`) counts when it holds
- *  one. A glob counts when it could reach one: a last-segment glob is matched
- *  against the names on the way (`~/.claude/*.md` can't reach a state file,
- *  `~/*.md` can't reach `.claude`), and inside a projects dir it counts
- *  unless its name ends in a literal extension other than `.jsonl`. The
- *  auto-memory dirs (`projects/<slug>/memory/`) stay writable. #190. */
-export function isGateRecord(p, dirTarget = false, tree = false) {
-  const env = process.env;
-  const roots = [join(claudeDir, 'projects'), env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, 'projects'), env.CLAUDE_PROJECTS_DIR]
-    .filter(Boolean)
-    .map(normPath);
-  const states = gateStates();
-  const n = normPath(p);
-  const inMemory = (q, root) => q.slice(root.length).split('/').includes('memory');
-  const g = globParts(n);
-  if (g && g.name.includes('/')) {
-    return [...states, ...roots].some((f) => under(f, g.dir)) || roots.some((r) => under(g.dir, r) && !inMemory(g.dir, r));
-  }
-  if (g) {
-    const re = segmentRe(g.name);
-    if ([...states, ...roots].some((f) => globReaches(re, g.dir, f))) return true;
-    const root = roots.find((r) => under(g.dir, r));
-    return !!root && !inMemory(g.dir, root) && (dirTarget || tree || !/\.(?!jsonl$)[^.*?[\]/]+$/.test(g.name));
-  }
-  if (states.includes(n)) return true;
-  if (tree && [...states, ...roots].some((f) => under(f, n))) return true;
-  const root = roots.find((r) => under(n, r));
-  if (!root || inMemory(n, root)) return false;
-  return dirTarget || n.endsWith('.jsonl');
-}
-
-/** Does removing (or moving away) `p` (absolute) take a gate state file with
- *  it — the file, a dir holding one, or a glob that could match one? With
- *  `deep`, `p`'s last segment is a name matched at any depth below its dir
- *  (`find DIR -name X -delete`); with `tree` too, a matched dir goes with
- *  everything under it, so the name may match any dir on a state file's way
- *  down (`find DIR -name X -exec rm -rf {} +`, #214). Deleting
- *  push-gate-approvals.json forgets every spend and binding, so it counts as a
- *  write. A transcript doesn't: deleting one can only take an approval away
- *  (the gates fail closed on a missing transcript), never forge one. #190. */
-export function removesGateState(p, deep = false, tree = false) {
-  const states = gateStates();
-  const n = normPath(p);
-  const g = deep ? { dir: n.slice(0, n.lastIndexOf('/')) || '/', name: n.slice(n.lastIndexOf('/') + 1) } : globParts(n);
-  if (!g) return states.some((f) => under(f, n));
-  if (g.name.includes('/')) return states.some((f) => under(f, g.dir));
-  const re = segmentRe(g.name);
-  if (!deep) return states.some((f) => globReaches(re, g.dir, f));
-  // The names whose match takes f: its own, and with `tree` each dir's from
-  // the start dir down (find tests the start dir too).
-  const onTheWay = (f) => (tree ? f.slice(g.dir.lastIndexOf('/') + 1).split('/') : [f.slice(f.lastIndexOf('/') + 1)]);
-  return states.some((f) => under(f, g.dir) && onTheWay(f).some((s) => re.test(s)));
-}
 
 /** Walk a transcript JSONL file backward for the most recent user record
  *  carrying an AskUserQuestion answer (`toolUseResult.answers`: question text
