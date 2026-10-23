@@ -207,6 +207,23 @@ same will hold for the #190 file-tool deny rules (`Edit(~/.claude/projects/**/*.
 and one per gate state file) beside bash-guard rule 11, once they are added to
 `~/.claude/settings.json` (user-side; this repo can't see whether they are).
 
+## autoMode.environment
+
+The auto-mode classifier reads `autoMode.environment` in `~/.claude/settings.json`.
+Four entries must describe the real workspace (verified 2026-10-23, #294):
+`~/code` is **not** a git repo; the repos under it are `claude-config`,
+`docs` (remote `Crawford-Young/docs`, branch `master`), `coe-skills` (remote
+`aderant/coe-skills`, another org),
+plus the web/games/apps projects. Replace these entries (the rest stay as the
+classifier template has them):
+
+```json
+"**Repository visibility**: assume private unless the remote host and repo name indicate otherwise, or a visibility check in the transcript shows public. ~/code is not a git repo; each repo under it has its own GitHub origin (Crawford-Young/* unless noted)",
+"**Default / protected branches**: main (docs uses master); changes reach main through PRs on GitHub (squash, rebase or merge all allowed)",
+"**Source control**: github.com/Crawford-Young/* (claude-config, docs, and the web/games/apps projects) is trusted; aderant/coe-skills (another org) is the one non-Crawford-Young repo. Local commits in these repos are routine; push, PR create and PR merge need user approval",
+"**Trusted repo**: C:\\Users\\young\\code is a workspace folder, not a repo; trusted repos are its subfolders, e.g. claude-config (origin Crawford-Young/claude-config)"
+```
+
 ## Conventions
 
 - Exit-code semantics: 0 = proceed, 2 = block (stderr is the reason), other = non-blocking error. A hook allow does NOT skip deny rules.
