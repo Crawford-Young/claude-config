@@ -43,7 +43,7 @@ GitHub issues, via plain `gh`: harness/cross-repo work in claude-config, project
 
 ## Definition of Done
 
-The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md updated, `.gitignore` and `.env.example` current, no dead code, reflect prompted at wave close. Repo-level doc edits land in the wave branch, never a follow-up PR.
+The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md, `.gitignore` and `.env.example` current, no dead code, reflect at batch close or when asked. Repo-level doc edits land in the wave branch, never a follow-up PR.
 
 ## Context
 

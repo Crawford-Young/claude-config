@@ -40,7 +40,7 @@ node ~/code/claude-config/scripts/cleanup.mjs --kill-port 3000      # kill a dev
 node ~/code/claude-config/scripts/cleanup.mjs --remove-worktree <p> # safe worktree removal
 ```
 
-Gates green (Read `skills/qa/SKILL.md`), reflect run (Read `skills/reflect/SKILL.md`), then `cleanup.mjs` — resolve everything it reports: commit-or-explain uncommitted files, remove finished worktrees, kill stale servers, fix board drift (command printed). Anything left for a next session → Read `skills/continuation/SKILL.md` before ending the session.
+Gates green (Read `skills/qa/SKILL.md`), then `cleanup.mjs` — resolve everything it reports: commit-or-explain uncommitted files, remove finished worktrees, kill stale servers, fix board drift (command printed). Anything left for a next session → Read `skills/continuation/SKILL.md` before ending the session.
 
 ## Recovery signatures
 

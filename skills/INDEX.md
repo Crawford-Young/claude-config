@@ -5,7 +5,7 @@ Skills: Read the path; skills are not Skill-tool invocable. Paths are under ~/co
 - direct a ticket batch (director) → agent-factory/directing-a-batch.md
 - gates, tests, lint, typecheck, verify → qa/SKILL.md
 - land claude-config, recovery, sweep → git-ops/SKILL.md
-- phase/wave end, review, harness updates → reflect/SKILL.md
+- batch close or asked review, harness updates → reflect/SKILL.md
 - work remains before ending the session → continuation/SKILL.md
 - edit CLAUDE.md chain, hooks, skills, agents → harness-editing/SKILL.md
 - new Radix+CVA library component → new-component/SKILL.md

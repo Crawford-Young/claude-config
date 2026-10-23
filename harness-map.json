@@ -200,7 +200,7 @@
    "file": "skills/continuation/SKILL.md",
    "summary": "Launch line plus a paste-ready resume prompt for a fresh session.",
    "rules": [
-    "Always asks fresh-session-or-continue first; never unprompted"
+    "Prints the launch line and block directly; the user ignores it to continue here (#303)"
    ]
   },
   {
@@ -374,18 +374,6 @@
    "label": "session-start",
    "file": "hooks/session-start.mjs",
    "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders."
-  },
-  {
-   "id": "hook:stop-reflect-gate",
-   "kind": "hook",
-   "label": "stop-reflect-gate",
-   "file": "hooks/stop-reflect-gate.mjs",
-   "summary": "Stop — reminds once per merged PR (a successful gh pr merge in the transcript) to run reflect, then to ask fresh-session-or-continue.",
-   "rules": [
-    "Blocks once per merge, never repeatedly (since 2026-08-21)",
-    "Once per merge: handled tool_use ids (newest 200) kept in ~/.claude/stop-reflect-gate.json",
-    "After merge + reflect, blocks once per merge until a fresh-session-or-continue AskUserQuestion (old clear wording still counts) is asked (#122)"
-   ]
   },
   {
    "id": "hook:active-repo",
@@ -1150,12 +1138,6 @@
    "label": "forces the land lane"
   },
   {
-   "from": "hook:stop-reflect-gate",
-   "to": "phase:reflect",
-   "kind": "gates",
-   "label": "Stop: reminds"
-  },
-  {
    "from": "hook:context-gauge",
    "to": "phase:cleanup-continuation",
    "kind": "gates",
@@ -1172,12 +1154,6 @@
    "to": "phase:execute-dispatch",
    "kind": "feeds",
    "label": "in-progress issues"
-  },
-  {
-   "from": "hook:stop-reflect-gate",
-   "to": "store:transcripts",
-   "kind": "reads",
-   "label": "gh pr merge calls"
   },
   {
    "from": "script:reflect-gather",
@@ -1239,12 +1215,6 @@
   },
   {
    "from": "hook:inline-edit-nudge",
-   "to": "script:lib",
-   "kind": "reads",
-   "label": "isMain"
-  },
-  {
-   "from": "hook:stop-reflect-gate",
    "to": "script:lib",
    "kind": "reads",
    "label": "isMain"
@@ -1376,12 +1346,6 @@
    "to": "hook:_hooklib",
    "kind": "reads",
    "label": "shared approval read"
-  },
-  {
-   "from": "hook:stop-reflect-gate",
-   "to": "hook:bash-guard",
-   "kind": "reads",
-   "label": "merge-verb parsing"
   },
   {
    "from": "hook:_hooklib",

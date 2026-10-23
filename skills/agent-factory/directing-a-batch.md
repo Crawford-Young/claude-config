@@ -55,3 +55,5 @@ travels between sessions. A ticket-<repo>-<N> session works only ticket N.
 Audit once from git and GitHub, never prose: each PR's state (`gh pr view <n> --json state`,
 confirmed by an empty `git diff --stat origin/main <branch-head>`) and each issue's closed state
 (`gh issue view <n> --json state`). No roster file or tooling.
+
+Then Read `~/code/claude-config/skills/reflect/SKILL.md` and run it once for the batch.

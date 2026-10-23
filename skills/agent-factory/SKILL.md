@@ -84,4 +84,4 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 
 ## Issue execution
 
-The issue's Done-when is the source of truth; each green step is a commit whose body carries the resume block (`What:` / `Verified:` / `Next:` / `Ruled out:`). Deviations and wrong assumptions go on the issue as comments when they happen. Dispatches run in the background — keep working while children are in flight, and only block when the next task genuinely depends on a still-pending result. At wave close Read `~/code/claude-config/skills/reflect/SKILL.md` and run it.
+The issue's Done-when is the source of truth; each green step is a commit whose body carries the resume block (`What:` / `Verified:` / `Next:` / `Ruled out:`). Deviations and wrong assumptions go on the issue as comments when they happen. Dispatches run in the background — keep working while children are in flight, and only block when the next task genuinely depends on a still-pending result. When the user asks, or once at batch or epic close, Read `~/code/claude-config/skills/reflect/SKILL.md` and run it.

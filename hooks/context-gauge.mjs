@@ -260,7 +260,7 @@ export function warnText(tokens, t, window = null) {
   return [
     `[context-gauge] Session context is ~${fmt(tokens)} tokens (warn line ${fmt(t.warn)})${floorNote(window)}.`,
     `Checkpoint now: commit with the resume block (What/Verified/Next/Ruled out) and comment open blockers on the issue.`,
-    `Then run the continuation skill: Read ~/code/claude-config/skills/continuation/SKILL.md and ask the fresh-session-or-continue AskUserQuestion.`,
+    `Then run the continuation skill: Read ~/code/claude-config/skills/continuation/SKILL.md and print its launch line and paste-ready block (no question).`,
     `Blocking at ${fmt(t.blockAt)}.`,
   ].join(' ');
 }
@@ -271,7 +271,7 @@ export function blockText(tokens, t, window = null) {
     ``,
     `Past ~200k a session costs more per request ($0.083 at 100-200k, $0.105-0.144 above) and its answers degrade. Close out deliberately:`,
     `  1. Commit with the resume block (What/Verified/Next/Ruled out); comment open blockers and deviations on the issue.`,
-    `  2. Run the continuation skill (it asks fresh-session-or-continue).`,
+    `  2. Run the continuation skill (it prints the launch line and block).`,
     `  3. Fresh session: /exit, run the launch line, paste the prompt  — or  /compact <focus for the NEXT task>  if unrecorded conversational state remains.`,
     ``,
     `To override and keep going in this session, include CONTEXT OK in your message.`,
