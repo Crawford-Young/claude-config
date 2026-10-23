@@ -4,7 +4,11 @@ Governs every project in this workspace. Stack rules live in the domain file; th
 
 ## Philosophy
 
-**The simplest way to complete the task: lowest cost, tokens and time.** Every resident line is paid on every turn and dilutes recall, so it needs evidence.
+1. Least overhead. Minimize, in this order: my interruptions, the tokens injected into the agent, the steps per workflow, and the size of the harness.
+2. Trust the agent. Keep only what it can't work out for itself: my preferences, quirks of this environment, and limits on irreversible or outward-facing actions. Cut everything else.
+3. Impact per effort. Pick the most valuable change, not the easiest or the most familiar one. It's usually the simple one.
+4. Leave it better. Fix what's broken in the code path you touched when the same review covers it; otherwise file an issue.
+
 **No outdated-tech bias:** pinned tools, models and vendors carry `verified: YYYY-MM` and are re-checked on evidence, migrated when it says so.
 
 ## Domains
@@ -29,7 +33,7 @@ GitHub issues, via plain `gh`: harness/cross-repo work in claude-config, project
 - **Order:** issue (user approves its Done-when) → plan mode if the shape is open → execute without per-change approval → pause only when done, blocked, or the plan needs revision.
 - **Resume state = commit bodies:** `What:` / `Verified:` (cmd → rc) / `Next:` / `Ruled out:`. A cold session resumes from the last `Next:` plus Done-when.
 - **Bugs and wrong assumptions** found mid-wave → a comment on the issue, or a new `bug` issue. Subagents report `ISSUE:` lines upward instead.
-- **Leave it better:** code a change passes through is brought to standard in the same PR (up to a rewrite, in its own commit), since extended slop compounds. Match the repo's conventions, not its mistakes. A rewrite pins behavior first: tests, or byte-identical output on frozen inputs. Debt outside the touched code → a filed `debt` issue naming its files; commit-body follow-ups never got filed (#137).
+- **Leave it better (4):** unfixed debt → a `debt` issue naming its files; commit-body follow-ups never got filed (#137).
 
 ## Git
 
@@ -44,8 +48,8 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md updated, 
 ## Context
 
 - At a wave boundary: get state on disk (commit body, issue comments), then run the continuation skill — a fresh window, not a compact.
-- Abandoning a wrong implementation path: use `/rewind`, not `/compact` — compacting a wrong path keeps the wrong path's content in the summary that survives.
-- After 2 failed correction attempts on one problem: stop, restart with a continuation prompt, or read the provider's docs first when the fight is against an external service — it's a documented system, not a black box.
+- Abandoning a wrong implementation path: use `/rewind`, not `/compact` — a compact keeps the wrong path in its summary.
+- After 2 failed correction attempts on one problem: stop, restart with a continuation prompt, or read the provider's docs first when the fight is against an external service.
 - Before ending a turn, check the last paragraph you're about to write — if it's a plan, a promise, or a next-step list rather than the work itself, do the work now instead.
 - Switch the session's own model only at a `/clear` boundary — a mid-session switch drops the prior model's thinking blocks and re-reads the whole context uncached.
 
