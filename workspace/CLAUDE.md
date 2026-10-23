@@ -37,7 +37,7 @@ GitHub issues, via plain `gh`: harness/cross-repo work in claude-config, project
 
 ## Git
 
-- **No commit or push without explicit user approval.** Background sessions never auto-commit.
+- **Push, PR create, PR merge need explicit user approval** (hook-gated); commits need none.
 - After every push to a PR branch: watch checks until green. Zero check runs ≠ passing — may mean conflicts.
 - UI-facing waves: hands-on user QA before requesting push/PR.
 
