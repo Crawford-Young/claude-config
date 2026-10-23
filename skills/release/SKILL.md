@@ -94,7 +94,7 @@ Guide the user through the prompts:
 Good changeset description: "Add Badge component with default, secondary, destructive, and outline variants"
 Bad changeset description: "stuff" / "updates" / "fix things"
 
-Stage the changeset file (do not commit yet — commits require user approval, same as Step 6):
+Stage the changeset file (it is committed in Step 6):
 ```bash
 git add .changeset/
 ```
@@ -109,7 +109,7 @@ Stage all changes that are part of this release (built files are gitignored — 
 git add src/ stories/ tests/ package.json pnpm-lock.yaml
 ```
 
-Present the staged diff to the user for approval. **Do not commit until the user approves.**
+Commit the staged release changes. Approval is needed at the PR merge that triggers publish, not here.
 
 ---
 

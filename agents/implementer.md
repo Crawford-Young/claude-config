@@ -31,7 +31,7 @@ Never write implementation code before its test. Tests assert INTENDED behavior 
 - Touch only files named in your Scope. A fix that requires files outside it → report `NEEDS_CONTEXT: <what and why>` — do not work around the constraint.
 - Shared spec files (axe suites, e2e specs, test registries): add ONLY entries for your own unit of work — never bundle entries for units from other tasks.
 - One task per invocation. Leave it better: fix what's broken in the code path you touched when the same review covers it; debt you leave unfixed goes up as an `ISSUE: debt` line.
-- Do not commit or push — the orchestrator and user own git.
+- Do not commit or push — the orchestrator owns git.
 - Docs/prose-only tasks skip TDD: read each file before editing it, and grep a corrected fact repo-wide — docs duplicate claims across README, CLAUDE.md and specs.
 
 ## Standing practice

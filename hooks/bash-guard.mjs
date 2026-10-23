@@ -19,7 +19,7 @@
 //      live FABLE OK marker — the same single-use clearance the Agent and
 //      /model gates spend (_hooklib.mjs), logged to the same dispatch log
 //   8. git push / gh pr create / gh pr merge without the user's approval in
-//      the transcript (CLAUDE.md: "No commit or push without explicit user
+//      the transcript (CLAUDE.md: "Push, PR create, PR merge need explicit user
 //      approval"). `git push --dry-run` and a remote branch delete are exempt.
 //      Approval comes from the latest AskUserQuestion answer
 //      (`toolUseResult.answers`) and the latest prompt the user typed in an
