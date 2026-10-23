@@ -78,8 +78,8 @@ test('blocks gate commands piped to tail/head', () => {
   assert.equal(staticCheck('ls | head'), null);
 });
 
-test('gate-pipe remedy names an absolute, repo-independent qa command', () => {
-  assert.match(staticCheck('pnpm test | tail -20'), /node \$HOME\/code\/claude-config\/scripts\/qa\.mjs/);
+test('gate-pipe remedy is the unpiped redirect-then-filter form (#295)', () => {
+  assert.match(staticCheck('pnpm test 2>&1 | tail -20'), /pnpm test > .*gate-\$\$\.log" 2>&1; echo rc=\$\?; tail -n 20 /);
 });
 
 test('blocks PowerShell content cmdlets', () => {
@@ -1524,6 +1524,62 @@ test('#98: Rust, just and package-runner gates piped onward are blocked', () => 
   for (const cmd of ['cargo fmt --all | head', 'cargo build | tail', 'just dev | tail', 'cargo test > out.txt 2>&1']) {
     assert.equal(staticCheck(cmd), null, cmd);
   }
+});
+
+test('#295: a blocked gate pipe answers with a runnable unpiped rewrite', () => {
+  const log = '"${TMPDIR:-/tmp}/gate-$$.log"';
+  const cases = [
+    ['node --test scripts/test/x.test.mjs 2>&1 | tail -15', `node --test scripts/test/x.test.mjs > ${log} 2>&1; echo rc=$?; tail -n 15 ${log}`],
+    ['pnpm test 2>&1 | tail -n 5', `pnpm test > ${log} 2>&1; echo rc=$?; tail -n 5 ${log}`],
+    // stderr is merged only when the original pipe carried it
+    ['cargo +1.98.0 test -p core -- --nocapture | grep foo', `cargo +1.98.0 test -p core -- --nocapture > ${log}; echo rc=$?; grep foo < ${log}`],
+    ['pnpm test 2>&1 | grep FAIL', `pnpm test > ${log} 2>&1; echo rc=$?; grep FAIL < ${log}`],
+    ['pnpm test |& grep -E "a|b" | sort -u', `pnpm test > ${log} 2>&1; echo rc=$?; grep -E "a|b" < ${log} | sort -u`],
+    ['just test | head', `just test > ${log}; echo rc=$?; head < ${log}`],
+    // the rest of the command is kept as written; a rewrite after a list separator is brace-grouped
+    ['cd ~/code/web && pnpm test 2>&1 | tail -4; git status -s', `cd ~/code/web && { pnpm test > ${log} 2>&1; echo rc=$?; tail -n 4 ${log}; }; git status -s`],
+    ['export A="x;y"; cargo test --workspace 2>&1 | grep -E "ok|FAILED"; ls', `export A="x;y"; { cargo test --workspace > ${log} 2>&1; echo rc=$?; grep -E "ok|FAILED" < ${log}; }; ls`],
+    ['git status >/dev/null 2>&1 && pnpm test | tail -3\nls', `git status >/dev/null 2>&1 && { pnpm test > ${log}; echo rc=$?; tail -n 3 ${log}; }\nls`],
+    ['cd /nope && pnpm test 2>&1 | tail -3 && git commit -m x', `cd /nope && { pnpm test > ${log} 2>&1; echo rc=$?; tail -n 3 ${log}; } && git commit -m x`],
+  ];
+  for (const [cmd, rewrite] of cases) {
+    const msg = staticCheck(cmd, null, 'Bash');
+    assert.ok(msg, cmd);
+    assert.ok(msg.includes(rewrite), `${cmd}\n${msg}`);
+    // the offered rewrite is itself allowed by the guard
+    assert.equal(staticCheck(msg.slice(msg.indexOf('\n') + 1), null, 'Bash'), null, cmd);
+  }
+});
+
+test('#295: no rewrite when it cannot be built faithfully; the block stays', () => {
+  for (const cmd of [
+    'pnpm test 2>&1 | tail > out.txt',
+    'pnpm test | grep ok >/dev/null',
+    'pnpm test | tail || true',
+    'pnpm test | tail &',
+    'echo x | pnpm test | tail',
+    'pnpm test | tail; pnpm lint | head',
+    'pnpm test 2> err.txt | tail',
+    '(cd web; pnpm test | tail)',
+    'pnpm test --reporter=x > r.txt | tail',
+    'echo $(pnpm test | tail)',
+    'bash -c "pnpm test | tail"',
+    'FOO=$(date) pnpm test | tail',
+    '! pnpm test 2>&1 | tail -3', // a leading ! inverts the printed rc
+    'pnpm test 2>&1 | tail -3 # note', // a comment would swallow `< LOG`
+    'pnpm test 2>&1 | tail -f',
+    'pnpm test 2>&1 | tail -F -n 5',
+    'pnpm test 2>&1 | tail -fn 5',
+    'pnpm test 2>&1 | tail -Fn20',
+    'pnpm test 2>&1 | tail -5f',
+  ]) {
+    const msg = staticCheck(cmd, null, 'Bash');
+    assert.ok(msg, cmd);
+    assert.ok(!msg.includes('gate-$$.log'), `${cmd}\n${msg}`);
+  }
+  // PowerShell has different redirect syntax: no rewrite offered there.
+  const ps = staticCheck('pnpm test | Select-Object -Last 5', null, 'PowerShell');
+  assert.ok(ps && !ps.includes('gate-$$.log'), ps);
 });
 
 test('clauses keeps redirections whole; pipes split only without the pipes flag', () => {
