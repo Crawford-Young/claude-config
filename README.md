@@ -13,7 +13,7 @@ Personal Claude Code harness — fully owned skills, cross-platform Node scripts
 | `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
 | `workspace/<domain>/CLAUDE.md` | Web / games / apps standards | `~/code/<domain>/CLAUDE.md` |
 | `workspace/docs/` | Reference docs (web stack docs, `TESTING-TRAPS`, games `DIAGNOSTICS`, brand) | `~/code/docs/...` (file-by-file symlinks) |
-| `rules/` | Path-scoped rules (`paths:` frontmatter, load on a matching file read; `testing-traps` imports `TESTING-TRAPS.md`) | `~/.claude/rules/` (junction) |
+| `rules/` | Path-scoped rules (`paths:` frontmatter, load on a Read/Write/Edit of a matching file; `testing-traps` imports `TESTING-TRAPS.md`) | `~/.claude/rules/` (junction) |
 | `statusline/` | Node statusline + subagent rows (`statusline/README.md`) | `statusLine` + `subagentStatusLine` commands |
 | `docs/` | Repo-only docs (migration notes, prompts) | — |
 

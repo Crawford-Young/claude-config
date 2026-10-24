@@ -34,13 +34,25 @@ $code = "$env:USERPROFILE\code"
 $wsRepo = Join-Path $repo "workspace"
 New-Item -ItemType Directory -Force "$code\docs" | Out-Null
 
+# Get-Item, not Test-Path: Test-Path follows the link, so it can miss a dangling one.
+function Get-Link($linkPath) {
+    $item = Get-Item $linkPath -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return $item }
+    return $null
+}
+
 function Link-Item($linkPath, $targetPath, $kind) {
-    if (Test-Path $linkPath) {
-        $item = Get-Item $linkPath -Force
-        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-            Write-Host "Already linked: $linkPath (skipping)"
+    $link = Get-Link $linkPath
+    if ($link) {
+        $current = @($link.Target)[0]
+        if ($current.TrimEnd('\') -eq $targetPath.TrimEnd('\')) {
+            Write-Host "Already linked: $linkPath"
             return
         }
+        # Delete() on a link removes the link only, never its target's files.
+        $link.Delete()
+        Write-Host "Re-pointing: $linkPath (was $current)"
+    } elseif (Get-Item $linkPath -Force -ErrorAction SilentlyContinue) {
         Write-Warning "$linkPath exists and is not a link. Remove it manually first."
         return
     }
@@ -55,6 +67,12 @@ Link-Item $claudeAgents $agentsDir Junction
 
 # --- Path-scoped rules: user-level, so a junction to this repo loads (#345) ---
 Link-Item "$env:USERPROFILE\.claude\rules" (Join-Path $repo "rules") Junction
+# Retired: a project rule linked in from outside the cwd never loads with paths: (#345).
+$retiredRules = Get-Link "$code\.claude\rules"
+if ($retiredRules) {
+    $retiredRules.Delete()
+    Write-Host "Removed retired link: $code\.claude\rules"
+}
 
 $domains = 'web', 'games', 'apps'
 
