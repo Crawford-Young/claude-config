@@ -8,7 +8,8 @@
 //
 // `new` cuts the branch from origin/<default>, verifies the cut is clean, and
 // copies env files per the repo's .worktreeinclude (default: .env, .env.local),
-// and prints the unit's `claude -n` launch line (session-name.mjs).
+// and prints the unit's launch line: `cd <worktree>; claude` on a ticket branch, whose
+// window session-start names (#344), else `claude -n <name>` (session-name.mjs).
 // `remove` encodes the Windows-safe removal sequence (git remove → force →
 // recursive delete → prune) so node_modules lock/long-path failures never need
 // hand recovery. It first stops whatever listens on the worktree's serve port (a
@@ -27,6 +28,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  branchIssue,
   DEFAULT_ENV_FILES,
   defaultBranch,
   die,
@@ -37,10 +39,8 @@ import {
   installCommand,
   isChosenName,
   isMain,
-  issueNumber,
   listenerPidFromNetstat,
   parseArgs,
-  parseSessionName,
   parseWorktreeInclude,
   readIfExists,
   resolveRepo,
@@ -105,8 +105,10 @@ function cmdNew() {
   if (husky) log(`husky:    ${husky}`);
   log('note:     dev servers in a worktree need their own port; never reuse another session\'s.');
 
-  log(`launch:   ${launchCommand(unit.name)}`);
-  warnOnSessionName(unit);
+  // session-start names a window opened on a ticket branch (#344); anything else needs -n
+  const selfNamed = unit.issue !== null && branchIssue(branch) === String(unit.issue);
+  log(`launch:   ${selfNamed ? `cd ${wtPath.replace(/\\/g, '/')}; claude` : launchCommand(unit.name)}`);
+  if (unit.issue === null) warnOnSessionName(unit);
 }
 
 /** True when the checkout uses husky: a `prepare` script running it, or core.hooksPath under .husky/. */
@@ -140,27 +142,18 @@ function sessionsDir() {
   return process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
 }
 
-/** Leading issue number of a slug/branch-tail (`72-foo` -> '72', `007-foo` -> '7'), or
- *  null; `0-foo` has none, as sessionName takes only a positive number. */
-function leadingIssueNumber(s) {
-  const m = /^(\d+)-/.exec(s || '');
-  return m ? issueNumber(m[1]) : null;
-}
-
 /** The worktree's unit: a ticket on the slug's leading issue number, else the branch's;
  *  with neither, a general session on the slug. → { name, repo, issue } (issue null for general). */
 function expectedUnit(repoName, slug, branch) {
-  const n = leadingIssueNumber(slug) || leadingIssueNumber((branch || '').replace(/^feat\//, ''));
+  const n = branchIssue(slug) || branchIssue(branch);
   const repo = slugify(repoName);
   if (n && repo) return { name: sessionName('ticket', repo, n), repo, issue: Number(n) };
   return { name: generalSessionName(slugify(slug) || 'worktree'), repo, issue: null };
 }
 
-// Warn (never block) when the running session's name won't join this unit's spend
-// and reflect: auto-generated, untyped (the parser's general failsafe), or another
-// unit's. A ticket or epic on this repo and issue passes, typed, tree or legacy, and so
-// does an orchestrator cutting a child's worktree (a director, or an epic or tree repo
-// lead, not one of its workers, of this repo); with no issue to check against, any chosen name passes. The fix is the launch line for the
+// For a general unit (a ticket's window names itself, #344): warn (never block) when the
+// running session's name won't join its spend and reflect, i.e. auto-generated or untyped
+// (the parser's general failsafe); any chosen name passes. The fix is the launch line for the
 // next window, or a /rename for this one (agents can't run slash commands); in a desktop session
 // (entrypoint claude-desktop) it is a line telling the agent to call set_session_title. Silent
 // on non-Claude shells (no CLAUDE_PID / no registry file).
@@ -180,18 +173,11 @@ function warnOnSessionName(unit) {
 
   if (!data || typeof data !== 'object') return;
   const { name, nameSource } = data;
-  const p = parseSessionName(name);
+  if (isChosenName(name, nameSource)) return;
   const shown = name ? `session name '${name}'` : 'session has no name and';
-  const userSet = nameSource === 'user' || nameSource === 'peer';
   let problem;
-  if (!isChosenName(name, nameSource)) {
-    if (!userSet) problem = `${shown} is auto-generated`;
-    else problem = name ? `${shown} has no type` : 'session has no name';
-  } else if (unit.issue !== null && !((p.type === 'ticket' || p.type === 'epic') && p.repo === unit.repo && p.issue === unit.issue)) {
-    // a director, or an epic or repo lead of this repo, is cutting a child's worktree: it keeps its own name
-    if (p.type === 'director' || ((p.type === 'epic' || (p.type === 'repo' && !p.role)) && p.repo === unit.repo)) return;
-    problem = `${shown} names another unit`;
-  } else return;
+  if (nameSource !== 'user' && nameSource !== 'peer') problem = `${shown} is auto-generated`;
+  else problem = name ? `${shown} has no type` : 'session has no name';
   if (data.entrypoint === 'claude-desktop') {
     // a script can't call the tool itself, so it tells the agent to
     log(`TITLE: ${problem} — spend and reflect join on the parsed session name. Call mcp__ccd_session_mgmt__set_session_title with '${unit.name}' now.`);

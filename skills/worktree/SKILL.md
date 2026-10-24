@@ -40,7 +40,7 @@ First stops whatever listens on the worktree's serve port, read from a serve/dev
 
 ## Session name
 
-`worktree.mjs new` prints the session's launch line and, when the current session name doesn't match, warns in the CLI or tells a desktop session to call `mcp__ccd_session_mgmt__set_session_title` with the expected name (never blocks). Lead the worktree slug with the issue number (e.g. `72-issues-tracker`) so the script can derive it.
+Lead the slug with the issue number (e.g. `72-issues-tracker`): on a branch that leads with it, session-start names any session started in the worktree `ticket-<repo>-<N>` unless it already has a title (#344), so `worktree.mjs new` prints `cd <worktree>; claude` as the ticket's launch line. With no issue number it prints a `claude -n general-<slug>` line and, when the current session has no chosen name, warns in the CLI or tells a desktop session to call `mcp__ccd_session_mgmt__set_session_title` (never blocks).
 
 ## Rules
 

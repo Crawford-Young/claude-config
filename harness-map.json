@@ -372,7 +372,7 @@
    "kind": "hook",
    "label": "session-start",
    "file": "hooks/session-start.mjs",
-   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders."
+   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders; names an untitled session started in a ticket worktree ticket-<repo>-<N> via sessionTitle (#344)."
   },
   {
    "id": "hook:active-repo",
@@ -1108,6 +1108,12 @@
    "to": "phase:cleanup-continuation",
    "kind": "gates",
    "label": "checkpoint before context grows costly"
+  },
+  {
+   "from": "hook:session-start",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "worktreeTicketName"
   },
   {
    "from": "hook:session-start",

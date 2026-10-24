@@ -4,8 +4,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnHarness } from './_spawn.mjs';
-import { generalSessionName, isChosenName, issueNumber, parseSessionName, sessionKey, sessionName, slugify } from '../lib.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { spawnHarness, tempDir } from './_spawn.mjs';
+import { branchIssue, generalSessionName, isChosenName, issueNumber, parseSessionName, sessionKey, sessionName, slugify, worktreeTicketName } from '../lib.mjs';
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), '..', 'session-name.mjs');
 
@@ -315,4 +317,55 @@ test('CLI prints a bare tree name for an Agent dispatch', () => {
     assert.match(r.stderr, /usage: session-name\.mjs/, args.join(' '));
   }
   assert.match(run('tree', 'harness', 'repo', '--ticket', '5', '--round', '2').stderr, /round needs a worker \(--worker/);
+});
+
+// ---- branchIssue / worktreeTicketName (#344) ----
+
+test('branchIssue reads the number a slug or branch leads with, after at most one prefix segment', () => {
+  assert.equal(branchIssue('72-foo'), '72');
+  assert.equal(branchIssue('feat/72-foo'), '72');
+  assert.equal(branchIssue('fix/72-foo'), '72');
+  assert.equal(branchIssue('chore/072-foo'), '72');
+  assert.equal(branchIssue('007-foo'), '7');
+});
+
+test('branchIssue is null with no leading number, a zero number, or a two-segment prefix', () => {
+  for (const s of ['0-foo', 'feat/0-foo', 'feat/foo', 'foo-72', 'feat/foo-72', 'a/b/72-x', '72', 'feat/72', '', null, undefined]) {
+    assert.equal(branchIssue(s), null, String(s));
+  }
+});
+
+/** A temp repo `<root>/<name>` with one commit; returns its path. */
+function tempRepo(name) {
+  const repo = join(tempDir('wtn-'), name);
+  mkdirSync(repo);
+  git(repo, 'init', '-b', 'main');
+  git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init');
+  return repo;
+}
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' });
+
+test('worktreeTicketName names a linked worktree on a numbered branch after the main checkout folder', () => {
+  const repo = tempRepo('My_App');
+  const wt = join(dirname(repo), 'wt-12');
+  git(repo, 'worktree', 'add', '-b', 'chore/12-x', wt);
+  assert.equal(worktreeTicketName(wt), 'ticket-my-app-12');
+});
+
+test('worktreeTicketName is null for the main checkout, an unnumbered branch, and a non-repo dir', () => {
+  const repo = tempRepo('app');
+  assert.equal(worktreeTicketName(repo), null);
+  const wt = join(dirname(repo), 'wt-nonum');
+  git(repo, 'worktree', 'add', '-b', 'feat/no-number', wt);
+  assert.equal(worktreeTicketName(wt), null);
+  assert.equal(worktreeTicketName(tempDir('plain-')), null);
+});
+
+test('worktreeTicketName follows a branch switch inside the worktree', () => {
+  const repo = tempRepo('app');
+  const wt = join(dirname(repo), 'wt-sw');
+  git(repo, 'worktree', 'add', '-b', 'feat/77-a', wt);
+  assert.equal(worktreeTicketName(wt), 'ticket-app-77');
+  git(wt, 'switch', '-c', 'scratch');
+  assert.equal(worktreeTicketName(wt), null);
 });
