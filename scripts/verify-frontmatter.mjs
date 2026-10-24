@@ -342,6 +342,29 @@ function checkClaudeMdCaps(workspaceRoot) {
 }
 
 /**
+ * Rules (#345): <root>/rules is junctioned to ~/.claude/rules, which loads in every project. A
+ * rule with `paths:` frontmatter loads only on a matching file read, so it is on demand; one
+ * without would be resident in every session with no cap, so it fails. Absent dir = no rules.
+ */
+function checkRules(workspaceRoot) {
+  const root = join(workspaceRoot, 'rules');
+  if (!existsSync(root) || !statSync(root).isDirectory()) return { problems: [], sizes: [] };
+  const problems = [];
+  const sizes = [];
+  const names = readdirSync(root, { recursive: true }).map(String).filter((n) => n.endsWith('.md'));
+  for (const name of names.sort()) {
+    const rel = `rules/${name.replace(/\\/g, '/')}`;
+    const text = readFileSync(join(root, name), 'utf8');
+    const parsed = parseFrontmatter(text);
+    if (parsed.problem || !parsed.fields.has('paths')) {
+      problems.push(`${rel}: no paths: frontmatter — it would load in every session, uncapped; scope it with paths: or move it into a capped CLAUDE.md`);
+    }
+    sizes.push({ rel, bytes: byteLength(text) });
+  }
+  return { problems, sizes };
+}
+
+/**
  * Synced claude.ai skills and plugin skills (#124): third-party files that still sit in the
  * skill listing, so their description bytes are reported — never capped, never a problem.
  * Recursively finds every file named exactly `SKILL.md` (nested layouts differ: bucket/skill/ vs
@@ -412,6 +435,10 @@ console.log(`skills/INDEX.md: ${skillIndexResult.bytes} B (cap ${CAPS.skillIndex
 for (const { rel, bytes, cap } of claudeMdCapResult.sizes) {
   console.log(`${rel}: ${bytes} B (cap ${cap} B)`);
 }
+const rulesResult = checkRules(WORKSPACE_ROOT);
+for (const { rel, bytes } of rulesResult.sizes) {
+  console.log(`${rel}: ${bytes} B (on demand, paths-scoped; imports not counted)`);
+}
 
 let syncedTotal = 0;
 for (const [label, root] of [
@@ -432,6 +459,7 @@ const residentProblems = [
   ...descriptionCapResult.problems,
   ...skillIndexResult.problems,
   ...claudeMdCapResult.problems,
+  ...rulesResult.problems,
 ];
 if (residentProblems.length > 0) {
   console.error(`\n--- RESIDENT BYTE CAP EXCEEDED (${residentProblems.length}) — BLOCKER ---`);

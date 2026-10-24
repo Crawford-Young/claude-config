@@ -496,3 +496,23 @@ test('a missing synced dir prints not present and exit stays 0', () => {
   assert.match(out, /synced plugins \(.*\): not present/);
   assert.match(out, /synced listing total: 0 B \(report only, no cap\)/);
 });
+
+// Rules (#345): rules/ is junctioned to ~/.claude/rules, which loads in every project; a rule
+// without paths: frontmatter would be resident in every session with no cap.
+test('a rule scoped with paths: frontmatter passes and is reported as on-demand', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'traps.md'), '---\npaths:\n  - "**/*.test.tsx"\n---\nbody\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 0, out);
+  assert.match(out, /rules\/traps\.md: \d+ B \(on demand/);
+});
+
+test('a rule with no paths: frontmatter fails as uncapped resident context', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'always.md'), 'no frontmatter, loads every session\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1, out);
+  assert.match(out, /rules\/always\.md: no paths:/);
+});

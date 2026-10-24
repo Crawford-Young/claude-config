@@ -19,9 +19,7 @@
    "label": "web/CLAUDE.md",
    "file": "workspace/web/CLAUDE.md",
    "summary": "Next.js, TypeScript, Tailwind, Radix+CVA, Vitest, Playwright, Vercel stack rules.",
-   "rules": [
-    "Hand-load TESTING-TRAPS.md before interactive-UI test work"
-   ]
+   "rules": []
   },
   {
    "id": "doc:claude-md-games",
@@ -41,6 +39,17 @@
    "summary": "Expo (React Native), Tauri v2, Jest+RNTL, Maestro stack rules.",
    "rules": [
     "TypeScript strict, no any or @ts-ignore"
+   ]
+  },
+  {
+   "id": "doc:rules",
+   "kind": "config",
+   "label": "rules/ (~/.claude/rules)",
+   "file": "rules/testing-traps.md",
+   "summary": "User-level path-scoped rules, junctioned to ~/.claude/rules (#345). Each loads only when Claude reads a file its paths: globs match.",
+   "rules": [
+    "TESTING-TRAPS.md (imported) on a *.test.tsx, *.spec.ts or e2e/ read",
+    "Dependency rules on a package.json or pnpm lockfile read"
    ]
   },
   {
@@ -1413,6 +1422,12 @@
    "to": "script:session-name",
    "kind": "invokes",
    "label": "tree names (directing-a-batch)"
+  },
+  {
+   "from": "script:verify-frontmatter",
+   "to": "doc:rules",
+   "kind": "gates",
+   "label": "every rule carries paths:"
   }
  ]
 }
