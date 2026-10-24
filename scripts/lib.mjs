@@ -4,7 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -315,6 +315,26 @@ export function isChosenName(name, nameSource) {
 export function sessionKey(title) {
   const p = parseSessionName(title);
   return p.name ?? (p.raw.trim() || null);
+}
+
+/** The issue number a slug or branch leads with, after one `<prefix>/` (`72-foo`,
+ *  `feat/72-foo`, `chore/072-foo` -> '72'), or null. */
+export function branchIssue(s) {
+  const m = /^(\d+)-/.exec(String(s ?? '').replace(/^[^/]*\//, ''));
+  return m ? issueNumber(m[1]) : null;
+}
+
+/** The ticket session name for a linked worktree rooted at `dir` whose branch leads with
+ *  an issue number (`ticket-<repo>-<N>`, repo from the main checkout's folder), else null.
+ *  Reads the .git pointer and HEAD directly, so it spawns nothing: session-start runs it
+ *  on every session start. */
+export function worktreeTicketName(dir) {
+  const gitdir = /^gitdir:\s*(.+)$/m.exec(readIfExists(join(dir, '.git')) || '')?.[1]?.trim();
+  if (!gitdir || !/[\\/]worktrees[\\/][^\\/]+$/.test(gitdir)) return null; // main checkout, submodule
+  const abs = resolve(dir, gitdir);
+  const n = branchIssue(/^ref: refs\/heads\/(.+)$/m.exec(readIfExists(join(abs, 'HEAD')) || '')?.[1]);
+  const repo = slugify(basename(resolve(abs, '..', '..', '..')));
+  return n && repo ? sessionName('ticket', repo, n) : null;
 }
 
 /** Resolve a repo argument (relative or absolute) and verify it is a repo. */

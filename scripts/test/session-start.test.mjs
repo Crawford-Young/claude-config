@@ -1,6 +1,7 @@
 // node --test scripts/test/session-start.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { execHarness, tempDir } from './_spawn.mjs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -126,4 +127,48 @@ test('first run (no marker) and a missing log stay silent but leave a marker', (
   assert.doesNotMatch(first.out, /hook-errors\.log/);
   assert.ok(existsSync(join(first.home, '.claude', 'hook-errors.seen')));
   assert.doesNotMatch(runWithClaudeDir({}).out, /hook-errors\.log/);
+});
+
+// ---- sessionTitle in a ticket worktree (#344) ----
+
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' });
+
+/** A temp repo `app` with a linked worktree on `branch`; returns { repo, wt }. */
+function ticketWorktree(branch = 'chore/12-x') {
+  const repo = join(tempDir('ss-wt-'), 'app');
+  mkdirSync(repo);
+  git(repo, 'init', '-b', 'main');
+  git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init');
+  const wt = join(dirname(repo), 'app-wt');
+  git(repo, 'worktree', 'add', '-b', branch, wt);
+  return { repo, wt };
+}
+
+for (const source of ['startup', 'resume']) {
+  test(`source=${source} in an untitled ticket worktree: one JSON line titles it and carries the context`, () => {
+    const { wt } = ticketWorktree();
+    const out = JSON.parse(runHook({ source, cwd: wt }));
+    assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart');
+    assert.equal(out.hookSpecificOutput.sessionTitle, 'ticket-app-12');
+    assert.ok(out.hookSpecificOutput.additionalContext.includes(index));
+  });
+}
+
+test('a session that already has a title (-n, /rename, an earlier hook) is never re-titled', () => {
+  const { wt } = ticketWorktree();
+  for (const source of ['startup', 'resume']) {
+    const out = runHook({ source, cwd: wt, session_title: 'manual' });
+    assert.doesNotMatch(out, /sessionTitle/, source);
+    assert.ok(out.includes(index), source);
+  }
+});
+
+test('no title on clear or compact, outside a ticket worktree, or with no cwd', () => {
+  const { repo, wt } = ticketWorktree();
+  const { wt: plain } = ticketWorktree('feat/no-number');
+  for (const payload of [{ source: 'clear', cwd: wt }, { source: 'compact', cwd: wt }, { source: 'startup', cwd: repo }, { source: 'startup', cwd: plain }, { source: 'startup' }]) {
+    const out = runHook(payload);
+    assert.doesNotMatch(out, /sessionTitle/, JSON.stringify(payload));
+    assert.ok(out.includes(index), JSON.stringify(payload));
+  }
 });

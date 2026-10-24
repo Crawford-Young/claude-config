@@ -178,31 +178,46 @@ test('.worktreeinclude overrides the default env set', () => {
   assert.ok(!existsSync(join(wt, '.env')), '.env excluded by .worktreeinclude');
 });
 
-test('new warns when the session name is auto-generated, even if it happens to match', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'app-72', 'auto');
-  const env = {
-    CLAUDE_WORKSPACE_ROOT: root,
-    CLAUDE_SESSIONS_DIR: sessionsDir,
-    CLAUDE_PID: '4242',
-  };
+test('a ticket unit never warns about the session name: its window names itself (#344)', () => {
+  for (const [name, source, entrypoint] of [['app-72', 'auto'], ['whatever', 'auto'], ['some-other-name', 'user'], ['ticket-app-73', 'user'], ['director-harness', 'user'], ['whatever', 'auto', 'claude-desktop']]) {
+    const root = tempDir('wt-');
+    const repo = makeRepoWithOrigin(root);
+    const sessionsDir = join(root, 'sessions');
+    writeSession(sessionsDir, '4242', name, source, entrypoint);
+    const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
 
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.match(out, /WARNING: session name 'app-72' is auto-generated/);
-  assert.doesNotMatch(out, /names another unit|no type/);
-  assert.doesNotMatch(out, /statusline/);
-  assert.match(out, /claude -n ticket-app-72\n/);
-  assert.match(out, /\/rename ticket-app-72\b/);
+    const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
+    assert.doesNotMatch(out, /WARNING|TITLE:|\/rename|set_session_title/, name);
+    assert.match(out, /launch: {3}cd \S+app-72-foo; claude\n/, name);
+    assert.ok(existsSync(join(root, '.worktrees', 'app-72-foo')), 'the worktree is still made');
+  }
 });
 
-test('new prints the ticket launch line from the slug or the branch number', () => {
+test('new prints the cd launch line when the branch carries the ticket number, from the slug or the branch', () => {
   const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const env = { CLAUDE_WORKSPACE_ROOT: root };
-  assert.match(execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env }), /launch: {3}claude -n ticket-app-72\n/);
-  assert.match(execHarness(script, ['new', repo, 'bar', '--branch', 'feat/88-bar'], { encoding: 'utf8', env }), /launch: {3}claude -n ticket-app-88\n/);
+  const fwd = (p) => p.replace(/\\/g, '/');
+  const a = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
+  assert.ok(a.includes('launch:   cd ' + fwd(join(root, '.worktrees', 'app-72-foo')) + '; claude\n'), a);
+  assert.doesNotMatch(a, /claude -n/);
+  const b = execHarness(script, ['new', repo, 'bar', '--branch', 'feat/88-bar'], { encoding: 'utf8', env });
+  assert.ok(b.includes('launch:   cd ' + fwd(join(root, '.worktrees', 'app-bar')) + '; claude\n'), b);
+});
+
+test('new maps the branch number from any one-segment prefix', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const out = execHarness(script, ['new', repo, 'bar', '--branch', 'fix/88-bar'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
+  assert.match(out, /launch: {3}cd \S+app-bar; claude\n/);
+  assert.doesNotMatch(out, /claude -n/);
+});
+
+test('a ticket number only in the slug, with a branch that does not carry it, keeps the -n launch line', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const out = execHarness(script, ['new', repo, '72-foo', '--branch', 'feat/bar'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
+  assert.match(out, /launch: {3}claude -n ticket-app-72\n/);
 });
 
 test('new normalizes a leading-zero issue number and treats 0 as no number, never throwing mid-new', () => {
@@ -211,13 +226,13 @@ test('new normalizes a leading-zero issue number and treats 0 as no number, neve
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   const z = spawnHarness(script, ['new', repo, '007-foo'], { env });
   assert.equal(z.status, 0, z.stderr);
-  assert.match(z.stdout, /launch: {3}claude -n ticket-app-7\n/);
+  assert.match(z.stdout, /launch: {3}cd \S+app-007-foo; claude\n/);
   const zero = spawnHarness(script, ['new', repo, '0-foo'], { env });
   assert.equal(zero.status, 0, zero.stderr);
   assert.match(zero.stdout, /launch: {3}claude -n general-0-foo\n/);
 });
 
-test('a director, or an epic or repo lead of this repo, gets the child launch line and no warning', () => {
+test('a director, or an epic or repo lead of this repo, gets the ticket launch line and no warning', () => {
   for (const name of ['director-harness', 'epic-app-40', 'harness_app', 'harness_app_e40']) {
     const root = tempDir('wt-');
     const repo = makeRepoWithOrigin(root);
@@ -226,7 +241,7 @@ test('a director, or an epic or repo lead of this repo, gets the child launch li
     const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
 
     const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-    assert.match(out, /launch: {3}claude -n ticket-app-72\n/, name);
+    assert.match(out, /launch: {3}cd \S+app-72-foo; claude\n/, name);
     assert.doesNotMatch(out, /WARNING|\/rename/, name);
   }
 });
@@ -246,76 +261,30 @@ test('new survives a null session registry entry', () => {
   writeFileSync(join(sessionsDir, '4242.json'), 'null');
   const r = spawnHarness(script, ['new', repo, '72-foo'], { env: { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' } });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /launch: {3}claude -n ticket-app-72\n/);
+  assert.match(r.stdout, /launch: {3}cd \S+app-72-foo; claude\n/);
 });
 
-test('new warns when the user-set session name has no type', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'some-other-name', 'user');
-  const env = {
-    CLAUDE_WORKSPACE_ROOT: root,
-    CLAUDE_SESSIONS_DIR: sessionsDir,
-    CLAUDE_PID: '4242',
-  };
-
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.match(out, /WARNING: session name 'some-other-name' has no type/);
-  assert.doesNotMatch(out, /statusline/);
-  assert.match(out, /claude -n ticket-app-72\n/);
-  assert.match(out, /\/rename ticket-app-72\b/);
-});
-
-test('new says nothing when the session name is this unit, as a typed or legacy ticket or an epic', () => {
-  for (const [name, source] of [['app-72', 'user'], ['ticket-app-72', 'user'], ['epic-app-72', 'peer'], ['ticket-app-72', undefined], ['ticket-app-72', 'auto'], ['Ticket-App-72', 'derived'], ['harness_app_t72', 'auto'], ['harness_app_e40_t72_impl', undefined]]) {
-    const root = tempDir('wt-');
-    const repo = makeRepoWithOrigin(root);
-    const sessionsDir = join(root, 'sessions');
-    writeSession(sessionsDir, '4242', name, source);
-    const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-    const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-    assert.doesNotMatch(out, /WARNING: session/, name);
-  }
-});
-
-test('new warns, never blocks, when the session names another unit', () => {
-  for (const name of ['ticket-app-73', 'ticket-other-72', 'epic-other-72', 'harness_app_t73', 'harness_other', 'harness_app_impl']) {
-    const root = tempDir('wt-');
-    const repo = makeRepoWithOrigin(root);
-    const sessionsDir = join(root, 'sessions');
-    writeSession(sessionsDir, '4242', name, 'user');
-    const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-    const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-    assert.match(out, new RegExp(`WARNING: session name '${name}' names another unit`), name);
-    assert.match(out, /claude -n ticket-app-72\n/, name);
-    assert.ok(existsSync(join(root, '.worktrees', 'app-72-foo')), 'the worktree is still made');
-  }
-});
-
-test('new in a desktop session tells the agent to call set_session_title, not to launch or /rename', () => {
+test('new in a desktop session tells the agent to call set_session_title for a general unit, not to launch or /rename', () => {
   const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
   writeSession(sessionsDir, '4242', 'whatever', 'auto', 'claude-desktop');
   const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
 
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.match(out, /Call mcp__ccd_session_mgmt__set_session_title with 'ticket-app-72'/);
+  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
+  assert.match(out, /Call mcp__ccd_session_mgmt__set_session_title with 'general-no-number-here'/);
   assert.doesNotMatch(out, /\/rename/);
   assert.doesNotMatch(out, /WARNING: session name/);
 });
 
-test('new in a desktop session whose name already matches says nothing', () => {
+test('new in a desktop session whose name is chosen says nothing for a general unit', () => {
   const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'ticket-app-72', 'user', 'claude-desktop');
+  writeSession(sessionsDir, '4242', 'general-cleanup', 'user', 'claude-desktop');
   const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
 
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
+  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
   assert.doesNotMatch(out, /set_session_title|WARNING: session/);
 });
 
@@ -362,9 +331,9 @@ test('an auto session with no name never prints undefined', () => {
     CLAUDE_PID: '4242',
   };
 
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
+  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
   assert.match(out, /WARNING: session/);
-  assert.match(out, /\/rename ticket-app-72\b/);
+  assert.match(out, /\/rename general-no-number-here\b/);
   assert.doesNotMatch(out, /undefined/);
 });
 
