@@ -2583,6 +2583,30 @@ test('#305 #147: a bound merge that errored is refunded; a binding whose every c
   assert.match(run('git push origin feat/x', 'toolu_C', s3) || '', /already spent/);
 });
 
+// gh's own wording when a merge went through and its --delete-branch cleanup
+// failed after it: a worktree holds the head branch (strate PR 33, aefcfde4).
+const MERGED_THEN_CLEANUP_FAILED =
+  "Exit code 1\nfailed to delete local branch feat/x: failed to run git: error: cannot delete branch 'feat/x' used by worktree at 'C:/w/x'";
+const errored = (id, content) => ({ type: 'user', uuid: `u-${id}`, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content }] } });
+
+test('#317: a merge whose only error is its branch cleanup is not refunded (one-shot)', () => {
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptOf(h, answered('Merge it'), errored('toolu_M', MERGED_THEN_CLEANUP_FAILED));
+  assert.equal(pushGateReason('gh pr merge 12 --rebase --delete-branch', '/repo', t, stateFile, 'toolu_M'), null);
+  assert.match(pushGateReason('gh pr merge 13 --rebase', '/repo', t, stateFile, 'toolu_N') || '', /already spent/);
+});
+
+test('#317: a bound merge whose only error is its branch cleanup still uses the approval up', () => {
+  const dir = shipRepo();
+  const { h, stateFile } = pushGateTmp();
+  const t = transcriptOf(h, answered('Merge it'), errored('toolu_M', [{ type: 'text', text: MERGED_THEN_CLEANUP_FAILED }]));
+  const run = (cmd, id) => pushGateReason(cmd, dir, t, stateFile, id, null, { prHead });
+  assert.equal(run('gh pr merge 12 --rebase -d', 'toolu_M'), null);
+  // Not released as a binding that shipped nothing: another branch needs its own answer.
+  assert.match(run('gh pr merge 13 --rebase', 'toolu_N') || '', /merged/);
+  assert.match(run('git push origin feat/x', 'toolu_P') || '', /merged/);
+});
+
 test('#305: the block quotes the current CLAUDE.md approval rule', () => {
   const { h, stateFile } = pushGateTmp();
   assert.match(pushGateReason('git push', '/repo', join(h, 'none.jsonl'), stateFile) || '', /Push, PR create, PR merge need explicit user approval \(hook-gated\); commits need none\./);

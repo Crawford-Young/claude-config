@@ -156,7 +156,9 @@ fixed false verdict; change them only with a test:
   or `GH_REPO`/`GH_HOST` in the hook's env, a PowerShell cd path holding a
   wildcard char (`[ ] * ?`), a detached HEAD, a failed PR lookup. Refunds (#147): one-shot spends as before; a bound create or merge
   whose tool_result is `is_error` is undone, and a binding whose every call
-  errored is released, so the next call counts as a first. A
+  errored is released, so the next call counts as a first. An error whose
+  text is gh's `failed to delete local|remote branch` refunds nothing: the
+  merge went through before its cleanup failed (#317). A
   missing/unreadable transcript or no approving record
   blocks with a message telling the model to ask via AskUserQuestion and
   retry. A non-gated command never reads the transcript.
