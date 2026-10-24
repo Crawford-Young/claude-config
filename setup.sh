@@ -52,13 +52,12 @@ AGENTS_DIR="$REPO/agents"
 CLAUDE_AGENTS="$HOME/.claude/agents"
 link_item "$CLAUDE_AGENTS" "$AGENTS_DIR"
 
+# --- Path-scoped rules: user-level, so a symlink to this repo loads (#345) ---
+link_item "$HOME/.claude/rules" "$REPO/rules"
+
 DOMAINS="web games apps"
 
 link_item "$CODE/CLAUDE.md" "$WS/CLAUDE.md"
-
-# Path-scoped rules (.claude/rules) — link so ancestor rules load workspace-wide (G34)
-mkdir -p "$CODE/.claude"
-link_item "$CODE/.claude/rules" "$WS/.claude/rules"
 
 # Domain standards — one CLAUDE.md symlink per domain folder
 for domain in $DOMAINS; do

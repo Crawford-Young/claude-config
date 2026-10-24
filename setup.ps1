@@ -53,13 +53,12 @@ $agentsDir = Join-Path $repo "agents"
 $claudeAgents = "$env:USERPROFILE\.claude\agents"
 Link-Item $claudeAgents $agentsDir Junction
 
+# --- Path-scoped rules: user-level, so a junction to this repo loads (#345) ---
+Link-Item "$env:USERPROFILE\.claude\rules" (Join-Path $repo "rules") Junction
+
 $domains = 'web', 'games', 'apps'
 
 Link-Item "$code\CLAUDE.md" "$wsRepo\CLAUDE.md" SymbolicLink
-
-# Path-scoped rules (.claude/rules) — junction so ancestor rules load workspace-wide (G34)
-New-Item -ItemType Directory -Force "$code\.claude" | Out-Null
-Link-Item "$code\.claude\rules" "$wsRepo\.claude\rules" Junction
 
 # Domain standards — one CLAUDE.md symlink per domain folder
 foreach ($domain in $domains) {

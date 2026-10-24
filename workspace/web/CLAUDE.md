@@ -9,7 +9,6 @@ Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (A
 > - [`../docs/web/ENV.md`](../docs/web/ENV.md) — env var conventions
 > - [`../docs/web/COMPONENT-LIBRARY.md`](../docs/web/COMPONENT-LIBRARY.md) — Radix+CVA component guide
 > - [`../docs/web/TYPESCRIPT-STYLE.md`](../docs/web/TYPESCRIPT-STYLE.md) — full TypeScript style guide
-> - [`../docs/web/TESTING-TRAPS.md`](../docs/web/TESTING-TRAPS.md) — **hand-load before writing tests or QA for interactive UI** (the unit-green/live-broken bug family)
 > - [`../docs/brand/`](../docs/brand/) — brand identity, design system, motion
 
 ## Stack (verified: 2026-10, #80)
@@ -46,7 +45,7 @@ Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (A
 - [ ] Playwright E2E green · TypeScript zero errors · ESLint + Prettier clean
 - [ ] Storybook builds; every `ui/` component has a story
 - [ ] Lighthouse 100×4 (dark + light) against a production build; documented deviations carry, don't re-litigate. Attribute a low score before treating it as wave scope — rerun on an untouched route.
-- [ ] axe zero violations in BOTH themes — per-surface jest-axe AND one browser-axe sweep per new/reshaped route (component-level green is not page-level green — TESTING-TRAPS.md)
+- [ ] axe zero violations in BOTH themes — per-surface jest-axe AND one browser-axe sweep per new/reshaped route (component-level green is not page-level green)
 - [ ] Manual hands-on pass for interactive UI — drive the real feature in a browser
 - [ ] Sentry reporting · Dependabot present
 
