@@ -188,7 +188,7 @@ test('a ticket unit never warns about the session name: its window names itself 
 
     const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
     assert.doesNotMatch(out, /WARNING|TITLE:|\/rename|set_session_title/, name);
-    assert.match(out, /launch: {3}cd \S+app-72-foo; claude\n/, name);
+    assert.match(out, /launch: {3}cd "\S+app-72-foo"; claude\n/, name);
     assert.ok(existsSync(join(root, '.worktrees', 'app-72-foo')), 'the worktree is still made');
   }
 });
@@ -199,17 +199,17 @@ test('new prints the cd launch line when the branch carries the ticket number, f
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   const fwd = (p) => p.replace(/\\/g, '/');
   const a = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.ok(a.includes('launch:   cd ' + fwd(join(root, '.worktrees', 'app-72-foo')) + '; claude\n'), a);
+  assert.ok(a.includes('launch:   cd "' + fwd(join(root, '.worktrees', 'app-72-foo')) + '"; claude\n'), a);
   assert.doesNotMatch(a, /claude -n/);
   const b = execHarness(script, ['new', repo, 'bar', '--branch', 'feat/88-bar'], { encoding: 'utf8', env });
-  assert.ok(b.includes('launch:   cd ' + fwd(join(root, '.worktrees', 'app-bar')) + '; claude\n'), b);
+  assert.ok(b.includes('launch:   cd "' + fwd(join(root, '.worktrees', 'app-bar')) + '"; claude\n'), b);
 });
 
 test('new maps the branch number from any one-segment prefix', () => {
   const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
   const out = execHarness(script, ['new', repo, 'bar', '--branch', 'fix/88-bar'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
-  assert.match(out, /launch: {3}cd \S+app-bar; claude\n/);
+  assert.match(out, /launch: {3}cd "\S+app-bar"; claude\n/);
   assert.doesNotMatch(out, /claude -n/);
 });
 
@@ -226,7 +226,7 @@ test('new normalizes a leading-zero issue number and treats 0 as no number, neve
   const env = { CLAUDE_WORKSPACE_ROOT: root };
   const z = spawnHarness(script, ['new', repo, '007-foo'], { env });
   assert.equal(z.status, 0, z.stderr);
-  assert.match(z.stdout, /launch: {3}cd \S+app-007-foo; claude\n/);
+  assert.match(z.stdout, /launch: {3}cd "\S+app-007-foo"; claude\n/);
   const zero = spawnHarness(script, ['new', repo, '0-foo'], { env });
   assert.equal(zero.status, 0, zero.stderr);
   assert.match(zero.stdout, /launch: {3}claude -n general-0-foo\n/);
@@ -241,7 +241,7 @@ test('a director, or an epic or repo lead of this repo, gets the ticket launch l
     const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
 
     const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-    assert.match(out, /launch: {3}cd \S+app-72-foo; claude\n/, name);
+    assert.match(out, /launch: {3}cd "\S+app-72-foo"; claude\n/, name);
     assert.doesNotMatch(out, /WARNING|\/rename/, name);
   }
 });
@@ -261,7 +261,7 @@ test('new survives a null session registry entry', () => {
   writeFileSync(join(sessionsDir, '4242.json'), 'null');
   const r = spawnHarness(script, ['new', repo, '72-foo'], { env: { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' } });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /launch: {3}cd \S+app-72-foo; claude\n/);
+  assert.match(r.stdout, /launch: {3}cd "\S+app-72-foo"; claude\n/);
 });
 
 test('new in a desktop session tells the agent to call set_session_title for a general unit, not to launch or /rename', () => {
