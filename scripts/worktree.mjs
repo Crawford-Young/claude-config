@@ -8,7 +8,7 @@
 //
 // `new` cuts the branch from origin/<default>, verifies the cut is clean, and
 // copies env files per the repo's .worktreeinclude (default: .env, .env.local),
-// and prints the unit's launch line: `cd <worktree>; claude` on a ticket branch, whose
+// and prints the unit's launch line: `cd "<worktree>"; claude` on a ticket branch, whose
 // window session-start names (#344), else `claude -n <name>` (session-name.mjs).
 // `remove` encodes the Windows-safe removal sequence (git remove → force →
 // recursive delete → prune) so node_modules lock/long-path failures never need
@@ -107,8 +107,8 @@ function cmdNew() {
 
   // session-start names a window opened on a ticket branch (#344); anything else needs -n
   const selfNamed = unit.issue !== null && branchIssue(branch) === String(unit.issue);
-  log(`launch:   ${selfNamed ? `cd ${wtPath.replace(/\\/g, '/')}; claude` : launchCommand(unit.name)}`);
-  if (unit.issue === null) warnOnSessionName(unit);
+  log(`launch:   ${selfNamed ? `cd "${wtPath.replace(/\\/g, '/')}"; claude` : launchCommand(unit.name)}`);
+  if (!selfNamed) warnOnSessionName(unit);
 }
 
 /** True when the checkout uses husky: a `prepare` script running it, or core.hooksPath under .husky/. */
@@ -151,7 +151,7 @@ function expectedUnit(repoName, slug, branch) {
   return { name: generalSessionName(slugify(slug) || 'worktree'), repo, issue: null };
 }
 
-// For a general unit (a ticket's window names itself, #344): warn (never block) when the
+// For a unit launched with -n (a ticket branch's window names itself, #344): warn (never block) when the
 // running session's name won't join its spend and reflect, i.e. auto-generated or untyped
 // (the parser's general failsafe); any chosen name passes. The fix is the launch line for the
 // next window, or a /rename for this one (agents can't run slash commands); in a desktop session

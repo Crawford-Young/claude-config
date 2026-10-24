@@ -330,7 +330,7 @@ test('branchIssue reads the number a slug or branch leads with, after at most on
 });
 
 test('branchIssue is null with no leading number, a zero number, or a two-segment prefix', () => {
-  for (const s of ['0-foo', 'feat/0-foo', 'feat/foo', 'foo-72', 'feat/foo-72', 'a/b/72-x', '72', 'feat/72', '', null, undefined]) {
+  for (const s of ['0-foo', 'feat/0-foo', 'feat/foo', 'foo-72', 'feat/foo-72', 'a/b/72-x', 'release/2026-10', 'hotfix/1-2-patch', '72', 'feat/72', '', null, undefined]) {
     assert.equal(branchIssue(s), null, String(s));
   }
 });

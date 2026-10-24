@@ -317,10 +317,10 @@ export function sessionKey(title) {
   return p.name ?? (p.raw.trim() || null);
 }
 
-/** The issue number a slug or branch leads with, after one `<prefix>/` (`72-foo`,
- *  `feat/72-foo`, `chore/072-foo` -> '72'), or null. */
+/** The issue number a slug or branch leads with, after an optional feat/ fix/ chore/ refactor/
+ *  prefix (`72-foo`, `feat/72-foo`, `chore/072-foo` -> '72'), or null; `release/2026-10` has none. */
 export function branchIssue(s) {
-  const m = /^(\d+)-/.exec(String(s ?? '').replace(/^[^/]*\//, ''));
+  const m = /^(\d+)-/.exec(String(s ?? '').replace(/^(?:feat|fix|chore|refactor)\//, ''));
   return m ? issueNumber(m[1]) : null;
 }
 
