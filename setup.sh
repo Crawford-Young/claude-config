@@ -36,10 +36,16 @@ mkdir -p "$CODE/docs"
 link_item() {
     local link="$1" target="$2"
     if [ -L "$link" ]; then
-        echo "Already linked: $link (skipping)"
-        return
-    fi
-    if [ -e "$link" ]; then
+        local current
+        current="$(readlink "$link")"
+        if [ "$current" = "$target" ]; then
+            echo "Already linked: $link"
+            return
+        fi
+        # rm on a symlink with no trailing slash removes the link only.
+        rm "$link"
+        echo "Re-pointing: $link (was $current)"
+    elif [ -e "$link" ]; then
         echo "WARNING: $link exists and is not a symlink. Remove it manually first."
         return
     fi
@@ -54,6 +60,11 @@ link_item "$CLAUDE_AGENTS" "$AGENTS_DIR"
 
 # --- Path-scoped rules: user-level, so a symlink to this repo loads (#345) ---
 link_item "$HOME/.claude/rules" "$REPO/rules"
+# Retired: a project rule linked in from outside the cwd never loads with paths: (#345).
+if [ -L "$CODE/.claude/rules" ]; then
+    rm "$CODE/.claude/rules"
+    echo "Removed retired link: $CODE/.claude/rules"
+fi
 
 DOMAINS="web games apps"
 

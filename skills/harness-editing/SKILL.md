@@ -13,7 +13,7 @@ disable-model-invocation: true
 | Root + domain CLAUDE.md, reference docs | `claude-config/workspace/` — junctioned into `~/code` |
 | Skills | `claude-config/skills/` — one junction per skill into `~/.claude/skills/` (a new skill needs `setup.ps1`/`setup.sh` re-run or a hand-made junction) |
 | Agent defs + ROUTING.md | `claude-config/agents/` — whole-directory junction to `~/.claude/agents/` |
-| Path-scoped rules | `claude-config/rules/` — whole-directory junction to `~/.claude/rules/`; every rule carries `paths:` (verify-frontmatter gates it), since a project-level rule symlinked from outside the cwd never loads (#345) |
+| Path-scoped rules | `claude-config/rules/` — whole-directory junction to `~/.claude/rules/`; every rule carries `paths:` (verify-frontmatter gates it), since a path-scoped project rule symlinked from outside the cwd never loads (#345) |
 | Hooks | `claude-config/hooks/*.mjs` — wiring in `~/.claude/settings.json` |
 | Workflow scripts | `claude-config/scripts/*.mjs` (tests in `scripts/test/`, run `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) |
 | Specs, tracking, bugs | GitHub issues — harness/cross-repo in claude-config, project work in its repo |

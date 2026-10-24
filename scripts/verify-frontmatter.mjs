@@ -341,9 +341,25 @@ function checkClaudeMdCaps(workspaceRoot) {
   return { problems, sizes };
 }
 
+/** The globs a rule's `paths:` names, inline (`paths: "a"`, `paths: [a, b]`) or as a `- a` list. */
+function rulePaths(text) {
+  const lines = text.split(/\r?\n/);
+  const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  const at = lines.slice(1, close).findIndex((l) => /^paths:/.test(l)) + 1;
+  if (at === 0) return [];
+  const inline = lines[at].slice('paths:'.length).trim().replace(/^\[(.*)\]$/, '$1');
+  const items = inline ? inline.split(',') : [];
+  for (const l of lines.slice(at + 1, close)) {
+    const m = /^\s+-\s*(.*)$/.exec(l);
+    if (!m) break;
+    items.push(m[1]);
+  }
+  return items.map((s) => s.trim().replace(/^(["'])(.*)\1$/, '$2')).filter(Boolean);
+}
+
 /**
  * Rules (#345): <root>/rules is junctioned to ~/.claude/rules, which loads in every project. A
- * rule with `paths:` frontmatter loads only on a matching file read, so it is on demand; one
+ * rule with a non-empty `paths:` loads only on a matching file read, so it is on demand; one
  * without would be resident in every session with no cap, so it fails. Absent dir = no rules.
  */
 function checkRules(workspaceRoot) {
@@ -356,7 +372,7 @@ function checkRules(workspaceRoot) {
     const rel = `rules/${name.replace(/\\/g, '/')}`;
     const text = readFileSync(join(root, name), 'utf8');
     const parsed = parseFrontmatter(text);
-    if (parsed.problem || !parsed.fields.has('paths')) {
+    if (parsed.problem || rulePaths(text).length === 0) {
       problems.push(`${rel}: no paths: frontmatter — it would load in every session, uncapped; scope it with paths: or move it into a capped CLAUDE.md`);
     }
     sizes.push({ rel, bytes: byteLength(text) });
@@ -459,14 +475,17 @@ const residentProblems = [
   ...descriptionCapResult.problems,
   ...skillIndexResult.problems,
   ...claudeMdCapResult.problems,
-  ...rulesResult.problems,
 ];
 if (residentProblems.length > 0) {
   console.error(`\n--- RESIDENT BYTE CAP EXCEEDED (${residentProblems.length}) — BLOCKER ---`);
   for (const p of residentProblems) console.error(`  ${p}`);
 }
+if (rulesResult.problems.length > 0) {
+  console.error(`\n--- UNSCOPED RULES (${rulesResult.problems.length}) — BLOCKER ---`);
+  for (const p of rulesResult.problems) console.error(`  ${p}`);
+}
 
-const allProblems = [...problems, ...residentProblems];
+const allProblems = [...problems, ...residentProblems, ...rulesResult.problems];
 if (allProblems.length > 0) {
   console.error(`\nFAIL: ${allProblems.length} problem(s).`);
   process.exit(1);

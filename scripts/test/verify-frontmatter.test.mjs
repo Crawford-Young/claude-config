@@ -515,4 +515,47 @@ test('a rule with no paths: frontmatter fails as uncapped resident context', () 
   const { status, out } = runWorkspaceCheck(root);
   assert.equal(status, 1, out);
   assert.match(out, /rules\/always\.md: no paths:/);
+  assert.match(out, /--- UNSCOPED RULES \(1\) — BLOCKER ---/);
+  assert.doesNotMatch(out, /RESIDENT BYTE CAP EXCEEDED/, 'a rules problem is not a byte-cap problem');
+});
+
+test('a rule whose frontmatter has other keys but no paths: fails', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'named.md'), '---\nname: x\n---\nbody\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1, out);
+  assert.match(out, /rules\/named\.md: no paths:/);
+});
+
+test('a rule with an empty paths: fails, inline or as a bare key', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'bare.md'), '---\npaths:\n---\nbody\n', 'utf8');
+  writeFileSync(join(root, 'rules', 'inline.md'), '---\npaths: []\nname: x\n---\nbody\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1, out);
+  assert.match(out, /rules\/bare\.md: no paths:/);
+  assert.match(out, /rules\/inline\.md: no paths:/);
+  assert.match(out, /UNSCOPED RULES \(2\)/);
+});
+
+test('a rule with an inline paths: value passes', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'one.md'), '---\npaths: "**/*.ts"\n---\nbody\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 0, out);
+});
+
+test('nested rules are checked and reported by their path under rules/', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules', 'web'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'web', 'ok.md'), '---\npaths:\n  - "**/*.tsx"\n---\nbody\n', 'utf8');
+  writeFileSync(join(root, 'rules', 'web', 'bad.md'), 'body\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1, out);
+  assert.match(out, /rules\/web\/ok\.md: \d+ B \(on demand/);
+  assert.match(out, /rules\/web\/bad\.md: no paths:/);
+  assert.doesNotMatch(out, /rules\/web\/ok\.md: no paths:/);
 });

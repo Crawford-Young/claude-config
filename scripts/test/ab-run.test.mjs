@@ -61,6 +61,7 @@ writeFileSync(e.AB_FAKE_REPORT, JSON.stringify({
   harnessCheckout: existsSync(join(e.HOME, 'code', 'claude-config')),
   skills: existsSync(join(cfg, 'skills')) ? readdirSync(join(cfg, 'skills')) : [],
   agents: existsSync(join(cfg, 'agents')) ? readdirSync(join(cfg, 'agents')) : [],
+  rules: existsSync(join(cfg, 'rules')) ? readdirSync(join(cfg, 'rules')) : [],
   settings: JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')),
   claudeJson: JSON.parse(readFileSync(join(cfg, '.claude.json'), 'utf8')),
   projects: existsSync(join(cfg, 'projects')) ? readdirSync(join(cfg, 'projects')) : [],
@@ -133,7 +134,7 @@ before(() => {
     'hooks/session-start.mjs': 'process.exit(0);\n',
     'workspace/CLAUDE.md': '# ROOT-MARK\n',
     'workspace/web/CLAUDE.md': '# WEB-MARK\n',
-    'workspace/.claude/rules/r.md': 'rule\n',
+    'rules/r.md': 'rule\n',
     'skills/qa/SKILL.md': '---\nname: qa\n---\n',
     'agents/implementer.md': 'agent\n',
     // The gate reports the env model-written code runs under, and reads the real workspace when told to.
@@ -225,7 +226,7 @@ test('C1: the checkout holds the parent only, with no branch, remote or object t
   }
 });
 
-test('M2: the current arm runs the harness at its commit: ancestor CLAUDE.md, skills, agents and rewritten hooks; bare gets none', () => {
+test('M2: the current arm runs the harness at its commit: ancestor CLAUDE.md, skills, agents, rules and rewritten hooks; bare gets none', () => {
   const cur = fx.current.report;
   const bare = fx.bare.report;
   const root = fx.current.result.roundRoot;
@@ -233,6 +234,7 @@ test('M2: the current arm runs the harness at its commit: ancestor CLAUDE.md, sk
   assert.match(readFileSync(cur.ancestors[0], 'utf8'), /^# ROOT-MARK\r?\n$/);
   assert.deepEqual(cur.skills, ['qa']);
   assert.deepEqual(cur.agents, ['implementer.md']);
+  assert.deepEqual(cur.rules, ['r.md'], 'the harness rules/ lands in the config dir');
   const hookArgs = cur.settings.hooks.SessionStart[0].hooks[0].args[0];
   assert.equal(hookArgs, `${join(root, 'code', 'claude-config').replace(/\\/g, '/')}/hooks/session-start.mjs`);
   assert.deepEqual(Object.keys(cur.settings.hooks), ['SessionStart'], 'the missing and the http hook are dropped');
@@ -246,6 +248,7 @@ test('M2: the current arm runs the harness at its commit: ancestor CLAUDE.md, sk
   assert.deepEqual(bare.ancestors, []);
   assert.deepEqual(bare.skills, []);
   assert.deepEqual(bare.agents, []);
+  assert.deepEqual(bare.rules, []);
   assert.equal(bare.settings.hooks, undefined);
   assert.equal(bare.argv[0], '--safe-mode');
   assert.equal(bare.harnessCheckout, false, 'no harness checkout in the bare round');
