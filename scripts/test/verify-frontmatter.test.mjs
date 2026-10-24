@@ -540,6 +540,24 @@ test('a rule with an empty paths: fails, inline or as a bare key', () => {
   assert.match(out, /UNSCOPED RULES \(2\)/);
 });
 
+test('a rule whose paths: holds only a YAML comment fails', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'todo.md'), '---\npaths: # todo\n---\nbody\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 1, out);
+  assert.match(out, /rules\/todo\.md: no paths:/);
+});
+
+test('valid YAML lists pass: unindented items, a blank line or a comment before an item', () => {
+  const root = validWorkspaceRoot();
+  mkdirSync(join(root, 'rules'), { recursive: true });
+  writeFileSync(join(root, 'rules', 'flush.md'), '---\npaths:\n- "**/*.ts"\n---\nbody\n', 'utf8');
+  writeFileSync(join(root, 'rules', 'gap.md'), '---\npaths:\n\n  # tests\n  - "**/*.ts"\n---\nbody\n', 'utf8');
+  const { status, out } = runWorkspaceCheck(root);
+  assert.equal(status, 0, out);
+});
+
 test('a rule with an inline paths: value passes', () => {
   const root = validWorkspaceRoot();
   mkdirSync(join(root, 'rules'), { recursive: true });

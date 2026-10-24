@@ -5,6 +5,15 @@
 set -e
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
+# Links re-point to whichever checkout runs this; a worktree is removed later and takes them with it.
+case "$REPO" in
+    */.claude/worktrees/*)
+        if [ "${1:-}" != "--any-checkout" ]; then
+            echo "setup.sh runs from the main checkout only (this is a worktree: $REPO). Pass --any-checkout to override." >&2
+            exit 1
+        fi
+        ;;
+esac
 SKILLS_DIR="$REPO/skills"
 CLAUDE_SKILLS="$HOME/.claude/skills"
 
