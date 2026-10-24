@@ -5,7 +5,7 @@ Distilled 2026-08-21 from the retired per-type profiles (full text in
 `docs/harness-evolution/archive/`). Append one-liners with dates when a
 dispatch surprises; keep this file short.
 
-Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the same at opus and high, #233), `reviewer` (read-only review), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it (#74).
+Roster (2026-10-08, #66): `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the same at opus and high, #233), `reviewer` (review; Write only for scratch probe files), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it (#74).
 
 | Situation | Model | Effort | Evidence: n runs, $/run (31 days to 2026-10-13) |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Read-only code review of a diff or task output — spec compliance and quality. Dispatch after an implementer completes a task, or for high-stakes design review (high-stakes specs get a fable model override — per-run user clearance required). Never fixes; only reports.
+description: Code review (read-only on the code; Write for scratch probe files) of a diff or task output — spec compliance and quality. Dispatch after an implementer completes a task, or for high-stakes design review (high-stakes specs get a fable model override — per-run user clearance required). Never fixes; only reports.
 tools: Read, Grep, Glob, Write, Bash, Agent
 model: opus
 effort: high
