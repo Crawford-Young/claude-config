@@ -1,13 +1,13 @@
 # claude-config
 
-Personal Claude Code harness — fully owned skills, cross-platform Node scripts and hooks, workspace standards across three domains (web, games, apps). Restructured 2026-08 around simplification and trust in the models: skills are the actionable workflow units, scripts do the mechanical work, hooks enforce the rules that must always hold (one hook, `notification-toast.ps1`, stays PowerShell because it calls Windows Runtime toast-notification APIs with no cross-platform equivalent), and incident history lives in the docs repo's archive instead of always-loaded context.
+Personal Claude Code harness — fully owned skills, cross-platform Node scripts and hooks, workspace standards across three domains (web, games, apps). The principles it serves are the Philosophy section of `workspace/CLAUDE.md`. Skills are the actionable workflow units, scripts do the mechanical work, hooks enforce the rules that must always hold (one hook, `notification-toast.ps1`, stays PowerShell because it calls Windows Runtime toast-notification APIs with no cross-platform equivalent), and incident history lives in the docs repo's archive instead of always-loaded context.
 
 ## Layout
 
 | Path | What | Linked to |
 |---|---|---|
 | `skills/` | Owned skills — workflow (`plan`, `worktree`, `agent-factory`, `qa`, `git-ops` — includes the end-of-wave sweep via `cleanup.mjs`, `reflect`, `continuation`, `harness-editing`) + domain (`new-component`, `new-repo`, `release`, `visual-asset-gates`, `yak-voice`) | `~/.claude/skills/<name>` (junction/symlink per skill) |
-| `scripts/` | Workflow scripts (`worktree`, `qa`, `land`, `cleanup`, `reflect-gather`, `audit`, `verify-frontmatter`, `harness-map` — all `.mjs`, tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
+| `scripts/` | Workflow scripts (`worktree`, `session-name`, `qa`, `land`, `cleanup`, `board`, `reflect-gather`, `audit` (+ `audit-lib`), `guard-replay`, `verify-frontmatter`, `harness-map` — all `.mjs`, plus the `ab/` A/B runner; per-script detail in `scripts/README.md`; tested via `node --test scripts/test/*.test.mjs` — the bare directory form fails on Windows Node 24) | invoked by skills |
 | `hooks/` | Node hooks (guards, gates, logs — see `hooks/README.md` for the settings.json wiring) | `~/.claude/settings.json` `hooks` block |
 | `agents/` | Subagent defs (`implementer`, `implementer-opus`, `reviewer`, `recon`) + `ROUTING.md` (model guide) | `~/.claude/agents/` (junction) |
 | `workspace/CLAUDE.md` | Universal standards | `~/code/CLAUDE.md` (symlink) |
@@ -44,6 +44,8 @@ Both are idempotent and dynamic — a new skill directory or workspace doc links
 ## Conventions
 
 - The main checkout is the live junction surface: it never leaves `main` and never commits. Live edits land here; commits go through `node scripts/land.mjs` (ephemeral worktree, path-scoped diff). Both rules are hook-enforced.
-- Gates: `node --test scripts/test/*.test.mjs`, `node scripts/verify-frontmatter.mjs` and `node scripts/harness-map.mjs check` (CI).
+- Local commits need no approval; push, PR create and PR merge need the user's explicit approval, and one approval covers a PR's whole ship (`hooks/README.md`).
+- Reflect runs when the user asks or once at batch or epic close, never per merged PR (`skills/reflect/SKILL.md`).
+- Gates: `node --test scripts/test/*.test.mjs`, `node scripts/verify-frontmatter.mjs`, `node scripts/harness-map.mjs check` and `node scripts/audit.mjs --stamps` (CI).
 - `harness-map.json` is the wiring map: every part, what it calls, gates or feeds. Read it before opening files one by one.
 - New rules are one imperative line; incident stories go to `docs/harness-evolution/archive/rule-history.md`. A rule that must hold every time becomes a hook, then its prose is deleted.
