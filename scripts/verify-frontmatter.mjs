@@ -347,12 +347,15 @@ function rulePaths(text) {
   const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
   const at = lines.slice(1, close).findIndex((l) => /^paths:/.test(l)) + 1;
   if (at === 0) return [];
-  const inline = lines[at].slice('paths:'.length).trim().replace(/^\[(.*)\]$/, '$1');
+  // A YAML comment is no value: `paths: # todo` is null, and the rule would load everywhere.
+  const uncomment = (s) => s.replace(/(^|\s)#.*$/, '').trim();
+  const inline = uncomment(lines[at].slice('paths:'.length)).replace(/^\[(.*)\]$/, '$1');
   const items = inline ? inline.split(',') : [];
   for (const l of lines.slice(at + 1, close)) {
-    const m = /^\s+-\s*(.*)$/.exec(l);
+    if (uncomment(l) === '') continue;
+    const m = /^\s*-\s*(.*)$/.exec(l);
     if (!m) break;
-    items.push(m[1]);
+    items.push(uncomment(m[1]));
   }
   return items.map((s) => s.trim().replace(/^(["'])(.*)\1$/, '$2')).filter(Boolean);
 }

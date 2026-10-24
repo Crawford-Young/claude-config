@@ -1,7 +1,13 @@
 # setup.ps1 — Wire skills from this repo into ~/.claude/skills via directory junctions (Windows)
 # Run from the repo root: .\setup.ps1
+param([switch]$AnyCheckout)
 
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Links re-point to whichever checkout runs this; a worktree is removed later and takes them with it.
+if (($repo -match '\\\.claude\\worktrees\\') -and -not $AnyCheckout) {
+    Write-Error "setup.ps1 runs from the main checkout only (this is a worktree: $repo). Pass -AnyCheckout to override."
+    exit 1
+}
 $skillsDir = Join-Path $repo "skills"
 $claudeSkills = "$env:USERPROFILE\.claude\skills"
 
@@ -35,9 +41,11 @@ $wsRepo = Join-Path $repo "workspace"
 New-Item -ItemType Directory -Force "$code\docs" | Out-Null
 
 # Get-Item, not Test-Path: Test-Path follows the link, so it can miss a dangling one.
+# Only a junction or symlink with a target counts: OneDrive placeholders and app execution
+# aliases are reparse points too, and deleting one would delete the real item.
 function Get-Link($linkPath) {
     $item = Get-Item $linkPath -Force -ErrorAction SilentlyContinue
-    if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return $item }
+    if ($item -and ($item.LinkType -in 'Junction', 'SymbolicLink') -and @($item.Target)[0]) { return $item }
     return $null
 }
 
