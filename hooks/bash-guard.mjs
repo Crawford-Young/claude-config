@@ -53,9 +53,9 @@
 //      codegen, show-report, show-trace, open — need the user's browser consent
 //      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
 //      once per session). Headless `playwright test` stays ungated.
-//  10. A heredoc body holding a doubled backslash — the Bash tool's shell spawn
-//      collapses it, silently corrupting the file or commit message; use Write
-//      (#123, #137, #147).
+//  10. (removed, #293: the Bash tool collapses `\\` in every argument form, not
+//      only heredocs, so a heredoc-only block covered nothing; the agent defs
+//      carry the quirk instead)
 //  11. (removed, #291: a write into a transcript or a gate state file could
 //      forge an approval, but a model that would do that can edit this hook
 //      too, and no real session ever wrote one)
@@ -415,25 +415,6 @@ export function stripHeredocs(cmd) {
   return out.join('\n');
 }
 
-/** Does any heredoc body in `cmd` hold a doubled backslash? The Bash tool's
- *  shell spawn collapses `\\` to `\` inside a heredoc body, quoted delimiter or
- *  not, so the file or message written is silently wrong (#123, #137). Bodies are
- *  found as stripHeredocs finds them: a `<<WORD` line (not a `<<<` here-string)
- *  closed by a line of just WORD — text that only mentions `<<EOF` has no
- *  terminator line, so it is not a heredoc. */
-export function heredocHasDoubledBackslash(cmd) {
-  const lines = cmd.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/(?<!<)<<(?!<)(-?)\s*(["']?)([\w.-]+)\2/);
-    if (!m) continue;
-    const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
-    if (end === -1) continue;
-    if (lines.slice(i + 1, end).some((l) => l.includes('\\\\'))) return true;
-    i = end;
-  }
-  return false;
-}
-
 /** Everything the rules should NOT read as command text. */
 export function scrub(raw) {
   return stripMessages(stripHeredocs(raw));
@@ -530,15 +511,12 @@ function gateRewrite(raw, tool) {
   return gatePiped(commands(scrub(out), null, false, false, newScope(null, tool))) ? null : out;
 }
 
-/** The static rules (1-4, 10, 12) on one command. `tool` is the payload's
+/** The static rules (1-4, 12) on one command. `tool` is the payload's
  *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
  *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
  *  reads them as aliases. It is also the shell the command is parsed in (newScope). */
 export function staticCheck(raw, cwd = null, tool = null) {
   if (!raw) return null;
-  if (heredocHasDoubledBackslash(raw)) {
-    return 'A heredoc body holding a doubled backslash arrives with it collapsed to one (the Bash tool\'s shell spawn eats it), so the file or message written is wrong. Write the file with the Write tool (or Edit) instead of a heredoc.';
-  }
   const cmd = scrub(raw);
 
   // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination —

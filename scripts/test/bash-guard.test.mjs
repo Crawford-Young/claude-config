@@ -1642,34 +1642,19 @@ test('commit-on-main stays blocked when HEAD names a missing main but another br
   assert.equal(guardRun(`cd ${app} && git commit -m x`, h), 2);
 });
 
-// ---- heredoc doubled backslash (#147) ---------------------------------------
-// The Bash tool's shell spawn collapses a doubled backslash, so a heredoc body
-// holding one arrives corrupted (#123, #137). Built by code, never typed.
+// ---- heredoc doubled backslash: no rule (rule 10 removed, #293) --------------
+// Every Bash argument form collapses `\\`, not only heredocs, so a heredoc-only
+// block covered nothing; the agent defs carry the quirk line instead. Built by
+// code, never typed.
 const BS2 = String.fromCharCode(92, 92);
 
-test('a heredoc body holding a doubled backslash is blocked, quoted or unquoted delimiter', () => {
+test('a heredoc body holding a doubled backslash passes (rule 10 removed)', () => {
   for (const delim of ["'EOF'", 'EOF', '"EOF"']) {
-    const cmd = `cat > f.txt <<${delim}\nconst re = /a${BS2}d/;\nEOF`;
-    const reason = staticCheck(cmd);
-    assert.ok(reason, `delimiter ${delim}`);
-    assert.match(reason, /Write/);
+    assert.equal(staticCheck(`cat > f.txt <<${delim}\nconst re = /a${BS2}d/;\nEOF`), null, `delimiter ${delim}`);
   }
-  assert.ok(staticCheck(`node - <<'EOF'\nconsole.log('${BS2}');\nEOF`));
-  assert.ok(staticCheck(`cat <<-EOF\n\tx${BS2}y\n\tEOF`));
-});
-
-test('a doubled backslash inside a git commit -m "$(cat <<EOF ...)" body is blocked', () => {
-  const cmd = `git commit -m "$(cat <<'EOF'\nfix: handle a${BS2}b\n\nbody\nEOF\n)"`;
-  assert.ok(staticCheck(cmd));
-});
-
-test('heredocs without a doubled backslash, and text that only mentions one, pass', () => {
-  assert.equal(staticCheck(`cat > f.txt <<'EOF'\nplain text with a single ${String.fromCharCode(92)} slash\nEOF`), null);
-  assert.equal(staticCheck(`git commit -m "$(cat <<'EOF'\nfix: nothing odd\nEOF\n)"`), null);
-  // Not heredocs: a message that mentions <<EOF or a doubled backslash as text.
-  assert.equal(staticCheck(`git commit -m "doc: heredoc <<EOF with ${BS2} in it" --allow-empty`), null);
-  assert.equal(staticCheck(`echo "a ${BS2} b"`), null);
-  assert.equal(staticCheck(`cat <<< "a${BS2}b"`), null);
+  assert.equal(staticCheck(`node - <<'EOF'\nconsole.log('${BS2}');\nEOF`), null);
+  assert.equal(staticCheck(`cat <<-EOF\n\tx${BS2}y\n\tEOF`), null);
+  assert.equal(staticCheck(`git commit -m "$(cat <<'EOF'\nfix: handle a${BS2}b\n\nbody\nEOF\n)"`), null);
 });
 
 // ---- refund a spent approval whose call errored (#147) ----------------------
