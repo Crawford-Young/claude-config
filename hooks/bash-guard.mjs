@@ -46,8 +46,9 @@
 //      A remote branch delete (`push --delete`/`-d`, or every refspec `:branch`)
 //      is exempt like --dry-run; a push that also pushes a ref stays gated.
 //      A spend records its call's tool_use_id; if that call's transcript
-//      tool_result is_error, the next gated call refunds the spend (#147). A
-//      bound approval refunds an errored create or merge, and is released
+//      tool_result is_error, the next gated call refunds the spend (#147) —
+//      unless gh's error says a merge's branch cleanup failed after it (#317).
+//      A bound approval refunds an errored create or merge, and is released
 //      when every call under it errored.
 //   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
 //      codegen, show-report, show-trace, open — need the user's browser consent
@@ -2072,9 +2073,14 @@ export function latestApproval(transcriptPath) {
  *  that spent it, so a later gated call can refund a spend whose call errored. */
 const IDS_KEY = '@ids';
 
-/** The tool_use ids among `ids` whose transcript tool_result errored, in one
- *  read. An unreadable transcript or a torn line counts as no error: no refund
- *  is the safe answer. */
+// gh's error when a merge went through and its --delete-branch cleanup failed
+// after it (a worktree holds the branch, #317): the ship happened, no refund.
+const SHIPPED_ANYWAY = /failed to delete (?:local|remote) branch/;
+const resultText = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (typeof b?.text === 'string' ? b.text : '')).join('\n') : '');
+
+/** The tool_use ids among `ids` whose transcript tool_result errored before
+ *  shipping, in one read. An unreadable transcript or a torn line counts as no
+ *  error: no refund is the safe answer. */
 function erroredCalls(transcriptPath, ids) {
   const want = new Set(ids);
   const out = new Set();
@@ -2089,7 +2095,9 @@ function erroredCalls(transcriptPath, ids) {
     try {
       const content = JSON.parse(l)?.message?.content;
       if (!Array.isArray(content)) continue;
-      for (const b of content) if (b?.type === 'tool_result' && b.is_error === true && want.has(b.tool_use_id)) out.add(b.tool_use_id);
+      for (const b of content) {
+        if (b?.type === 'tool_result' && b.is_error === true && want.has(b.tool_use_id) && !SHIPPED_ANYWAY.test(resultText(b.content))) out.add(b.tool_use_id);
+      }
     } catch {
       // torn line
     }
