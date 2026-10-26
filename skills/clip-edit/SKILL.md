@@ -14,9 +14,9 @@ Base directory: `~/code/claude-config/skills/clip-edit/` — `scripts/` (run in 
 
 - **Git-bash mangles ffmpeg args** (`-vf` expressions, `C:` paths): `export MSYS2_ARG_CONV_EXCL="*"` (the `.sh` scripts set it) and pass every path, the script path included, as `C:/forward/slashes`. Under that export `/c/...` is not converted and fails as `C:\c\...`. Backslashes break too.
 - **ffmpeg** is not on PATH: `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-9.0.2-full_build\bin`. The scripts find it themselves (`$FFMPEG_BIN` overrides). For ad-hoc calls: `. scripts/_ff.sh` gives `$FF` / `$FP`.
-- **No system Python.** Run every script through uv, isolated (`-I`), never from inside the download folder:
-  - Pillow/numpy scripts: `uv run --no-project --with pillow --with numpy python -I C:/.../scripts/<x>.py ...`
-  - Whisper (`transcribe.py`, `words.py`): `uv run --no-project --python 3.12 --with faster-whisper python -I ...` (faster-whisper has no wheels past 3.12). The first run downloads `small.en`.
+- **No system Python.** Run every script through uv, isolated (`-I`, plus `-B` so no `__pycache__` lands in the skill), never from inside the download folder:
+  - Pillow/numpy scripts: `uv run --no-project --with pillow --with numpy python -B -I C:/.../scripts/<x>.py ...`
+  - Whisper (`transcribe.py`, `words.py`): `uv run --no-project --python 3.12 --with faster-whisper python -B -I ...` (faster-whisper has no wheels past 3.12). The first run downloads `small.en`.
 - **Whisper mishears** names, slang and swears. The user's own lines win. Use Whisper for timing, not for wording.
 - **Twitch portrait exports often have captions baked in.** Censoring a word then needs BOTH `bleep.sh` (audio) AND `mask.py` (the baked caption word). Doing only one leaves the word in.
 
