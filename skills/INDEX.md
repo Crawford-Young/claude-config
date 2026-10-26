@@ -1,15 +1,15 @@
-Skills: Read the path; skills are not Skill-tool invocable. Paths are under ~/code/claude-config/skills/
+Read the path; skills are not Skill-tool invocable. Under ~/code/claude-config/skills/:
 - plan a feature/fix/refactor, issue spec, commit cadence → plan/SKILL.md
-- start branch work, worktree isolation → worktree/SKILL.md
+- branch work, worktree isolation → worktree/SKILL.md
 - multi-task plan, spawn, model choice → agent-factory/SKILL.md
 - direct a ticket batch (director) → agent-factory/directing-a-batch.md
 - gates, tests, lint, typecheck, verify → qa/SKILL.md
 - land claude-config, recovery, sweep → git-ops/SKILL.md
 - batch close or asked review, harness updates → reflect/SKILL.md
-- work remains before ending the session → continuation/SKILL.md
+- work left at session end → continuation/SKILL.md
 - edit CLAUDE.md chain, hooks, skills, agents → harness-editing/SKILL.md
 - new Radix+CVA library component → new-component/SKILL.md
 - scaffold a new repo → new-repo/SKILL.md
-- publish the npm library, changeset → release/SKILL.md
+- publish npm library, changeset → release/SKILL.md
 - images, SVGs, palettes, screenshots, preview gate → visual-asset-gates/SKILL.md
-- CarsickYak titles, captions, channel copy → yak-voice/SKILL.md
+- CarsickYak titles, captions → yak-voice/SKILL.md; clip cut/bleep/mask, VOD triage → clip-edit/SKILL.md
