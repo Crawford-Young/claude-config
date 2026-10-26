@@ -9,3 +9,13 @@ Mechanics: lowercase, two fragments, periods, no emoji, no exclamation. Short as
 
 - clean double tap. rate it.
 - clean double tap. could you do this?
+
+## Accepted samples (2026-10-25, Storebound)
+
+- one button. would you have pressed it?
+- stole the spot. was this evil?
+- gabe tried to jump in to ready up. it's a click.
+- don't have to be faster than the mob. just faster than gabe.
+- going down to help gabe. oh wait.
+- carter found a shortcut. rate the route.
+- the mob saw gabe and left. explain this.
