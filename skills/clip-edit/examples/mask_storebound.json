@@ -1,0 +1,15 @@
+{
+  "_note": "Storebound clip 2: two baked-in caption words masked; switch times measured with capswitch.py at 60 fps.",
+  "size": [972, 1728],
+  "font_size": 66,
+  "stroke": 6,
+  "y0": 600,
+  "y1": 675,
+  "ink_cy": 628,
+  "masks": [
+    {"name": "w1_off", "x0": 584, "x1": 760, "color": "black", "start": 9.275, "end": 9.542},
+    {"name": "w1_on", "x0": 584, "x1": 760, "color": "purple", "start": 9.542, "end": 9.825},
+    {"name": "w2_on", "x0": 254, "x1": 560, "color": "purple", "start": 9.825, "end": 10.142},
+    {"name": "w2_off", "x0": 254, "x1": 560, "color": "black", "start": 10.142, "end": 10.742}
+  ]
+}
