@@ -29,3 +29,18 @@ The channel thesis ("A community built on self growth") IS the philosopher regis
 - Long surface → philosopher vein WELCOME when topic supports it (climb arcs, milestones, reflections) — via patterns above (flip ending, process framing, honest hedge), never via inspirational-poster diction.
 - The two registers coexist in one piece the way the About panel does it: plain list of pursuits, then one quiet thesis line.
 - When unsure which register: default flat-literal. User adds his own color when picking/editing.
+
+## Identity card (2026-10-29)
+
+Source: the identity exercise CY completed 2026-10-29, after researching advice from Ludwig, Squeex, Caedrel and Joe Bart. Quotes are verbatim; summaries are trim-only. Use it to check whether copy and coaching fit who CY wants to be seen as. It is not wording to copy into titles.
+
+- **One sentence (user pick):** "bring up everyone around me."
+- **Why (verbatim):** "at the end of my life i wont be able to carry anything with me into the grave and whats left of me will be the impact i made on everyone i interacted with"
+- **Seen once (verbatim):** "he has a natural charisma and is always smiling it out. hes pretty smart and isnt afraid to say whats on his mind and the takes are valid and based in deep principles hes made for himself."
+- **Known a while (verbatim):** "brings out the best in people and help everyone become a better person. hes a deep thinker who isnt afraid of questioning everything. he is so upfront about who he is that communication feels easy."
+- **A principle he holds (verbatim):** "the only experience that is useless or negative is the experience that you do not reflect on"
+- **Current focus (2026-10-29):** games with friends. Speedrunning Crack (and similar games) with Carter; getting good at random games with Gabe and Carter. **yak2peak and music streams are paused**, so don't default to RL-ranked or folk framing.
+- **Humor line:** laughing with friends is fine; bringing them down is not ("im not bringing him down"). This is the same line as the Rules panel. Laugh off his own dumb moments. Mockery is OK only when it's an obvious joke or harmless.
+- **Will do:** skits, challenges, costumes, a head shave for a massive challenge. **Won't:** tattoos; big spending before the channel earns a lot.
+- **Head shave:** framed on stream as a punishment and a community sub goal. To CY it's freeing: "it doesnt matter as much about how i look but how i made people feel." Long surfaces may tell it that way (a flip ending).
+- **Coaching filter:** does this help people see him bring up the people around him? If not, it's a generic growth tip and ranks last.
