@@ -66,5 +66,7 @@ Storebound split into two playlists; the round-1 Storebound line above was repla
 - Phasmophobia: Phasmophobia clips from stream. We share one brain cell.
 - Wanderstop: Wanderstop clips from stream.
 - Golf With Your Friends: Golf With Your Friends clips from stream.
+- Upstream: Upstream clips from stream.
+- Poems: Poems I wrote.
 
 Pattern note (from picks, not adjectives): "<Game> clips from stream." is the base; callbacks to the user's own Short titles got picked (Prayers up for the AK, Average lurk experience, We share one brain cell). When the user wrote their own, it was an inside joke with zero explanation, lowercase ("tim is a npc"), or a plain literal fact ("1400 rated player").
