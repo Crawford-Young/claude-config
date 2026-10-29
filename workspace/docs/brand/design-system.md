@@ -8,6 +8,38 @@ Composition layer: how pages are assembled. Exact values only — agents build f
 
 ---
 
+## §0 Space — when to spend it, when to save it
+
+Classify every surface before laying it out: the same spacing is right on one mode and wrong on the other.
+
+| Mode | Surfaces | Space is | Goal |
+|---|---|---|---|
+| **Expressive** | Hero, landing, about, splash, auth/focus, empty and error states | the design | One idea per screen; emptiness reads as confidence |
+| **Data** | Dashboards, tables, lists, calendars, detail views, search results, settings, admin | a cost | Most information per viewport, fewest clicks and scrolls to reach it |
+
+A page can hold both: the portfolio home's hero is expressive; everything below it is data.
+
+### Reach (all surfaces)
+
+- **3-click ceiling.** Every piece of content and every action is ≤3 clicks from the site or app entry. Each nav link, tab, menu open, expand and "show more" counts as one. Needing a 4th means flatten the structure: lift the item to its parent, add it to nav, or show it inline.
+- **Scroll brings more of the same, never something different.** Scrolling may reveal more rows or older items; it never gates a different kind of information. If the second thing a user looks for sits below the fold, move it up.
+- Expressive surfaces still obey the ceiling: a hero always shows a visible path (nav or CTA) onward.
+
+### Data surfaces
+
+- **The first screen answers the question.** At 1280×800 the primary data (the numbers, rows or items the user came for) is visible without scrolling: nothing above it but a one-line page header and at most one control row (filters, actions). No hero, banner or intro paragraph. At 390px wide, the primary data starts within the first screen.
+- **Summary first.** Lead with a stat/KPI row when the data has totals or status, so the page is answerable at a glance before any reading.
+- **Show, don't gate.** Information users scan or compare stays on the page — no accordions, carousels, or "show more" hiding it. Tabs split separate tasks, never one dataset.
+- **Drill down in place.** Detail opens inline first (expanded row, side `Sheet`, popover) rather than as a new page — the list stays visible and it costs one click instead of open + back.
+- **Use the width.** Wide container (`max-w-5xl` or full-bleed, §1); at `lg` and up, summaries and side-by-side panels go multi-column instead of one long stack.
+- **Dense variants.** Tables, dashboards and calendar views take the dense value wherever this doc offers one: rows `h-10`, cards `p-4`, grids `gap-4`, page rhythm `space-y-4`.
+
+### Expressive surfaces
+
+- Space is deliberate: one focal element, generous margins, `min-h-screen` heroes allowed. Never densify them to "use the space" — the restraint is the brand (`brand-identity.md` §1).
+
+---
+
 ## §1 Layout anatomy
 
 ### Surface types
