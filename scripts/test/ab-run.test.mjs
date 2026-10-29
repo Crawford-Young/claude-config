@@ -363,7 +363,8 @@ test('Major C (round 6): when capture throws after claude.stderr.log, no token i
   for (const arm of ['current', 'bare']) {
     const { r } = fx.wreck[arm];
     assert.notEqual(r.status, 0, arm);
-    assert.match(r.stderr, /not a git repository/, `${arm}: the capture failure is reported`);
+    // git 2.56 reports a broken worktree gitfile as "gitfile does not point to a valid repository"; older git says "not a git repository".
+    assert.match(r.stderr, /not a git repository|gitfile does not point to a valid repository/, `${arm}: the capture failure is reported`);
     assert.ok(existsSync(join(fx.wreck[arm].dir, 'claude.stderr.log')), `${arm}: capture got past claude.stderr.log`);
     assert.ok(!`${r.stdout}${r.stderr}`.includes(TOKEN), `${arm}: token in the runner output`);
   }
