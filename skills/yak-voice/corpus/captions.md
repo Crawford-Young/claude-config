@@ -19,3 +19,13 @@ Mechanics: lowercase, two fragments, periods, no emoji, no exclamation. Short as
 - going down to help gabe. oh wait.
 - carter found a shortcut. rate the route.
 - the mob saw gabe and left. explain this.
+
+## Accepted samples (2026-10-29, Crack shorts; also the YT titles)
+
+Round 3 after the user rejected two rounds ("every single title fails", then "still arent funny"): the user wants a joke first, then an easy comment prompt. Fail comps get a count prompt, so viewers comment a number or rewatch to count (the title never says the count). Pure "<description>. rate it." lines with no joke were rejected. "was this evil?" was the user's own pick over "would you have made it out?", because the escape looked easy, so the prompt has to fit what's on screen.
+
+- professional egg miner. how many falls are there?
+- did not read the handbook. how many dynamite fails are there?
+- carter's idea of helping. tag the friend who'd do this.
+- carter lit it and ran. i tried to. was this evil?
+- the egg had a chicken. carter had a plan. pet or dinner?
