@@ -136,10 +136,10 @@ export function registryName(sessionId, dir) {
   return null;
 }
 
-/** Bold, as-is, for a chosen name (lib's isChosenName: a typed name, or a legacy
- *  form the user or a peer set). Dim, ~-prefixed and cut to 24 otherwise (auto
- *  titles, untyped names), so an unnamed session shows at a glance. The payload
- *  title has no source, so only a typed name there is chosen. */
+/** Bold, as-is, for a chosen name (lib's isChosenName: an agent name or a typed legacy
+ *  form, or a bare `<repo>-<N>` the user or a peer set). Dim, ~-prefixed and cut to 24
+ *  otherwise (auto titles, unparsed names), so an unnamed session shows at a glance. The
+ *  payload title has no source, so a bare name there is never chosen. */
 function namePiece(status, env) {
   const dir = env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
   const { name, source } = registryName(status.session_id, dir)

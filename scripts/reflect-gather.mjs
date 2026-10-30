@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // reflect-gather.mjs — a unit's reflect evidence in one pass (#67).
 //
-//   node reflect-gather.mjs <session-name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]
+//   node reflect-gather.mjs <name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]
 //
-// Prints one markdown payload: the transcript audit of every window named
-// <session-name> (audit.mjs --session, which joins legacy and typed forms of one
-// unit's name, #175) with its cost and time (#97), then per-repo git log + diffstat
+// Prints one markdown payload: the transcript audit of everything charged to <name>'s
+// charge (audit.mjs --session, which joins every form of one charge, lib's chargeKey,
+// #175, #360) with its cost and time (#97), then per-repo git log + diffstat
 // of the commits since the unit's first window whose message names the unit's issue
-// (a ticket or epic name's repo and number: `(#N)` or `<repo>#N`, or a body line
+// (an issue, epic or pr charge's repo and number: `(#N)` or `<repo>#N`, or a body line
 // `Refs #N` / `Closes #N`), then the repo's
 // open `debt` issues that name a file those commits touched (#137). A name with no
 // issue takes the whole window, unless --issue <N> names the issue (one session that
@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMarkdown } from './audit-lib.mjs';
-import { die, git, isMain, log, parseArgs, parseSessionName, sessionKey } from './lib.mjs';
+import { chargeKey, die, git, isMain, log, parseAgentName, parseArgs } from './lib.mjs';
 
 /** What to print and exit with when the audit spawn failed — a spawn that never
  *  started has null stderr and status, so fall back to its error. */
@@ -66,10 +66,10 @@ export function renderDebt({ matched, other, error, truncated }) {
   return lines.join('\n');
 }
 
-/** A ticket or epic session name → { prefix: its repo, issue }; null for any other type. */
+/** A name with an issue, epic or pr charge → { prefix: its repo, issue }; null for any other charge. */
 export function parseUnit(name) {
-  const p = parseSessionName(name);
-  return p.type === 'ticket' || p.type === 'epic' ? { prefix: p.repo, issue: String(p.issue) } : null;
+  const c = parseAgentName(name)?.charge;
+  return c?.number ? { prefix: c.repo, issue: String(c.number) } : null;
 }
 
 /** Whether a commit message names the unit's issue, on a number boundary: `(#N)` or `<prefix>#N`
@@ -111,7 +111,7 @@ if (isMain(import.meta.url)) main();
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const name = args._[0];
-  if (!name) die('usage: reflect-gather.mjs <session-name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]');
+  if (!name) die('usage: reflect-gather.mjs <name> [--issue <N>] [--repo <path>]... [--since <date|rev>] [--root <projects dir>] [--idle-gap <min>]');
   if (args.issue !== undefined && !/^\d+$/.test(args.issue)) die('--issue takes an issue number, e.g. --issue 147');
 
   const repos = [];
@@ -129,13 +129,13 @@ function main() {
     process.exit(code);
   }
   const report = JSON.parse(audit.stdout);
-  const key = sessionKey(name); // audit's name rows are keyed the same way
+  const key = chargeKey(name); // audit's charge rows are keyed the same way
   const unit = report.names.find((g) => g.name === key);
   const time = report.time?.names.find((g) => g.name === key);
   if (unit) {
-    log(`## Audit — ${unit.windows} window(s) named ${key}, ${report.files} transcripts${time ? ` · $${unit.usd.toFixed(2)} over ${minutes(time.activeMs)} active of ${minutes(time.wallMs)} wall` : ''}\n`);
+    log(`## Audit — ${unit.windows} window(s) charged to ${key}, ${report.files} transcripts${time ? ` · $${unit.usd.toFixed(2)} over ${minutes(time.activeMs)} active of ${minutes(time.wallMs)} wall` : ''}\n`);
     log(renderMarkdown(report));
-  } else log(`## Audit — no priced requests in windows named ${key}, ${report.files} transcripts`);
+  } else log(`## Audit — no priced requests in windows charged to ${key}, ${report.files} transcripts`);
 
   // A bare day (audit days are UTC) gets an explicit UTC midnight: git would
   // otherwise fill in the current time of day and drop that day's earlier commits.

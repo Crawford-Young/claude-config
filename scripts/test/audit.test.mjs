@@ -33,7 +33,7 @@ test('--session keeps only the windows renamed to that name, subagents included'
   const j = JSON.parse(r.stdout);
   assert.equal(j.files, 3);
   assert.equal(j.totals.requests, 3);
-  assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['ticket-repo-7', 2]]);
+  assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['issue_repo-7', 2]]);
   assert.deepEqual(j.sessions.map((s) => s.sessionId).sort(), ['a', 'b']);
 });
 
@@ -50,7 +50,7 @@ test('--session --json carries the time dimension for the named windows; --idle-
   const dflt = run();
   assert.equal(dflt.idleGapMin, 10);
   assert.deepEqual([dflt.totals.wallMs, dflt.totals.activeMs, dflt.totals.modelMs], [21 * 60e3, 2 * 60e3, 2 * 60e3]);
-  assert.deepEqual(dflt.names.map((g) => [g.name, g.windows]), [['ticket-repo-8', 1]]);
+  assert.deepEqual(dflt.names.map((g) => [g.name, g.windows]), [['issue_repo-8', 1]]);
   for (const k of ['days', 'sessions', 'agents', 'agentRuns', 'tools', 'commands', 'retry']) assert.ok(k in dflt, k);
   const lenient = run('--idle-gap', '30');
   assert.deepEqual([lenient.idleGapMin, lenient.totals.activeMs, lenient.totals.userMs], [30, 21 * 60e3, 19 * 60e3]);
@@ -81,7 +81,7 @@ test('--session keeps only the /rename windows of that name inside a renamed tra
   assert.deepEqual([ten.files, ten.totals.requests, ten.sessions.map((s) => s.sessionId)], [1, 2, ['r']]);
   const eleven = run('unit-11');
   assert.deepEqual([eleven.files, eleven.totals.requests, eleven.sessions.map((s) => s.sessionId)], [2, 3, ['r#2']]);
-  assert.deepEqual(eleven.names.map((g) => [g.name, g.windows, g.requests]), [['ticket-unit-11', 1, 3]]);
+  assert.deepEqual(eleven.names.map((g) => [g.name, g.windows, g.requests]), [['issue_unit-11', 1, 3]]);
   const twelve = run('unit-12');
   // a slice of a transcript is not checked against the whole file's cost-state
   assert.equal(twelve.costState.files, 0);
@@ -90,26 +90,27 @@ test('--session keeps only the /rename windows of that name inside a renamed tra
   assert.equal(twelve.time.agentRuns.length, 0);
 });
 
-test('--session joins on the parsed name: legacy repo-5, typed ticket-repo-5 and tree harness_repo_t5_impl windows are one unit', () => {
+test('--session joins on the charge key: bare repo-5, typed ticket-repo-5, tree harness_repo_t5_impl and impl_issue_repo-5 windows are one charge', () => {
   const root = fixture();
   const proj = join(root, 'C--proj');
   writeFileSync(join(proj, 'l.jsonl'), lines(...req('l1', 'l', 'repo-5')));
   writeFileSync(join(proj, 't.jsonl'), lines(...req('t1', 't', 'ticket-repo-5')));
   writeFileSync(join(proj, 'e.jsonl'), lines(...req('e1', 'e', 'epic-repo-5')));
   writeFileSync(join(proj, 'x.jsonl'), lines(...req('x1', 'x', 'harness_repo_t5_impl')));
-  for (const name of ['ticket-repo-5', 'repo-5', 'harness_repo_e9_t5_review']) {
+  writeFileSync(join(proj, 'n.jsonl'), lines(...req('n1', 'n', 'impl_issue_repo-5')));
+  for (const name of ['ticket-repo-5', 'repo-5', 'harness_repo_e9_t5_review', 'review-2_issue_repo-5', 'issue_repo-5']) {
     const r = spawnHarness(cli, ['--root', root, '--session', name, '--json']);
     assert.equal(r.status, 0, r.stderr);
     const j = JSON.parse(r.stdout);
-    assert.deepEqual(j.sessions.map((s) => s.sessionId).sort(), ['l', 't', 'x'], name);
-    assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['ticket-repo-5', 3]], name);
-    assert.deepEqual(j.time.names.map((g) => [g.name, g.windows]), [['ticket-repo-5', 3]], name);
+    assert.deepEqual(j.sessions.map((s) => s.sessionId).sort(), ['l', 'n', 't', 'x'], name);
+    assert.deepEqual(j.names.map((g) => [g.name, g.windows]), [['issue_repo-5', 4]], name);
+    assert.deepEqual(j.time.names.map((g) => [g.name, g.windows]), [['issue_repo-5', 4]], name);
   }
   const epic = JSON.parse(spawnHarness(cli, ['--root', root, '--session', 'epic-repo-5', '--json']).stdout);
   assert.deepEqual(epic.sessions.map((s) => s.sessionId), ['e'], 'an epic on the same issue is its own unit');
   // a custom name still groups by itself, and an unnamed window stays out of the grouping
   const all = JSON.parse(spawnHarness(cli, ['--root', root, '--json']).stdout);
-  assert.deepEqual(all.names.map((g) => g.name).sort(), ['epic-repo-5', 'other', 'ticket-repo-5', 'ticket-repo-7']);
+  assert.deepEqual(all.names.map((g) => g.name).sort(), ['epic_repo-5', 'issue_repo-5', 'issue_repo-7', 'other']);
 });
 
 test('--session on a tree name keeps the named subagents keyed to it, and a director\'s row no longer holds them (#272)', () => {
@@ -128,17 +129,18 @@ test('--session on a tree name keeps the named subagents keyed to it, and a dire
     return JSON.parse(r.stdout);
   };
   const ticket = run('harness_repo_e9_t5_review');
-  assert.deepEqual([ticket.files, ticket.totals.requests, ticket.names.map((g) => [g.name, g.requests])], [1, 1, [['ticket-repo-5', 1]]]);
+  assert.deepEqual([ticket.files, ticket.totals.requests, ticket.names.map((g) => [g.name, g.requests])], [1, 1, [['issue_repo-5', 1]]]);
   const director = run('director-harness');
-  assert.deepEqual([director.files, director.totals.requests, director.names.map((g) => [g.name, g.requests])], [2, 2, [['director-harness', 2]]]);
+  assert.deepEqual([director.files, director.totals.requests, director.names.map((g) => [g.name, g.requests])], [2, 2, [['topic_harness', 2]]]);
 });
 
 test('--session with no matching window exits 1 and says so', () => {
   const root = fixture();
   const r = spawnHarness(cli, ['--root', root, '--session', 'repo-404']);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /no session named repo-404/);
-  assert.match(r.stderr, /session-name\.mjs/, 'points at the launch line');
+  assert.match(r.stderr, /nothing charged to issue_repo-404 \(from repo-404\)/);
+  assert.match(r.stderr, /session-name\.mjs <role> <kind> <target/, 'points at the name builder');
+  assert.doesNotMatch(r.stderr, /launch line|claude -n/);
   assert.doesNotMatch(r.stderr, /\/rename/);
 });
 

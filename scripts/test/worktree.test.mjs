@@ -50,7 +50,7 @@ test('new copies env files and cuts clean from origin/main; remove cleans up', (
   assert.ok(existsSync(join(wt, '.env')), '.env copied');
   assert.ok(existsSync(join(wt, '.env.local')), '.env.local copied');
   assert.match(out, /branch: {3}feat\/demo/);
-  assert.match(out, /launch: {3}claude -n general-demo\n/, 'no issue number: a general launch line');
+  assert.doesNotMatch(out, /launch:/, 'no launch line: agents are spawned into the worktree');
   assert.doesNotMatch(out, /WARNING: new branch is not clean/);
 
   execHarness(script, ['remove', wt], { encoding: 'utf8', env });
@@ -178,188 +178,21 @@ test('.worktreeinclude overrides the default env set', () => {
   assert.ok(!existsSync(join(wt, '.env')), '.env excluded by .worktreeinclude');
 });
 
-test('a ticket unit never warns about the session name: its window names itself (#344)', () => {
-  for (const [name, source, entrypoint] of [['app-72', 'auto'], ['whatever', 'auto'], ['some-other-name', 'user'], ['ticket-app-73', 'user'], ['director-harness', 'user'], ['whatever', 'auto', 'claude-desktop']]) {
+test('new prints no launch line and no session-name warning: agents are spawned into a worktree (#360)', () => {
+  const sessions = [['whatever', 'auto'], ['whatever', 'auto', 'claude-desktop'], [undefined, 'auto'], ['some-other-name', 'user'], ['director-harness', 'user']];
+  for (const [i, [name, source, entrypoint]] of sessions.entries()) {
     const root = tempDir('wt-');
     const repo = makeRepoWithOrigin(root);
     const sessionsDir = join(root, 'sessions');
     writeSession(sessionsDir, '4242', name, source, entrypoint);
     const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-    const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-    assert.doesNotMatch(out, /WARNING|TITLE:|\/rename|set_session_title/, name);
-    assert.match(out, /launch: {3}cd "\S+app-72-foo"; claude\n/, name);
-    assert.ok(existsSync(join(root, '.worktrees', 'app-72-foo')), 'the worktree is still made');
+    for (const slug of ['72-foo', 'no-number-here', '0-foo', '007-foo']) {
+      const r = spawnHarness(script, ['new', repo, slug], { env });
+      assert.equal(r.status, 0, `${i} ${slug}: ${r.stderr}`);
+      assert.ok(existsSync(join(root, '.worktrees', `app-${slug}`)), `${i} ${slug}: the worktree is made`);
+      assert.doesNotMatch(r.stdout, /launch:|claude -n|WARNING: session|TITLE:|\/rename|set_session_title|undefined/, `${i} ${slug}`);
+    }
   }
-});
-
-test('new prints the cd launch line when the branch carries the ticket number, from the slug or the branch', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const env = { CLAUDE_WORKSPACE_ROOT: root };
-  const fwd = (p) => p.replace(/\\/g, '/');
-  const a = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.ok(a.includes('launch:   cd "' + fwd(join(root, '.worktrees', 'app-72-foo')) + '"; claude\n'), a);
-  assert.doesNotMatch(a, /claude -n/);
-  const b = execHarness(script, ['new', repo, 'bar', '--branch', 'feat/88-bar'], { encoding: 'utf8', env });
-  assert.ok(b.includes('launch:   cd "' + fwd(join(root, '.worktrees', 'app-bar')) + '"; claude\n'), b);
-});
-
-test('new maps the branch number from any one-segment prefix', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const out = execHarness(script, ['new', repo, 'bar', '--branch', 'fix/88-bar'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
-  assert.match(out, /launch: {3}cd "\S+app-bar"; claude\n/);
-  assert.doesNotMatch(out, /claude -n/);
-});
-
-test('a ticket number only in the slug, with a branch that does not carry it, keeps the -n launch line', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const out = execHarness(script, ['new', repo, '72-foo', '--branch', 'feat/bar'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
-  assert.match(out, /launch: {3}claude -n ticket-app-72\n/);
-});
-
-test('new normalizes a leading-zero issue number and treats 0 as no number, never throwing mid-new', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const env = { CLAUDE_WORKSPACE_ROOT: root };
-  const z = spawnHarness(script, ['new', repo, '007-foo'], { env });
-  assert.equal(z.status, 0, z.stderr);
-  assert.match(z.stdout, /launch: {3}cd "\S+app-007-foo"; claude\n/);
-  const zero = spawnHarness(script, ['new', repo, '0-foo'], { env });
-  assert.equal(zero.status, 0, zero.stderr);
-  assert.match(zero.stdout, /launch: {3}claude -n general-0-foo\n/);
-});
-
-test('a director, or an epic or repo lead of this repo, gets the ticket launch line and no warning', () => {
-  for (const name of ['director-harness', 'epic-app-40', 'harness_app', 'harness_app_e40']) {
-    const root = tempDir('wt-');
-    const repo = makeRepoWithOrigin(root);
-    const sessionsDir = join(root, 'sessions');
-    writeSession(sessionsDir, '4242', name, 'user');
-    const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-    const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-    assert.match(out, /launch: {3}cd "\S+app-72-foo"; claude\n/, name);
-    assert.doesNotMatch(out, /WARNING|\/rename/, name);
-  }
-});
-
-test('a long slug with no number gives the same general name as the CLI (4-word cap)', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const out = execHarness(script, ['new', repo, 'one-two-three-four-five'], { encoding: 'utf8', env: { CLAUDE_WORKSPACE_ROOT: root } });
-  assert.match(out, /launch: {3}claude -n general-one-two-three-four\n/);
-});
-
-test('new survives a null session registry entry', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  mkdirSync(sessionsDir, { recursive: true });
-  writeFileSync(join(sessionsDir, '4242.json'), 'null');
-  const r = spawnHarness(script, ['new', repo, '72-foo'], { env: { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' } });
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /launch: {3}cd "\S+app-72-foo"; claude\n/);
-});
-
-test('new in a desktop session tells the agent to call set_session_title for a general unit, not to launch or /rename', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'whatever', 'auto', 'claude-desktop');
-  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
-  assert.match(out, /Call mcp__ccd_session_mgmt__set_session_title with 'general-no-number-here'/);
-  assert.doesNotMatch(out, /\/rename/);
-  assert.doesNotMatch(out, /WARNING: session name/);
-});
-
-test('new in a desktop session whose name is chosen says nothing for a general unit', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'general-cleanup', 'user', 'claude-desktop');
-  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
-  assert.doesNotMatch(out, /set_session_title|WARNING: session/);
-});
-
-test('new warns on an auto name even when the slug has no issue number, with the generic name', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'whatever', 'auto');
-  const env = {
-    CLAUDE_WORKSPACE_ROOT: root,
-    CLAUDE_SESSIONS_DIR: sessionsDir,
-    CLAUDE_PID: '4242',
-  };
-
-  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
-  assert.match(out, /WARNING: session name 'whatever' is auto-generated/);
-  assert.match(out, /claude -n general-no-number-here\n/);
-  assert.match(out, /\/rename general-no-number-here\b/);
-  assert.doesNotMatch(out, /undefined|null/);
-});
-
-test('with no issue number in the slug, any typed name passes and an untyped one warns', () => {
-  for (const [name, warns] of [['director-harness', false], ['general-cleanup', false], ['ticket-app-9', false], ['whatever', true]]) {
-    const root = tempDir('wt-');
-    const repo = makeRepoWithOrigin(root);
-    const sessionsDir = join(root, 'sessions');
-    writeSession(sessionsDir, '4242', name, 'user');
-    const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir, CLAUDE_PID: '4242' };
-
-    const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
-    if (warns) assert.match(out, /WARNING: session name 'whatever' has no type[\s\S]*claude -n general-no-number-here\n/);
-    else assert.doesNotMatch(out, /WARNING: session/, name);
-  }
-});
-
-test('an auto session with no name never prints undefined', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', undefined, 'auto');
-  const env = {
-    CLAUDE_WORKSPACE_ROOT: root,
-    CLAUDE_SESSIONS_DIR: sessionsDir,
-    CLAUDE_PID: '4242',
-  };
-
-  const out = execHarness(script, ['new', repo, 'no-number-here'], { encoding: 'utf8', env });
-  assert.match(out, /WARNING: session/);
-  assert.match(out, /\/rename general-no-number-here\b/);
-  assert.doesNotMatch(out, /undefined/);
-});
-
-test('new says nothing when CLAUDE_PID is unset (non-Claude shell)', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions');
-  writeSession(sessionsDir, '4242', 'whatever', 'auto');
-  const env = { CLAUDE_WORKSPACE_ROOT: root, CLAUDE_SESSIONS_DIR: sessionsDir };
-
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.doesNotMatch(out, /WARNING: session name/);
-});
-
-test('new says nothing when the session registry file is missing', () => {
-  const root = tempDir('wt-');
-  const repo = makeRepoWithOrigin(root);
-  const sessionsDir = join(root, 'sessions'); // never written
-  const env = {
-    CLAUDE_WORKSPACE_ROOT: root,
-    CLAUDE_SESSIONS_DIR: sessionsDir,
-    CLAUDE_PID: '4242',
-  };
-
-  const out = execHarness(script, ['new', repo, '72-foo'], { encoding: 'utf8', env });
-  assert.doesNotMatch(out, /WARNING: session name/);
 });
 
 // ---- prepush: commitlint over origin/<base>..HEAD (#170) ----

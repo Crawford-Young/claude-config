@@ -174,32 +174,59 @@ export function parseArgs(argv) {
   return args;
 }
 
-// ---- session names (#175) -------------------------------------------------------
-// The one source of the session-name format. A unit's windows carry it as their
-// custom title (written by `claude -n` or /rename), and an in-session subagent its tree
-// name (#272) as its Agent `name`; spend, reflect, the worktree check, the statusline
-// and agent-name-guard all read it back through parseSessionName.
+// ---- agent names (#175, #272, #360) ---------------------------------------------
+// The ONE place the agent-name grammar is documented; session-name.mjs builds it, and
+// audit, reflect, the statusline, session-start and agent-name-guard read it back
+// through parseAgentName. Strate (Rust) ports this block.
+//
+//   name   = [<role>_]<kind>_<target>        <= 64 chars when built, lowercase; no role: a charge key (form charge)
+//   role   = slug                             a free label the spawner picks (manager, impl, review, researcher…)
+//   kind   = repo | epic | issue | pr | topic
+//   target = <repo>                           kind repo
+//          | <repo>-<N>                       kind epic | issue | pr  (N = [1-9]\d*; the LAST -<digits> is N, so the repo slug is greedy)
+//          | <slug>                           kind topic
+//   slug   = [a-z0-9]+(-[a-z0-9]+)*
+//   charge key = <kind>_<target>              the name minus its role
+//
+// The bound is the Agent `name` schema (CC 2.1.314): /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.
+// Titles from `claude -n`, /rename and cloud sessions are free text. Parsing trims and
+// case-folds, tries this grammar first, then the legacy forms, which map to the same charge:
+//
+//   legacy form                                                     form   role               charge
+//   ticket-<r>-<N>[-review|-recon][-r<K>][-<K>]  (lazy <r>)          typed  the suffix, else null  issue r#N
+//   epic-<r>-<N>…                                (same suffixes)     typed  the suffix, else null  epic r#N
+//   director-<s>                                                    typed  director           topic s
+//   general-<s>                                                     typed  null               topic s
+//   <dir>_<repo>[_e<N>][_t<N>][_<impl|review|recon>[-r<K>]]         tree   the worker, else null  issue repo#tN, else epic repo#eN, else repo
+//   <slug>-<N>                                                      bare   null               issue slug#N
+//
+// (K >= 2 in both round and dedupe suffixes.) A bare name is only chosen when the user or
+// a peer set it, since derived auto titles (`code-42`) take the same shape. Forms: agent
+// (role + charge), charge (a bare key, role null), then typed, tree and bare (legacy). One
+// overlap follows from the order: a tree name whose repo is a kind word (`h_repo_t5`) reads
+// as this grammar (role h, repo t5).
+// Strate resolves an agent's charge from its git branch → PR → issue first, then its
+// name, then its parent's charge; this harness reads the name alone.
 
 const SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*';
-const ISSUE = '[1-9]\\d*';
+const NUM = '[1-9]\\d*';
 const SLUG_RE = new RegExp(`^${SLUG}$`);
+/** The charge kinds, in the grammar's order. */
+export const CHARGE_KINDS = ['repo', 'epic', 'issue', 'pr', 'topic'];
+const AGENT_RE = new RegExp(`^(?:(?<role>${SLUG})_)?(?<kind>${CHARGE_KINDS.join('|')})_(?<target>${SLUG})$`);
+// <repo>-<N> with a greedy repo, so the last -<digits> is N; also the bare legacy form.
+const NUMBERED_RE = new RegExp(`^(?<repo>${SLUG})-(?<number>${NUM})$`);
 const COUNT = '[2-9]|[1-9]\\d+'; // a round or dedupe number: 2 and up
 const LAZY_SLUG = '[a-z0-9]+(?:-[a-z0-9]+)*?';
 const ROLES = ['review', 'recon'];
 const WORKERS = ['impl', ...ROLES];
 // A lazy repo slug, so `ticket-repo-5-2` reads as the harness's dedupe (-2) of ticket 5, not issue 2 of repo `repo-5`.
-// Suffix order: role, then a -r<K> round, then the harness's -<K> dedupe (K >= 2 for both).
-// A tree name (#272) spells its lineage, `_` between levels, since the Agent tool rejects dots:
-// <dir>_<repo>[_e<N>][_t<N>][_<worker>[-r<K>]], dir → repo → epic → ticket → worker. Any
-// lowercase <slug>_<slug> title therefore reads as a tree repo lead (a_b, probe_l1): accepted,
-// since no typed or legacy name holds a `_`.
-const TYPED_RE = new RegExp(
+const LEGACY_RE = new RegExp(
   `^(?:(?<unit>director|general)-(?<slug>${SLUG})` +
-    `|(?<type>epic|ticket)-(?<repo>${LAZY_SLUG})-(?<issue>${ISSUE})(?:-(?<role>${ROLES.join('|')}))?(?:-r(?<round>${COUNT}))?(?:-(?<dedupe>${COUNT}))?` +
-    `|(?<dir>${SLUG})_(?<treeRepo>${SLUG})(?:_e(?<epic>${ISSUE}))?(?:_t(?<ticket>${ISSUE}))?(?:_(?<worker>${WORKERS.join('|')})(?:-r(?<workerRound>${COUNT}))?)?)$`,
+    `|(?<type>epic|ticket)-(?<repo>${LAZY_SLUG})-(?<issue>${NUM})(?:-(?<role>${ROLES.join('|')}))?(?:-r(?:${COUNT}))?(?:-(?:${COUNT}))?` +
+    `|(?<dir>${SLUG})_(?<treeRepo>${SLUG})(?:_e(?<epic>${NUM}))?(?:_t(?<ticket>${NUM}))?(?:_(?<worker>${WORKERS.join('|')})(?:-r(?:${COUNT}))?)?)$`,
 );
-const LEGACY_RE = new RegExp(`^(${SLUG})-(${ISSUE})$`);
-/** The Agent tool's limit on a name (tested 2026-10-16). */
+/** The Agent tool's limit on a name. */
 const AGENT_NAME_MAX = 64;
 
 /** Lowercase kebab slug of free text, cut to its first `maxWords` words. */
@@ -207,114 +234,88 @@ export function slugify(text, maxWords = Infinity) {
   return String(text ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, maxWords).join('-');
 }
 
-/** Words in a general session's topic. */
+/** Words in a topic target. */
 export const TOPIC_WORDS = 4;
 
-/** An issue number as sessionName takes it: leading zeros dropped (`0175` → '175'),
+/** An issue number as agentName takes it: leading zeros dropped (`0175` → '175'),
  *  null for 0 or anything that isn't a whole number. */
 export function issueNumber(v) {
   const m = /^0*([1-9]\d*)$/.exec(typeof v === 'number' || typeof v === 'string' ? String(v) : '');
   return m ? m[1] : null;
 }
 
-/** The general session name for free text: slugified, first TOPIC_WORDS words. Throws on empty. */
-export function generalSessionName(text) {
-  return sessionName('general', slugify(text, TOPIC_WORDS));
-}
-
 function slugArg(what, v) {
-  if (typeof v !== 'string' || !SLUG_RE.test(v)) throw new Error(`session name ${what} must be a lowercase kebab slug, got ${JSON.stringify(v)}`);
+  if (typeof v !== 'string' || !SLUG_RE.test(v)) throw new Error(`agent name ${what} must be a lowercase kebab slug, got ${JSON.stringify(v)}`);
   return v;
 }
 
-/** A unit's session name: ('director', scope) | ('epic'|'ticket', repo, N[, role[, round]]) | ('general', topic),
- *  or an in-session subagent's tree name: ('tree', dir, repo[, { epic, ticket, worker, round }]).
- *  A role (review | recon) marks an in-session subagent of the unit; bare is the implementer.
- *  A round (2+) marks a fresh dispatch on a name already used in the session (`-r2`).
- *  Throws on anything that would not parse back to the same type. */
-const ARITY = new Map([['director', 1], ['general', 1], ['epic', 2], ['ticket', 2]]);
-const ROLE_TYPES = new Set(['epic', 'ticket']);
-const TREE_OPTIONS = new Set(['epic', 'ticket', 'worker', 'round']);
-
-function treeName(dir, repo, opts = {}, ...extra) {
-  if (extra.length) throw new Error('too many arguments for a tree name');
-  const unknown = Object.keys(opts).filter((k) => !TREE_OPTIONS.has(k));
-  if (unknown.length) throw new Error(`unknown tree name option ${unknown.join(', ')}: ${[...TREE_OPTIONS].join(' | ')}`);
-  const { epic, ticket, worker, round } = opts;
-  let name = `${slugArg('scope', dir)}_${slugArg('repo', repo)}`;
-  for (const [what, prefix, v] of [['epic', 'e', epic], ['ticket', 't', ticket]]) {
-    if (v === undefined) continue;
-    const n = issueNumber(v);
-    if (!n) throw new Error(`tree name ${what} must be a positive issue number, got ${JSON.stringify(v)}`);
-    name += `_${prefix}${n}`;
+/** An agent's name: agentName('impl', 'issue', 'strate', 16) → impl_issue_strate-16,
+ *  ('lead', 'repo', 'strate'), ('researcher', 'topic', 'pricing'). Throws on a non-slug
+ *  role/repo/topic, an unknown kind, a bad number, the wrong arity or a name over 64 chars. */
+export function agentName(role, kind, ...target) {
+  slugArg('role', role);
+  if (!CHARGE_KINDS.includes(kind)) throw new Error(`agent name kind must be ${CHARGE_KINDS.join(' | ')}, got ${JSON.stringify(kind)}`);
+  const numbered = kind !== 'repo' && kind !== 'topic';
+  if (target.length !== (numbered ? 2 : 1)) throw new Error(`wrong number of arguments for ${/^[aeiou]/.test(kind) ? 'an' : 'a'} ${kind} charge: it takes ${numbered ? '<repo> <N>' : `<${kind}>`}`);
+  let t = slugArg(kind === 'topic' ? 'topic' : 'repo', target[0]);
+  if (numbered) {
+    const n = issueNumber(target[1]);
+    if (!n) throw new Error(`agent name number must be a positive issue number, got ${JSON.stringify(target[1])}`);
+    t += `-${n}`;
   }
-  if (worker !== undefined && !WORKERS.includes(worker)) throw new Error(`tree name worker must be ${WORKERS.join(' | ')}, got ${JSON.stringify(worker)}`);
-  if (round !== undefined && worker === undefined) throw new Error('a tree name round needs a worker (--worker impl | review | recon): it marks a worker re-dispatch');
-  if (round !== undefined && !(Number.isInteger(round) && round >= 2)) throw new Error(`tree name round must be a whole number >= 2, got ${JSON.stringify(round)}`);
-  if (worker) name += `_${worker}${round ? `-r${round}` : ''}`;
-  if (name.length > AGENT_NAME_MAX) throw new Error(`tree name ${name} is over the Agent tool's ${AGENT_NAME_MAX} characters`);
+  const name = `${role}_${kind}_${t}`;
+  if (name.length > AGENT_NAME_MAX) throw new Error(`agent name ${name} is over the Agent tool's ${AGENT_NAME_MAX} characters`);
   return name;
 }
 
-export function sessionName(type, ...args) {
-  if (type === 'tree') return treeName(...args);
-  const want = ARITY.get(type);
-  if (!want) throw new Error(`unknown session type ${JSON.stringify(type)}: director | epic | ticket | general | tree`);
-  if (args.length > want + (ROLE_TYPES.has(type) ? 2 : 0)) throw new Error(`too many arguments for a ${type} session name`);
-  if (want === 1) return `${type}-${slugArg(type === 'director' ? 'scope' : 'topic', args[0])}`;
-  const repo = slugArg('repo', args[0]);
-  const n = issueNumber(args[1]);
-  if (!n) throw new Error(`session name issue must be a positive issue number, got ${JSON.stringify(args[1])}`);
-  const role = args[2];
-  if (role !== undefined && !ROLES.includes(role)) throw new Error(`session name role must be ${ROLES.join(' | ')}, got ${JSON.stringify(role)}`);
-  const round = args[3];
-  if (round !== undefined && !(Number.isInteger(round) && round >= 2)) throw new Error(`session name round must be a whole number >= 2, got ${JSON.stringify(round)}`);
-  return `${type}-${repo}-${n}${role ? `-${role}` : ''}${round ? `-r${round}` : ''}`;
+/** A target's charge for its kind, or null when the target doesn't fit the kind. */
+function targetCharge(kind, target) {
+  if (kind === 'repo') return { kind, repo: target };
+  if (kind === 'topic') return { kind, topic: target };
+  const m = NUMBERED_RE.exec(target)?.groups;
+  return m ? { kind, repo: m.repo, number: Number(m.number) } : null;
 }
 
-/** Parsed identity of a session name, case-folded. name is the canonical typed form
- *  (the join key, role dropped: every agent of a ticket joins to it) and raw the input as given.
- *  A role-suffixed name adds `role`, a -r<K> round `round`, the harness's -<K> dedupe `dedupe`; the bare form has none. A legacy `<slug>-<N>` is a ticket
- *  (legacy: true). A tree name (tree: true) keys to its ticket, else its epic, else (type
- *  'repo') its own `<dir>_<repo>`, and adds its worker as `role`.
- *  Missing, empty or unparseable → { type: 'general', topic: null, name: null }. */
-export function parseSessionName(input) {
-  const raw = typeof input === 'string' ? input : '';
-  const s = raw.trim().toLowerCase();
-  const g = TYPED_RE.exec(s)?.groups;
-  if (g?.unit === 'director') return { type: 'director', scope: g.slug, name: s, raw };
-  if (g?.unit === 'general') return { type: 'general', topic: g.slug, name: s, raw };
-  if (g?.type) {
-    const name = `${g.type}-${g.repo}-${g.issue}`;
-    return { type: g.type, repo: g.repo, issue: Number(g.issue), legacy: false, ...(g.role && { role: g.role }), ...(g.round && { round: Number(g.round) }), ...(g.dedupe && { dedupe: Number(g.dedupe) }), name, raw };
-  }
+const keyOf = (c) => `${c.kind}_${c.topic ?? c.repo}${c.number ? `-${c.number}` : ''}`;
+
+/** Parsed identity of an agent name, trimmed and case-folded:
+ *  { role: string|null, charge: { kind, repo?, number?, topic? }, key, form, raw }, where key
+ *  is `<kind>_<target>` (the join key every form of one charge shares), form is
+ *  'agent' | 'charge' | 'typed' | 'tree' | 'bare' and raw the input as given.
+ *  Null when the input is missing, empty or unparseable. */
+export function parseAgentName(input) {
+  if (typeof input !== 'string') return null;
+  const s = input.trim().toLowerCase();
+  const out = (form, role, charge) => ({ role, charge, key: keyOf(charge), form, raw: input });
+  const a = AGENT_RE.exec(s)?.groups;
+  const agent = a && targetCharge(a.kind, a.target);
+  if (agent) return a.role ? out('agent', a.role, agent) : out('charge', null, agent);
+  const g = LEGACY_RE.exec(s)?.groups;
+  if (g?.unit) return out('typed', g.unit === 'director' ? 'director' : null, { kind: 'topic', topic: g.slug });
+  if (g?.type) return out('typed', g.role ?? null, { kind: g.type === 'ticket' ? 'issue' : 'epic', repo: g.repo, number: Number(g.issue) });
   if (g?.dir) {
-    const { dir, treeRepo: repo, epic, ticket, worker, workerRound } = g;
-    const type = ticket ? 'ticket' : epic ? 'epic' : 'repo';
-    const issue = ticket || epic;
-    return { type, tree: true, repo, ...(issue && { issue: Number(issue) }), ...(worker && { role: worker }), ...(workerRound && { round: Number(workerRound) }), legacy: false, name: issue ? `${type}-${repo}-${issue}` : `${dir}_${repo}`, raw };
+    const { treeRepo: repo, epic, ticket, worker } = g;
+    const charge = ticket ? { kind: 'issue', repo, number: Number(ticket) } : epic ? { kind: 'epic', repo, number: Number(epic) } : { kind: 'repo', repo };
+    return out('tree', worker ?? null, charge);
   }
-  const l = LEGACY_RE.exec(s);
-  if (l) return { type: 'ticket', repo: l[1], issue: Number(l[2]), legacy: true, name: `ticket-${l[1]}-${l[2]}`, raw };
-  return { type: 'general', topic: null, name: null, raw };
+  const b = NUMBERED_RE.exec(s)?.groups;
+  return b ? out('bare', null, { kind: 'issue', repo: b.repo, number: Number(b.number) }) : null;
 }
 
-/** Whether a session name was chosen for its unit, given the registry's nameSource
- *  (undefined when unknown). A typed name is, whatever its source: what a `claude -n`
- *  launch records is unverified. A legacy-form name is only when user- or peer-set,
- *  since derived auto names (`code-42`) take the same shape. The failsafe never is. */
+/** Whether a name was chosen for its agent, given the registry's nameSource (undefined
+ *  when unknown). A parsed non-bare name is, whatever its source: what a `claude -n`
+ *  launch records is unverified. A bare name is only when user- or peer-set, since
+ *  derived auto names (`code-42`) take the same shape. The failsafe never is. */
 export function isChosenName(name, nameSource) {
-  const p = parseSessionName(name);
-  if (!p.name) return false;
-  return !p.legacy || nameSource === 'user' || nameSource === 'peer';
+  const p = parseAgentName(name);
+  if (!p) return false;
+  return p.form !== 'bare' || nameSource === 'user' || nameSource === 'peer';
 }
 
-/** Grouping key for a window's custom title: its typed name when it parses (a legacy
- *  and a typed window of one unit share it), the trimmed title when it doesn't, null
- *  when there is none. */
-export function sessionKey(title) {
-  const p = parseSessionName(title);
-  return p.name ?? (p.raw.trim() || null);
+/** Grouping key for a name or title: its charge key when it parses (every form of one
+ *  charge shares it), the trimmed title when it doesn't, null when there is none. */
+export function chargeKey(title) {
+  return parseAgentName(title)?.key ?? ((typeof title === 'string' && title.trim()) || null);
 }
 
 /** The issue number a slug or branch leads with, after an optional feat/ fix/ chore/ refactor/
@@ -324,17 +325,18 @@ export function branchIssue(s) {
   return m ? issueNumber(m[1]) : null;
 }
 
-/** The ticket session name for a linked worktree rooted at `dir` whose branch leads with
- *  an issue number (`ticket-<repo>-<N>`, repo from the main checkout's folder), else null.
- *  Reads the .git pointer and HEAD directly, so it spawns nothing: session-start runs it
- *  on every session start. */
-export function worktreeTicketName(dir) {
+/** The charge key for a linked worktree rooted at `dir` whose branch leads with an issue
+ *  number (`issue_<repo>-<N>`, repo from the main checkout's folder), else null. Role-less
+ *  on purpose: the window's role is unknown, and a charge-form title stays out of
+ *  agent-name-guard's company context. Reads the .git pointer and HEAD directly, so it
+ *  spawns nothing: session-start runs it on every session start. */
+export function worktreeChargeKey(dir) {
   const gitdir = /^gitdir:\s*(.+)$/m.exec(readIfExists(join(dir, '.git')) || '')?.[1]?.trim();
   if (!gitdir || !/[\\/]worktrees[\\/][^\\/]+$/.test(gitdir)) return null; // main checkout, submodule
   const abs = resolve(dir, gitdir);
   const n = branchIssue(/^ref: refs\/heads\/(.+)$/m.exec(readIfExists(join(abs, 'HEAD')) || '')?.[1]);
   const repo = slugify(basename(resolve(abs, '..', '..', '..')));
-  return n && repo ? sessionName('ticket', repo, n) : null;
+  return n && repo ? `issue_${repo}-${n}` : null;
 }
 
 /** Resolve a repo argument (relative or absolute) and verify it is a repo. */

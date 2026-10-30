@@ -14,13 +14,15 @@
 // - A user-set name (/rename, or a launch name from claude -n / claude --bg -n,
 //   2.1.280) is a {type:'custom-title'} record. One file can hold several units (a
 //   rename without /clear), so it splits into a window at each change of name (#115;
-//   the rule is strate's store/group.rs, settled on real data). Rows group per unit
-//   on lib's sessionKey, so a legacy and a typed name of one unit join (#175).
+//   the rule is strate's store/group.rs, settled on real data). Rows group per charge
+//   on lib's chargeKey (the name minus its role), so every form of one charge joins
+//   (#175, #360). The report's JSON key stays `names` (reflect-gather reads it).
 //   ai-title and agent-name records carry auto names, not unit names (#73).
 // - A named subagent's .meta.json carries its Agent `name` (verified 2026-10-16, CC
 //   2.1.301); with agent teams off its id no longer embeds the name. Its spend and time
-//   group under that name's sessionKey, not its window's title (#272). With no `name`
-//   (an Agent tool without the parameter), a tree-name `description` stands in (#318).
+//   group under that name's chargeKey, not its window's title (#272). With no `name`
+//   (an Agent tool without the parameter), a `description` that parses to a non-bare
+//   agent name stands in (#318).
 // - An assistant record carries the request's effort as a top-level `effort` field
 //   (#113; on every subagent record of CC 2.1.26x-2.1.296 on disk 2026-10-13, except
 //   Haiku 4.5, whose records have none: its effort is unknown, not a default).
@@ -57,7 +59,7 @@ import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { shellSkillReads } from '../hooks/_hooklib.mjs';
-import { parseSessionName, sessionKey } from './lib.mjs';
+import { chargeKey, parseAgentName } from './lib.mjs';
 
 const MTOK = 1e6;
 
@@ -307,8 +309,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const ai = new Map(); // sessionId -> auto title, a per-file fallback label
   const fileOf = new Map(); // window -> sessionId
   const titleOf = (key) => custom.get(key) || ai.get(fileOf.get(key)) || '';
-  /** The per-name row a context's spend joins: a named subagent's own name (#272), else its window's title. */
-  const nameKeyOf = (ctx) => sessionKey(ctx.agent?.name) ?? sessionKey(custom.get(ctx.window ?? ctx.sessionId));
+  /** The per-charge row a context's spend joins: a named subagent's own name (#272), else its window's title. */
+  const nameKeyOf = (ctx) => chargeKey(ctx.agent?.name) ?? chargeKey(custom.get(ctx.window ?? ctx.sessionId));
   const reported = new Map(); // sessionId -> Claude Code's cost-state total (its max)
   const reportedModels = new Map(); // sessionId -> that record's modelUsage
   const skills = {}, skillReads = {}, slash = {}, docs = {};
@@ -647,7 +649,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     const names = new Map();
     const rowOf = (name) => names.get(name) || names.set(name, { name, windows: new Set(), wallMs: 0, activeMs: 0, ...zeroSplit(), usd: cost.names.get(name)?.usd || 0 }).get(name);
     for (const s of sessions) {
-      const name = sessionKey(custom.get(s.sessionId));
+      const name = chargeKey(custom.get(s.sessionId));
       if (!name) continue;
       const g = rowOf(name);
       g.windows.add(s.sessionId);
@@ -725,8 +727,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   function namedRunTimes() {
     const idleGapMs = idleGapMin * 60e3, runs = [];
     for (const tl of lines.values()) {
-      const name = sessionKey(tl.agent?.name);
-      if (!name || !tl.ts.length || timeOnly.has(tl.win) || name === sessionKey(custom.get(tl.win))) continue;
+      const name = chargeKey(tl.agent?.name);
+      if (!name || !tl.ts.length || timeOnly.has(tl.win) || name === chargeKey(custom.get(tl.win))) continue;
       const ts = [...tl.ts].sort((a, b) => a - b);
       const run = { name, win: tl.win, wallMs: ts.at(-1) - ts[0], ...zeroSplit() };
       for (const [, split] of sweep(intervalsOf(tl, idleGaps(ts, idleGapMs)), ts[0], ts.at(-1))) for (const k of SPLIT) run[k] += split[k];
@@ -919,8 +921,9 @@ export async function* walkTranscripts(root) {
           const id = basename(f, '.jsonl').replace(/^agent-/, '');
           let meta = {};
           try { meta = JSON.parse(readFileSync(join(sub, `agent-${id}.meta.json`), 'utf8')); } catch { /* no meta: untyped */ }
-          // No `name` when the Agent tool had none (#318): the tree name rides in description; prose descriptions don't count.
-          const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : parseSessionName(meta.description).tree ? meta.description : null;
+          // No `name` when the Agent tool had none (#318): the agent name rides in description; prose and bare descriptions don't count.
+          const described = parseAgentName(meta.description);
+          const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : described && described.form !== 'bare' ? meta.description : null;
           yield { file: join(sub, f), ctx: { sessionId: e.name, agent: { id, type: meta.agentType || 'unknown', model: meta.model, ...(name && { name }) } } };
         }
       }
@@ -1111,8 +1114,8 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   out.push(table(['first day', 'title', 'requests', '$', 'subagent $', 'peak depth'],
     r.sessions.slice(0, top).map((s) => [s.first, (s.title || s.sessionId.slice(0, 8)).replace(/\|/g, '/').slice(0, 50), s.requests, usd(s.usd), usd(s.subagentUsd), kt(s.peakDepth)])));
   if (r.names?.length) {
-    out.push('', '## Per session name');
-    out.push(table(['name', 'windows', 'first day', 'last day', 'requests', '$', 'subagent $'],
+    out.push('', '## Per charge (windows and named agents, grouped by their name minus its role)');
+    out.push(table(['charge', 'windows', 'first day', 'last day', 'requests', '$', 'subagent $'],
       r.names.slice(0, top).map((g) => [g.name.replace(/\|/g, '/'), g.windows, g.first, g.last, g.requests, usd(g.usd), usd(g.subagentUsd)])));
   }
   out.push('', '## Per agent type');
@@ -1153,7 +1156,7 @@ function renderTime(t, top) {
   const x = t.totals, out = ['## Time'];
   out.push(`wall ${dur(x.wallMs)} · **active ${dur(x.activeMs)}** (idle gaps over ${t.idleGapMin} min removed) · of active: model ${share(x.modelMs, x.activeMs)} · tools ${share(x.toolsMs, x.activeMs)} · user ${share(x.userMs, x.activeMs)} · other ${share(x.otherMs, x.activeMs)}`);
   out.push('', '**Per day** (UTC; parallel sessions add)', table(['day', ...SPLIT_HEAD, '$'], t.days.map((d) => [d.day, ...splitCells(d), usd(d.usd)])));
-  if (t.names.length) out.push('', '**Per session name**', table(['name', 'windows', ...SPLIT_HEAD, '$'], t.names.slice(0, top).map((g) => [cell(g.name), g.windows, ...splitCells(g), usd(g.usd)])));
+  if (t.names.length) out.push('', '**Per charge**', table(['charge', 'windows', ...SPLIT_HEAD, '$'], t.names.slice(0, top).map((g) => [cell(g.name), g.windows, ...splitCells(g), usd(g.usd)])));
   out.push('', `**Sessions** (top ${top} by active)`, table(['first day', 'title', ...SPLIT_HEAD, '$'],
     t.sessions.slice(0, top).map((s) => [s.first, cell(s.title || s.sessionId.slice(0, 8)).slice(0, 50), ...splitCells(s), usd(s.usd)])));
   out.push('', '**Agent time**', table(['type', 'runs', 'wall', 'p50 run', 'p95 run', '$'],
