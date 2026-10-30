@@ -1,0 +1,13 @@
+{
+  "_note": "Storebound intro (610x1080 half): full-frame pfp from still.py, censored captions. Times are pre-cut; shift subtracts the 3.80 s removed before them.",
+  "size": [610, 1080],
+  "center_y": 790,
+  "font_size": 41,
+  "shift": 3.80,
+  "extra_overlays": ["pfp.png 17.10 99"],
+  "lines": [
+    {"words": ["****", "****", "dude"], "times": [21.16, 21.60, 21.94], "end": 22.36},
+    {"words": ["I", "don't", "know"], "times": [22.36, 22.44, 22.52], "end": 22.64},
+    {"words": ["what", "to", "say"], "times": [22.64, 22.76, 22.90], "end": 23.75}
+  ]
+}
