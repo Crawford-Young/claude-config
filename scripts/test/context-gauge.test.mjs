@@ -205,6 +205,8 @@ test('warn says checkpoint, then run the continuation skill', () => {
   assert.match(text, /What\/Verified\/Next\/Ruled out/);
   assert.match(text, /comment/i);
   assert.match(text, /continuation\/SKILL\.md/);
+  assert.match(text, /print its paste-ready block/);
+  assert.doesNotMatch(text, /launch line/, 'the continuation skill prints no launch line (#360)');
   assert.doesNotMatch(text, /AskUserQuestion/);
   assert.doesNotMatch(text, /auto-compact|window/i);
 });
@@ -266,7 +268,8 @@ test('with no window source the absolute bands still fire: 160k nudges, 260k blo
   assert.equal(b.code, 2);
   assert.match(b.stderr, /260k/);
   assert.doesNotMatch(b.stderr, /fresh-session-or-continue|AskUserQuestion/);
-  assert.match(b.stderr, /\/exit, run the launch line/);
+  assert.match(b.stderr, /\/exit, then a fresh session titled as that skill says, the block pasted as its first message/);
+  assert.doesNotMatch(b.stderr, /launch line/, 'the continuation skill prints no launch line (#360)');
   assert.match(b.stderr, /\/compact/);
   assert.doesNotMatch(b.stderr, /clear-vs-continue|\/clear\b/);
   assert.match(b.stderr, /CONTEXT OK/);

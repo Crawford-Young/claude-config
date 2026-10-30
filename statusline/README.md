@@ -12,13 +12,13 @@
 ## Display
 
 ```
-ticket-claude-config-77 · claude-config@feat/77-statusline wt · Opus 5.5 · high · $3.41 · day $48
+impl_issue_claude-config-77 · claude-config@feat/77-statusline wt · Opus 5.5 · high · $3.41 · day $48
 ctx ▰▱▱▱▱▱▱▱▱▱ 102k/1M 8% · cache warm 91% · 5h ▰▰▰▱▱▱▱▱▱▱ 27%→14:00 · 7d ▰▱▱▱▱▱▱▱▱▱ 5%→Wed
 ```
 
 Pieces are joined with `·`, and an absent piece is dropped. A fully empty render prints `[statusline]`, because a blank row looks like a crash.
 
-- **Session name:** comes from `~/.claude/sessions/<pid>.json` `.name`, matched on `sessionId`, with control and bidi characters stripped. `isChosenName` in `scripts/lib.mjs` decides: a typed-prefix name (director, epic, ticket, general) renders bold whatever its `nameSource`; a legacy `<repo>-<N>` name renders bold only when `nameSource` is `user` or `peer`, since a derived auto title like `code-42` would otherwise parse as a ticket. Anything else is the failsafe, rendered dim with a `~` prefix and cut to 24 chars, so an unnamed session stands out. With no registry entry, the name falls back to the payload's `session_name`, marked the same way.
+- **Session name:** comes from `~/.claude/sessions/<pid>.json` `.name`, matched on `sessionId`, with control and bidi characters stripped. `isChosenName` in `scripts/lib.mjs` decides (the grammar lives in its header): an agent name `<role>_<kind>_<target>`, or a legacy typed or tree name, renders bold whatever its `nameSource`; a bare `<repo>-<N>` name renders bold only when `nameSource` is `user` or `peer`, since a derived auto title like `code-42` would otherwise parse as an issue charge. Anything else is the failsafe, rendered dim with a `~` prefix and cut to 24 chars, so an unnamed session stands out. With no registry entry, the name falls back to the payload's `session_name`, marked the same way.
 - **Location:** `repo@branch` for the checkout being edited.
   - The repo comes from the active-repo record (below) when one exists, otherwise from `workspace.current_dir`.
   - A linked worktree shows its owning repo plus a dim `wt`.

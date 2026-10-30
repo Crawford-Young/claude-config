@@ -233,8 +233,8 @@ test('session name: control and bidi bytes are stripped', () => {
   assert.ok(row1.startsWith('\x1b[2m~[31mevil2Jname\x1b[0m · '), JSON.stringify(row1));
 });
 
-test('session name: a typed name is chosen whatever its nameSource, and renders as-is', () => {
-  for (const entry of [{ name: 'ticket-claude-config-175', nameSource: 'auto' }, { name: 'director-harness' }, { name: 'claude-config-62', nameSource: 'user' }, { name: 'harness_claude-config_t264', nameSource: 'auto' }]) {
+test('session name: an agent name or a typed legacy name is chosen whatever its nameSource, and renders as-is', () => {
+  for (const entry of [{ name: 'impl_issue_claude-config-360', nameSource: 'auto' }, { name: 'lead_repo_strate' }, { name: 'ticket-claude-config-175', nameSource: 'auto' }, { name: 'director-harness' }, { name: 'claude-config-62', nameSource: 'user' }, { name: 'harness_claude-config_t264', nameSource: 'auto' }]) {
     const dir = registry(entry);
     const out = render(json('no-rate-limits.json'), { ...NOREG, CLAUDE_SESSIONS_DIR: dir });
     assert.ok(out.startsWith(`\x1b[1m${entry.name}\x1b[0m · `), JSON.stringify(out));

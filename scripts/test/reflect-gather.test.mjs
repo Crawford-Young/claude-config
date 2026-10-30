@@ -1,4 +1,4 @@
-// scripts/test/reflect-gather.test.mjs — a unit's reflect payload, joined on session name
+// scripts/test/reflect-gather.test.mjs — a unit's reflect payload, joined on its charge key
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -43,9 +43,9 @@ test('gathers every window of the unit through the audit filter, with repo activ
   const f = fixture();
   const r = spawnHarness(cli, ['repo-7', '--root', f.root, '--repo', f.repo]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /## Per session name[\s\S]*\| ticket-repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
-  assert.match(r.stdout, /## Audit — 2 window\(s\) named ticket-repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
-  assert.match(r.stdout, /## Time[\s\S]*\*\*Per session name\*\*[\s\S]*\| ticket-repo-7 \| 2 \|/);
+  assert.match(r.stdout, /## Per charge[\s\S]*\| issue_repo-7 \| 2 \| 2026-10-03 \| 2026-10-05 \|/);
+  assert.match(r.stdout, /## Audit — 2 window\(s\) charged to issue_repo-7, 2 transcripts · \$[\d.]+ over 0 min active of 0 min wall/);
+  assert.match(r.stdout, /## Time[\s\S]*\*\*Per charge\*\*[\s\S]*\| issue_repo-7 \| 2 \|/);
   assert.doesNotMatch(r.stdout, /other-1/);
   assert.match(r.stdout, /## Repo activity since 2026-10-03/);
   assert.match(r.stdout, /feat: unit work/, 'a commit on the first window\'s own UTC day is in the window');
@@ -61,7 +61,7 @@ test('a renamed window with no priced requests reports, not crashes', () => {
   const r = spawnHarness(cli, ['repo-9', '--root', f.root, '--repo', f.repo]);
   assert.equal(r.status, 0, r.stderr);
   assert.doesNotMatch(r.stderr, /TypeError/);
-  assert.match(r.stdout, /no priced requests in windows named ticket-repo-9/);
+  assert.match(r.stdout, /no priced requests in windows charged to issue_repo-9/);
 });
 
 test('auditFailure: a failed spawn (null stderr) still yields text and a non-zero code', async () => {
@@ -131,8 +131,13 @@ test('debtSection: files the fixture repo committed reach matchDebt, so the matc
   assert.equal(out, '- #11 f.txt is a mess (f.txt)\n2 other open debt issue(s) not naming touched files');
 });
 
-test('parseUnit / namesIssue: a ticket or epic name (typed or legacy) gives the issue; (#N) and <prefix>#N match on a boundary', async () => {
+test('parseUnit / namesIssue: an issue, epic or pr charge (any form) gives the issue; (#N) and <prefix>#N match on a boundary', async () => {
   const { parseUnit, namesIssue } = await import('../reflect-gather.mjs');
+  assert.deepEqual(parseUnit('impl_issue_claude-config-137'), { prefix: 'claude-config', issue: '137' });
+  assert.deepEqual(parseUnit('manager_epic_strate-105'), { prefix: 'strate', issue: '105' });
+  assert.deepEqual(parseUnit('review_pr_strate-31'), { prefix: 'strate', issue: '31' });
+  assert.equal(parseUnit('lead_repo_strate'), null, 'a repo charge names no issue');
+  assert.equal(parseUnit('researcher_topic_pricing-5'), null, 'a topic ending in a number names no issue');
   assert.deepEqual(parseUnit('claude-config-137'), { prefix: 'claude-config', issue: '137' });
   assert.deepEqual(parseUnit('ticket-claude-config-137'), { prefix: 'claude-config', issue: '137' });
   assert.deepEqual(parseUnit('epic-dog-eat-dog-4'), { prefix: 'dog-eat-dog', issue: '4' });
@@ -183,13 +188,14 @@ test('a commit naming the issue only in its body trailer is the unit\'s, and its
   assert.deepEqual(commitChanges(f.repo, commits).files.sort(), ['f.txt', 'h.txt'], 'the debt match runs over the trailer commit\'s files too');
 });
 
-test('a legacy-named window and a typed-name window of one unit gather together', () => {
+test('bare, typed and agent-named windows of one charge gather together', () => {
   const f = fixture();
   writeFileSync(join(f.proj, 'w7.jsonl'), window('w7', '2026-10-04', 'ticket-repo-7'));
-  for (const name of ['ticket-repo-7', 'repo-7']) {
+  writeFileSync(join(f.proj, 'w8.jsonl'), window('w8', '2026-10-04', 'impl_issue_repo-7'));
+  for (const name of ['ticket-repo-7', 'repo-7', 'review_issue_repo-7']) {
     const r = spawnHarness(cli, [name, '--root', f.root, '--repo', f.repo]);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /## Audit — 3 window\(s\) named ticket-repo-7, 3 transcripts/, name);
+    assert.match(r.stdout, /## Audit — 4 window\(s\) charged to issue_repo-7, 4 transcripts/, name);
     assert.match(r.stdout, /## Repo activity since 2026-10-03/, name);
     assert.match(r.stdout, /feat: unit work \(#7\)/, name);
     assert.doesNotMatch(r.stdout, /another unit, same day/, name);
@@ -254,7 +260,7 @@ test('an unknown session name fails with the audit filter\'s message', () => {
   const f = fixture();
   const r = spawnHarness(cli, ['repo-404', '--root', f.root]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /no session named repo-404/);
+  assert.match(r.stderr, /nothing charged to issue_repo-404/);
 });
 
 test('commitChanges lists a renamed file under its new path, so a debt issue naming it still matches', async () => {

@@ -141,7 +141,7 @@
    "id": "phase:cleanup-continuation",
    "kind": "phase",
    "label": "cleanup / continuation",
-   "summary": "Workspace sweep, then the launch line and a paste-ready resume prompt for a fresh session.",
+   "summary": "Workspace sweep, then the next window's or agent's name (session-name.mjs) and a paste-ready resume prompt.",
    "rules": [
     "Continuation is a prompt, never a file"
    ]
@@ -207,9 +207,9 @@
    "kind": "skill",
    "label": "continuation",
    "file": "skills/continuation/SKILL.md",
-   "summary": "Launch line plus a paste-ready resume prompt for a fresh session.",
+   "summary": "A paste-ready resume prompt for a fresh director window or an agent spawn, named by session-name.mjs.",
    "rules": [
-    "Prints the launch line and block directly; the user ignores it to continue here (#303)"
+    "Prints the block directly; the user ignores it to continue here (#303)"
    ]
   },
   {
@@ -296,7 +296,7 @@
    "kind": "hook",
    "label": "agent-name-guard",
    "file": "hooks/agent-name-guard.mjs",
-   "summary": "PreToolUse:Agent — in a director's tree only, blocks a spawn without a tree name, a subagent spawn outside its own subtree, and a director spawn outside its scope; elsewhere every spawn passes (#272).",
+   "summary": "PreToolUse:Agent — in company context only (main session titled with an agent name or director-<s>; a subagent named with an agent, tree or role-carrying typed name), blocks a spawn whose name (name, else description) is not <role>_<kind>_<target> or a tree name with a worker, lowercase and trimmed; elsewhere every spawn passes (#272, #360).",
    "rules": [
     "Fails open"
    ]
@@ -381,7 +381,7 @@
    "kind": "hook",
    "label": "session-start",
    "file": "hooks/session-start.mjs",
-   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders; names an untitled session started in a ticket worktree ticket-<repo>-<N> via sessionTitle (#344)."
+   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders; names an untitled session started in a ticket worktree issue_<repo>-<N> (a role-less charge key) via sessionTitle (#344, #360)."
   },
   {
    "id": "hook:active-repo",
@@ -483,7 +483,7 @@
    "kind": "script",
    "label": "worktree.mjs",
    "file": "scripts/worktree.mjs",
-   "summary": "Create, pre-push lint, remove and list feature worktrees from origin's default branch; new prints the unit's launch line (`cd <worktree>; claude` on a ticket branch, whose window session-start names, #344; else claude -n) and warns (never blocks) when a -n unit's session name won't join it; prepush runs commitlint over origin/<base>..HEAD; remove first stops the serve-port listener."
+   "summary": "Create, pre-push lint, remove and list feature worktrees from origin's default branch; new prints no launch line, since agents are spawned into a worktree (#360); prepush runs commitlint over origin/<base>..HEAD; remove first stops the serve-port listener."
   },
   {
    "id": "script:qa",
@@ -544,14 +544,14 @@
    "kind": "script",
    "label": "lib.mjs",
    "file": "scripts/lib.mjs",
-   "summary": "Shared helpers for the workflow scripts; Node builtins only. Owns the session-name format: sessionName/parseSessionName/sessionKey/isChosenName (#175), tree names included (#272)."
+   "summary": "Shared helpers for the workflow scripts; Node builtins only. Owns the agent-name grammar <role>_<kind>_<target>, documented once in its header: agentName/parseAgentName/chargeKey/isChosenName/worktreeChargeKey, legacy typed, tree and bare forms included (#175, #272, #360)."
   },
   {
    "id": "script:session-name",
    "kind": "script",
    "label": "session-name.mjs",
    "file": "scripts/session-name.mjs",
-   "summary": "Prints a unit's launch line, claude -n <typed name> (director/epic/ticket/general), or an in-session subagent's bare tree name (tree, #272), built by lib's sessionName so no doc restates the format (#175)."
+   "summary": "Prints an agent's bare name, <role>_<kind>_<target> (session-name.mjs <role> <kind> <target…>), built by lib's agentName so no doc restates the grammar (#175, #360)."
   },
   {
    "id": "store:docs-repo",
@@ -664,14 +664,14 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by parsed session name (legacy, typed and tree forms of a unit join; a named subagent joins its own name, #272), --session filters to one unit; agent spend per type × model × effort; --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by charge, lib's chargeKey (every form of one charge joins; a named subagent joins its own name, #272, #360), --session filters to one charge; agent spend per type × model × effort; --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
   },
   {
    "id": "script:audit-lib",
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-name rows keyed by lib's sessionKey (a named subagent's request by its meta.json name, #272), timestamp timelines for the time dimension; agentMix per type × model × effort; checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-charge rows keyed by lib's chargeKey (a named subagent's request by its meta.json name, else a non-bare description, #272, #318), timestamp timelines for the time dimension; agentMix per type × model × effort; checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
   },
   {
    "id": "store:push-gate-approvals",
@@ -1068,7 +1068,7 @@
    "from": "hook:agent-name-guard",
    "to": "phase:execute-dispatch",
    "kind": "gates",
-   "label": "tree name required"
+   "label": "role + charge name required"
   },
   {
    "from": "hook:agent-name-guard",
@@ -1080,13 +1080,13 @@
    "from": "hook:agent-name-guard",
    "to": "script:lib",
    "kind": "reads",
-   "label": "parseSessionName"
+   "label": "parseAgentName"
   },
   {
    "from": "hook:agent-name-guard",
    "to": "store:transcripts",
    "kind": "reads",
-   "label": "caller meta.json name, session custom-title.json"
+   "label": "caller meta.json name or description, session custom-title.json"
   },
   {
    "from": "store:settings-json",
@@ -1122,7 +1122,7 @@
    "from": "hook:session-start",
    "to": "script:lib",
    "kind": "reads",
-   "label": "worktreeTicketName"
+   "label": "worktreeChargeKey"
   },
   {
    "from": "hook:session-start",
@@ -1157,7 +1157,7 @@
    "from": "script:worktree",
    "to": "script:lib",
    "kind": "reads",
-   "label": "sessionName, parseSessionName, isChosenName, issueNumber, generalSessionName, slugify, isMain, listenerPidFromNetstat"
+   "label": "defaultBranch, installCommand, isMain, listenerPidFromNetstat, parseWorktreeInclude, resolveRepo"
   },
   {
    "from": "script:qa",
@@ -1198,7 +1198,7 @@
    "from": "script:reflect-gather",
    "to": "script:lib",
    "kind": "reads",
-   "label": "die, git, isMain, log, parseArgs, parseSessionName, sessionKey"
+   "label": "chargeKey, die, git, isMain, log, parseAgentName, parseArgs"
   },
   {
    "from": "script:statusline",
@@ -1391,37 +1391,31 @@
    "from": "script:session-name",
    "to": "script:lib",
    "kind": "reads",
-   "label": "die, generalSessionName, isMain, log, parseArgs, sessionName, slugify"
+   "label": "agentName, die, isMain, log, parseArgs, slugify, TOPIC_WORDS"
   },
   {
    "from": "script:audit",
    "to": "script:lib",
    "kind": "reads",
-   "label": "sessionKey"
+   "label": "chargeKey"
   },
   {
    "from": "script:audit-lib",
    "to": "script:lib",
    "kind": "reads",
-   "label": "sessionKey"
-  },
-  {
-   "from": "script:worktree",
-   "to": "script:session-name",
-   "kind": "reads",
-   "label": "launchCommand"
+   "label": "chargeKey, parseAgentName"
   },
   {
    "from": "skill:continuation",
    "to": "script:session-name",
    "kind": "invokes",
-   "label": "launch line"
+   "label": "names the next window or agent"
   },
   {
    "from": "skill:agent-factory",
    "to": "script:session-name",
    "kind": "invokes",
-   "label": "tree names (directing-a-batch)"
+   "label": "agent names (SKILL.md, directing.md)"
   },
   {
    "from": "script:verify-frontmatter",

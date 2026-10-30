@@ -67,7 +67,7 @@ The domain CLAUDE.md's gate list, at 100%, plus: repo README/CLAUDE.md, `.gitign
 
 ## Orchestration
 
-- Dispatch readily — this harness delegates by design (verified: 2026-10, Opus 5.5). `agent-factory` carries the lanes; `agents/ROUTING.md` picks the model.
+- Dispatch readily (verified: 2026-10). Company model: one director; agents spawn agents, named `<role>_<kind>_<target>` (`agent-factory`, `agents/ROUTING.md`).
 - Live LLM rounds on the user's API keys need per-run clearance — present lane, turn count, expected writes first. Point at brief files instead of restating them.
 
 # Compact instructions

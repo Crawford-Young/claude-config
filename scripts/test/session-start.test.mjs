@@ -149,7 +149,7 @@ for (const source of ['startup', 'resume']) {
     const { wt } = ticketWorktree();
     const out = JSON.parse(runHook({ source, cwd: wt }));
     assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart');
-    assert.equal(out.hookSpecificOutput.sessionTitle, 'ticket-app-12');
+    assert.equal(out.hookSpecificOutput.sessionTitle, 'issue_app-12');
     assert.ok(out.hookSpecificOutput.additionalContext.includes(index));
   });
 }

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // audit.mjs — transcript-replay audit (#62). Rebuilds cost, context depth,
 // per-agent-type cost, skill/doc invocation counts and hook activity from the
-// transcripts Claude Code keeps on disk, grouped by session name (#73; the parsed
-// identity, #175), plus time (#97): wall vs active, the model/tools/user/other split,
-// agent and tool latency, retry cost. --session keeps only the windows named <name>,
-// legacy, typed and tree forms alike: a file splits at each custom title (#115), and its
-// subagents follow the window they ran in, except a named one, which goes by its own
-// meta.json name, else a tree-name description (#272, #318).
+// transcripts Claude Code keeps on disk, grouped by charge (#73; the name minus its
+// role, lib's chargeKey, #360), plus time (#97): wall vs active, the model/tools/user/other
+// split, agent and tool latency, retry cost. --session <name> keeps only what is charged
+// to <name>'s charge key, every name form alike (impl_issue_x-5, ticket-x-5, x-5 and a
+// tree name join): a file splits at each custom title (#115), and its subagents follow
+// the window they ran in, except a named one, which goes by its own meta.json name, else
+// a description that parses to a non-bare agent name (#272, #318).
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
 // Agent spend is also split per type × model × effort (#113). --stamps reads no
 // transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, workspace/docs/,
@@ -26,7 +27,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkStamps, createCollector, renderMarkdown, stampLine, transcriptWindows } from './audit-lib.mjs';
-import { sessionKey } from './lib.mjs';
+import { chargeKey } from './lib.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -51,7 +52,7 @@ if (o.stamps) {
   if (!staleStamps.length) console.log('no stale model stamps');
   process.exit(staleStamps.length ? 1 : 0);
 }
-const wanted = o.session && sessionKey(o.session);
+const wanted = o.session && chargeKey(o.session);
 const skillsDir = join(homedir(), '.claude', 'skills');
 const c = createCollector({
   prices,
@@ -66,7 +67,7 @@ const c = createCollector({
 let files = 0;
 const live = new Set(); // sessionIds with a kept window
 for await (const { windows, records } of transcriptWindows(o.root)) {
-  const kept = o.session ? windows.filter((w) => wanted && (sessionKey(w.agent?.name) ?? sessionKey(w.name)) === wanted) : windows;
+  const kept = o.session ? windows.filter((w) => wanted && (chargeKey(w.agent?.name) ?? chargeKey(w.name)) === wanted) : windows;
   const { sessionId, agent } = windows[0];
   if (kept.length) {
     files++;
@@ -79,9 +80,9 @@ for await (const { windows, records } of transcriptWindows(o.root)) {
   for await (const { rec, ctx } of records) if (whole || rec?.type !== 'cost-state') c.add(rec, feed.get(ctx.window));
 }
 if (o.session && !files) {
-  console.error(`no session named ${o.session} — a unit's windows get their name from its launch line: node ~/code/claude-config/scripts/session-name.mjs <type> <args>`);
+  console.error(`nothing charged to ${wanted} (from ${o.session}) — name each agent <role>_<kind>_<target>: node ~/code/claude-config/scripts/session-name.mjs <role> <kind> <target…>`);
   process.exit(1);
 }
 const report = { ...c.report(), staleStamps };
 if (o.json) console.log(JSON.stringify({ files, ...report }, null, 2));
-else console.log(`# Transcript audit — ${files} transcripts${o.session ? ` named ${o.session}` : ''}${o.since ? ` from ${o.since}` : ''}${o.until ? ` to ${o.until}` : ''}\n\n${renderMarkdown(report, { top: +o.top })}`);
+else console.log(`# Transcript audit — ${files} transcripts${o.session ? ` charged to ${wanted}` : ''}${o.since ? ` from ${o.since}` : ''}${o.until ? ` to ${o.until}` : ''}\n\n${renderMarkdown(report, { top: +o.top })}`);

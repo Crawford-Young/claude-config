@@ -17,8 +17,10 @@
 //     (domain CLAUDE.md reload, marker discipline)
 //
 // On startup or resume in a ticket worktree (a linked worktree on a branch like
-// chore/344-x), it also names the session `ticket-<repo>-<N>` via
-// hookSpecificOutput.sessionTitle (#344), so a ticket window needs no `claude -n`. It
+// chore/344-x), it also names the session with the charge key `issue_<repo>-<N>` (lib's
+// worktreeChargeKey, #360) via hookSpecificOutput.sessionTitle (#344), so its spend is
+// charged to the issue without a `claude -n`. Role-less, since the hook can't know the
+// window's role, which also keeps it out of agent-name-guard's company context. It
 // never overwrites a title the session already has (input session_title, set by -n,
 // /rename or an earlier hook), because an unguarded sessionTitle replaces them (#343 probe).
 
@@ -27,12 +29,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { errorLog, run } from './_hooklib.mjs';
-import { worktreeTicketName } from '../scripts/lib.mjs';
+import { worktreeChargeKey } from '../scripts/lib.mjs';
 
 /** The title to give this session, or null: only on startup/resume, only untitled, only in a ticket worktree. */
 function ticketTitle(payload) {
   if (!['startup', 'resume'].includes(payload?.source) || payload.session_title || !payload.cwd) return null;
-  return worktreeTicketName(payload.cwd);
+  return worktreeChargeKey(payload.cwd);
 }
 
 function inProgressIssues() {

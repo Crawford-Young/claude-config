@@ -7,9 +7,9 @@
 //   node worktree.mjs list [repo]
 //
 // `new` cuts the branch from origin/<default>, verifies the cut is clean, and
-// copies env files per the repo's .worktreeinclude (default: .env, .env.local),
-// and prints the unit's launch line: `cd "<worktree>"; claude` on a ticket branch, whose
-// window session-start names (#344), else `claude -n <name>` (session-name.mjs).
+// copies env files per the repo's .worktreeinclude (default: .env, .env.local).
+// It prints no launch line: under the company model a worktree is worked by agents
+// spawned into it (named by session-name.mjs, #360), not by a pasted unit session.
 // `remove` encodes the Windows-safe removal sequence (git remove → force →
 // recursive delete → prune) so node_modules lock/long-path failures never need
 // hand recovery. It first stops whatever listens on the worktree's serve port (a
@@ -24,32 +24,25 @@
 
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  branchIssue,
   DEFAULT_ENV_FILES,
   defaultBranch,
   die,
-  generalSessionName,
   git,
   gitOrDie,
   log,
   installCommand,
-  isChosenName,
   isMain,
   listenerPidFromNetstat,
   parseArgs,
   parseWorktreeInclude,
   readIfExists,
   resolveRepo,
-  sessionName,
-  slugify,
   workspaceRoot,
   worktreesDir,
 } from './lib.mjs';
-import { launchCommand } from './session-name.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const cmd = args._[0];
@@ -61,7 +54,6 @@ function cmdNew() {
 
   const repoName = basename(repo);
   const branch = args.branch || `feat/${slug}`;
-  const unit = expectedUnit(repoName, slug, branch); // before any git side effect
   const base = args.base || defaultBranch(repo);
   const wtPath = join(worktreesDir(), `${repoName}-${slug}`);
   if (existsSync(wtPath)) die(`worktree path already exists: ${wtPath}`);
@@ -104,11 +96,6 @@ function cmdNew() {
   }
   if (husky) log(`husky:    ${husky}`);
   log('note:     dev servers in a worktree need their own port; never reuse another session\'s.');
-
-  // session-start names a window opened on a ticket branch (#344); anything else needs -n
-  const selfNamed = unit.issue !== null && branchIssue(branch) === String(unit.issue);
-  log(`launch:   ${selfNamed ? `cd "${wtPath.replace(/\\/g, '/')}"; claude` : launchCommand(unit.name)}`);
-  if (!selfNamed) warnOnSessionName(unit);
 }
 
 /** True when the checkout uses husky: a `prepare` script running it, or core.hooksPath under .husky/. */
@@ -135,55 +122,6 @@ function huskyStubs(repo, wtPath) {
   }
   log('WARNING: husky repo, but the main checkout has no .husky/_ stubs to copy — commit-msg (commitlint) will not run in this worktree until you run `pnpm install` (or `pnpm exec husky`) in it.');
   return null;
-}
-
-/** Directory of session-registry JSON files: ~/.claude/sessions, CLAUDE_SESSIONS_DIR overrides. */
-function sessionsDir() {
-  return process.env.CLAUDE_SESSIONS_DIR || join(homedir(), '.claude', 'sessions');
-}
-
-/** The worktree's unit: a ticket on the slug's leading issue number, else the branch's;
- *  with neither, a general session on the slug. → { name, repo, issue } (issue null for general). */
-function expectedUnit(repoName, slug, branch) {
-  const n = branchIssue(slug) || branchIssue(branch);
-  const repo = slugify(repoName);
-  if (n && repo) return { name: sessionName('ticket', repo, n), repo, issue: Number(n) };
-  return { name: generalSessionName(slugify(slug) || 'worktree'), repo, issue: null };
-}
-
-// For a unit launched with -n (a ticket branch's window names itself, #344): warn (never block) when the
-// running session's name won't join its spend and reflect, i.e. auto-generated or untyped
-// (the parser's general failsafe); any chosen name passes. The fix is the launch line for the
-// next window, or a /rename for this one (agents can't run slash commands); in a desktop session
-// (entrypoint claude-desktop) it is a line telling the agent to call set_session_title. Silent
-// on non-Claude shells (no CLAUDE_PID / no registry file).
-function warnOnSessionName(unit) {
-  const pid = process.env.CLAUDE_PID;
-  if (!pid) return;
-
-  const text = readIfExists(join(sessionsDir(), `${pid}.json`));
-  if (!text) return;
-
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return;
-  }
-
-  if (!data || typeof data !== 'object') return;
-  const { name, nameSource } = data;
-  if (isChosenName(name, nameSource)) return;
-  const shown = name ? `session name '${name}'` : 'session has no name and';
-  let problem;
-  if (nameSource !== 'user' && nameSource !== 'peer') problem = `${shown} is auto-generated`;
-  else problem = name ? `${shown} has no type` : 'session has no name';
-  if (data.entrypoint === 'claude-desktop') {
-    // a script can't call the tool itself, so it tells the agent to
-    log(`TITLE: ${problem} — spend and reflect join on the parsed session name. Call mcp__ccd_session_mgmt__set_session_title with '${unit.name}' now.`);
-    return;
-  }
-  log(`WARNING: ${problem} — spend and reflect join on the parsed session name. Launch the unit as:\n  ${launchCommand(unit.name)}\nor name this session now with:\n  /rename ${unit.name}`);
 }
 
 /** Parent repo named by a linked worktree's .git pointer file (<repo>/.git/worktrees/<name> → <repo>), or null. */
