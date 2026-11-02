@@ -271,6 +271,17 @@
    ]
   },
   {
+   "id": "skill:clip-edit",
+   "kind": "skill",
+   "label": "clip-edit",
+   "file": "skills/clip-edit/SKILL.md",
+   "summary": "Vertical stream-clip mechanics: cut, crossfade, karaoke captions, bleep, caption mask, safe-zone sheet.",
+   "rules": [
+    "Censoring baked-caption exports needs bleep AND mask",
+    "User playback QA before a clip is done"
+   ]
+  },
+  {
    "id": "hook:fable-clearance-grant",
    "kind": "hook",
    "label": "fable-clearance-grant",
@@ -814,6 +825,18 @@
    "to": "phase:execute-dispatch",
    "kind": "drives",
    "label": "channel copy"
+  },
+  {
+   "from": "skill:clip-edit",
+   "to": "phase:execute-dispatch",
+   "kind": "drives",
+   "label": "clip editing"
+  },
+  {
+   "from": "skill:clip-edit",
+   "to": "skill:yak-voice",
+   "kind": "feeds",
+   "label": "caption wording"
   },
   {
    "from": "skill:qa",

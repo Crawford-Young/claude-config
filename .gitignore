@@ -15,3 +15,7 @@ agents/staged-*
 
 # In-session subagent worktrees (Agent isolation: "worktree").
 .claude/worktrees/
+
+# Python bytecode from skill scripts.
+__pycache__/
+*.pyc
