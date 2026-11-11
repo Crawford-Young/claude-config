@@ -288,6 +288,63 @@ test('a missing agents root exits 2, not 0 and not 1', () => {
   assert.equal(status, 2);
 });
 
+// --- Mirrored agent bodies (issue #372) ----------------------------------------------------
+// implementer-opus.md is implementer.md at another model and effort: only the frontmatter may
+// differ. Nothing held that by hand, so the gate compares the bodies after the closing ---.
+
+const IMPL = `---
+name: implementer
+description: Executes one scoped task — the sonnet lane.
+model: sonnet
+effort: medium
+---
+
+You are an implementation agent.
+
+## Your job
+
+Implement the task.
+`;
+
+/** The opus mirror of IMPL — different frontmatter, same body unless `body` overrides it. */
+function opusMirror(body) {
+  const mirror = IMPL.replace('name: implementer', 'name: implementer-opus')
+    .replace('model: sonnet', 'model: opus')
+    .replace('effort: medium', 'effort: high');
+  return body === undefined ? mirror : mirror.replace(/(\n---\n)[\s\S]*$/, `$1${body}`);
+}
+
+test('implementer-opus.md whose body matches implementer.md passes, frontmatter aside', () => {
+  const root = agentsRootWith({ 'implementer.md': IMPL, 'implementer-opus.md': opusMirror() });
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 0, out);
+});
+
+test('implementer-opus.md whose body drifts from implementer.md fails and names both files', () => {
+  const drifted = opusMirror('\nYou are an implementation agent.\n\n## Your job\n\nImplement the task carefully.\n');
+  const root = agentsRootWith({ 'implementer.md': IMPL, 'implementer-opus.md': drifted });
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /implementer-opus\.md: body differs from implementer\.md/);
+  assert.match(out, /Implement the task carefully\./, 'the first differing line is shown');
+});
+
+test('a body differing only in CRLF line endings is not drift', () => {
+  const root = agentsRootWith({
+    'implementer.md': IMPL,
+    'implementer-opus.md': opusMirror().replace(/\n/g, '\r\n'),
+  });
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 0, out);
+});
+
+test('implementer-opus.md without the implementer.md it mirrors fails, not a silent skip', () => {
+  const root = agentsRootWith({ 'implementer-opus.md': opusMirror() });
+  const { status, out } = runAgentsCheck(root);
+  assert.equal(status, 1);
+  assert.match(out, /implementer-opus\.md: mirrors implementer\.md, which is missing/);
+});
+
 // --- Resident-byte caps (issue #63) --------------------------------------------------------
 
 test('a description under the per-description cap passes', () => {

@@ -53,6 +53,9 @@
  * `<name>/SKILL.md` path. A flagged skill missing from the index is reachable only by `/name`,
  * the same unroutable-but-green class the frontmatter check above exists for.
  *
+ * Mirrored agent bodies (issue #372): implementer-opus.md must keep implementer.md's body —
+ * see MIRRORED_AGENTS.
+ *
  * Synced listing (issue #124): description bytes of synced claude.ai skills and plugin skills
  * under ~/.claude are printed for visibility only — third-party files, so no cap and no failure.
  */
@@ -130,6 +133,13 @@ const SAFE_OPENERS = ["'", '"', '|', '>'];
  * of a file's content — see the file-header comment for why that distinction matters.
  */
 const NON_AGENT_DOCS = ['ROUTING.md'];
+
+/**
+ * Mirrored agent bodies (#372): `[mirror, source]` pairs whose bodies (everything after the
+ * closing ---) must match byte for byte, CRLF aside — only model and effort differ. Checked
+ * when the mirror exists; a mirror whose source is gone fails rather than skipping.
+ */
+const MIRRORED_AGENTS = [['implementer-opus.md', 'implementer.md']];
 
 /** Enumerate `<dir>/SKILL.md` for every subdirectory of root that has one. */
 function enumerateSkills(root) {
@@ -220,6 +230,40 @@ function checkRoot(entries) {
   }
 
   return { checked, problems, descriptions };
+}
+
+/** A file's body after its closing --- delimiter, CRLF normalized; null when it has no frontmatter. */
+function bodyOf(text) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  if (lines[0]?.trim() !== '---') return null;
+  const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  return close === -1 ? null : lines.slice(close + 1).join('\n');
+}
+
+/** MIRRORED_AGENTS pairs in `root`: each present mirror's body must equal its source's. */
+function checkMirroredAgents(root) {
+  const problems = [];
+  for (const [mirror, source] of MIRRORED_AGENTS) {
+    const mirrorFile = join(root, mirror);
+    if (!existsSync(mirrorFile)) continue;
+    const sourceFile = join(root, source);
+    if (!existsSync(sourceFile)) {
+      problems.push(`${mirror}: mirrors ${source}, which is missing`);
+      continue;
+    }
+    const a = bodyOf(readFileSync(sourceFile, 'utf8'));
+    const b = bodyOf(readFileSync(mirrorFile, 'utf8'));
+    // A missing frontmatter block is already reported by checkRoot.
+    if (a === null || b === null || a === b) continue;
+    const al = a.split('\n');
+    const bl = b.split('\n');
+    const at = al.findIndex((l, i) => l !== bl[i]);
+    const line = at === -1 ? al.length : at;
+    problems.push(
+      `${mirror}: body differs from ${source} at body line ${line + 1} — ${source}: ${JSON.stringify(al[line] ?? '<end>')}, ${mirror}: ${JSON.stringify(bl[line] ?? '<end>')}; edit both bodies together`,
+    );
+  }
+  return problems;
 }
 
 /**
@@ -487,8 +531,13 @@ if (rulesResult.problems.length > 0) {
   console.error(`\n--- UNSCOPED RULES (${rulesResult.problems.length}) — BLOCKER ---`);
   for (const p of rulesResult.problems) console.error(`  ${p}`);
 }
+const mirrorProblems = checkMirroredAgents(AGENTS_ROOT);
+if (mirrorProblems.length > 0) {
+  console.error(`\n--- MIRRORED AGENT BODIES DIFFER (${mirrorProblems.length}) — BLOCKER ---`);
+  for (const p of mirrorProblems) console.error(`  ${p}`);
+}
 
-const allProblems = [...problems, ...residentProblems, ...rulesResult.problems];
+const allProblems = [...problems, ...residentProblems, ...rulesResult.problems, ...mirrorProblems];
 if (allProblems.length > 0) {
   console.error(`\nFAIL: ${allProblems.length} problem(s).`);
   process.exit(1);
