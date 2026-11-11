@@ -31,13 +31,16 @@ import {
   scanContamination,
   scanRoots,
   selectRounds,
+  subagentMetrics,
+  subagentNotes,
   transcriptParts,
   transformSettings,
+  usesHarness,
 } from '../ab/ab-lib.mjs';
 import { anonymize, dropFiles, leaks, pathVariants } from '../ab/anonymize.mjs';
 import { blindId, buildPacket, exclusionReason, gradeTemplate } from '../ab/grade.mjs';
 import { TOKEN_PLACEHOLDER, redactSecret, treeHasLine } from '../ab/round.mjs';
-import { analyzeRequests, startStub } from '../ab/canary.mjs';
+import { analyzeRequests, canaryVerdict, startStub } from '../ab/canary.mjs';
 
 const AB = join(dirname(fileURLToPath(import.meta.url)), '..', 'ab');
 const MANIFEST = join(AB, 'manifest.json');
@@ -55,6 +58,7 @@ const ticket = (over = {}) => ({
   harness: SHA,
   lines: 100,
   why: 'w',
+  spawnExpected: false,
   gates: [{ name: 'test', cmd: 'node --test' }],
   body: '## Done when\n- [ ] it works\n',
   ...over,
@@ -99,6 +103,14 @@ test('the committed manifest holds the 10-ticket harness-only set: full SHAs, th
   assert.deepEqual(new Set(m.tickets.map((t) => t.kind)), new Set(['bug', 'debt', 'feat', 'test']));
 });
 
+test('#374: the manifest marks the tickets whose merged PR had several independent files or steps as spawnExpected', () => {
+  const m = loadManifest(MANIFEST);
+  for (const t of m.tickets) assert.equal(typeof t.spawnExpected, 'boolean', t.id);
+  // 170: two features in one script; 113: a cost axis, a CI check and a doc re-derivation over 8 files;
+  // 129: one helper swapped into 9 hooks and scripts. The other seven are one script or test plus its doc line.
+  assert.deepEqual(m.tickets.filter((t) => t.spawnExpected).map((t) => t.id).sort(), ['claude-config-113', 'claude-config-129', 'claude-config-170']);
+});
+
 test('claude-config-124 prompts with its original body, not the edit that mirrors the fix commit (user, 2026-10-19)', () => {
   const t = loadManifest(MANIFEST).tickets.find((x) => x.id === 'claude-config-124');
   assert.deepEqual(doneWhen(t.body), [
@@ -116,6 +128,8 @@ test('parseManifest rejects short SHAs, duplicate ids, missing gates, a bad gate
   assert.throws(() => parseManifest(manifestText([ticket({ gates: [{ name: 't', cmd: 'x', failIf: '(' }] })])), /demo-1: gate t failIf is not a regex/);
   assert.throws(() => parseManifest(manifestText([ticket({ path: 'apps/strate' })])), /demo-1: path must be claude-config \(the A\/B is harness only\)/);
   assert.throws(() => parseManifest(manifestText([ticket()], { permissionMode: 'bypassPermissions' })), /permissionMode/);
+  assert.throws(() => parseManifest(manifestText([ticket({ spawnExpected: undefined })])), /demo-1: spawnExpected must be true or false/);
+  assert.throws(() => parseManifest(manifestText([ticket({ spawnExpected: 'yes' })])), /demo-1: spawnExpected must be true or false/);
   assert.throws(() => parseManifest('{nope'), /manifest is not JSON/);
   assert.equal(parseManifest(manifestText([ticket()])).tickets[0].id, 'demo-1');
 });
@@ -224,7 +238,12 @@ test('transformSettings: current runs the harness checkout hooks, bare runs none
   const bare = transformSettings(settings, { ...opts, arm: 'bare' });
   assert.equal(bare.hooks, undefined);
   assert.deepEqual(bare.permissions, cur.permissions);
+  assert.deepEqual(transformSettings(settings, { ...opts, arm: 'solo' }), cur, 'solo runs the same harness settings as current');
   assert.ok(settings.hooks.Stop, 'the input is not mutated');
+});
+
+test('usesHarness: current and solo run the harness, bare does not', () => {
+  assert.deepEqual(ARMS.filter(usesHarness), ['current', 'solo']);
 });
 
 test('pruneClaudeJson keeps the account and drops per-project history and usage', () => {
@@ -237,16 +256,18 @@ test('projectKey is the transcript folder name Claude Code derives from a cwd', 
 
 // ---- the claude command and env ---------------------------------------------------------------
 
-test('the two arms run the same command except that bare adds --safe-mode', () => {
+test('the arms run the same command except that bare adds --safe-mode and solo denies the Agent and Workflow tools', () => {
   const opts = { model: 'claude-opus-5-5', effort: 'high', permissionMode: 'auto', budgetUsd: 20 };
   const current = claudeArgs('current', opts);
   const bare = claudeArgs('bare', opts);
   assert.deepEqual(bare, ['--safe-mode', ...current]);
+  // claude --help (2.1.322): "--disallowedTools <tools...> Comma or space-separated list of tool names to deny".
+  assert.deepEqual(claudeArgs('solo', opts), [...current, '--disallowedTools', 'Agent,Workflow']);
   for (const [flag, value] of [['--model', 'claude-opus-5-5'], ['--output-format', 'json'], ['--effort', 'high'], ['--permission-mode', 'auto'], ['--permission-prompts', 'none'], ['--max-budget-usd', '20']]) {
     assert.equal(current[current.indexOf(flag) + 1], value, flag);
   }
   assert.ok(current.includes('-p'));
-  assert.throws(() => claudeArgs('other', opts), /arm must be one of bare, current/);
+  assert.throws(() => claudeArgs('other', opts), /arm must be one of bare, current, solo/);
 });
 
 test('childEnv drops the launching session identity, the OAuth token and every GitHub token, and keeps config dir and PATH', () => {
@@ -290,10 +311,85 @@ test('redactSecret (#279) walks past each file it cannot write, redacts the rest
 
 test('parseClaudeJson reads cost, turns and duration from --output-format json, and flags unreadable output', () => {
   const ok = parseClaudeJson(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1200, num_turns: 7, total_cost_usd: 1.5, session_id: 'x', result: 'done' }));
-  assert.deepEqual(ok, { ok: true, subtype: 'success', isError: false, costUsd: 1.5, turns: 7, durationMs: 1200, sessionId: 'x', result: 'done' });
+  assert.deepEqual(ok, { ok: true, subtype: 'success', isError: false, costUsd: 1.5, turns: 7, durationMs: 1200, sessionId: 'x', result: 'done', modelUsage: null, subagentsSpawned: null });
   const bad = parseClaudeJson('Error: boom');
   assert.equal(bad.ok, false);
   assert.equal(bad.costUsd, null);
+  assert.equal(bad.modelUsage, null);
+  assert.equal(bad.subagentsSpawned, null);
+});
+
+test('parseClaudeJson (#374) keeps the per-model usage and the spawn count claude reports', () => {
+  const modelUsage = { 'claude-opus-5-5': { inputTokens: 1, outputTokens: 2, costUSD: 0.7 }, 'claude-sonnet-5-5': { costUSD: 0.3 } };
+  const j = parseClaudeJson(JSON.stringify({ type: 'result', total_cost_usd: 1, modelUsage, subagent_stats: { spawned: 3, by_type: {} } }));
+  assert.deepEqual(j.modelUsage, modelUsage);
+  assert.equal(j.subagentsSpawned, 3);
+});
+
+// ---- subagent metrics (#374) ------------------------------------------------------------------
+
+/** An assistant transcript line: `agent` set makes it a subagent's (isSidechain), as Claude Code writes it. */
+const said = (id, model, usage, agent) => JSON.stringify({ type: 'assistant', ...(agent && { isSidechain: true, agentId: agent }), message: { id, model, role: 'assistant', usage } });
+
+test('subagentMetrics counts the subagents a round spawned, the models they ran on and their share of tokens and cost', () => {
+  const jsonl = [
+    said('m1', 'claude-opus-5-5', { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }),
+    // One message split over two lines (a line per content block): counted once.
+    said('s1', 'claude-sonnet-5-5', { input_tokens: 10, output_tokens: 20 }, 'a1'),
+    said('s1', 'claude-sonnet-5-5', { input_tokens: 10, output_tokens: 20 }, 'a1'),
+    // A second subagent that only got its prompt before the round ended still counts as spawned.
+    JSON.stringify({ type: 'user', isSidechain: true, agentId: 'a2', message: { role: 'user', content: 'go' } }),
+    // Claude Code's synthetic messages carry no real usage.
+    said('x', '<synthetic>', { input_tokens: 0, output_tokens: 0 }),
+    'not json',
+    '',
+  ].join('\n');
+  const usage = { 'claude-opus-5-5': { costUSD: 0.2 }, 'claude-sonnet-5-5': { costUSD: 0.05 } };
+  assert.deepEqual(subagentMetrics(jsonl, usage), {
+    spawned: 2,
+    models: ['claude-sonnet-5-5'],
+    tokens: { subagent: 30, total: 180, share: 0.167 },
+    costUsd: { subagent: 0.05, total: 0.25, share: 0.2 },
+  });
+});
+
+test('subagentMetrics splits a model the session and its subagents share by priced token weight', () => {
+  // Weights against an input token: output 5, cache read 0.1, a 5-minute cache write 1.25, a 1-hour one 2.
+  const jsonl = [
+    // 100 input + 100 cache read (10) + 40 five-minute writes (50) + 20 one-hour writes (40) = 200.
+    said('m1', 'claude-opus-5-5', { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 100, cache_creation_input_tokens: 60, cache_creation: { ephemeral_5m_input_tokens: 40, ephemeral_1h_input_tokens: 20 } }),
+    // 120 output = 600; a write with no breakdown counts as 5-minute.
+    said('s1', 'claude-opus-5-5', { input_tokens: 0, output_tokens: 120, cache_creation_input_tokens: 0 }, 'a1'),
+  ].join('\n');
+  const m = subagentMetrics(jsonl, { 'claude-opus-5-5': { costUSD: 1 } });
+  assert.deepEqual(m.costUsd, { subagent: 0.75, total: 1, share: 0.75 });
+  assert.deepEqual(m.tokens, { subagent: 120, total: 380, share: 0.316 });
+  assert.deepEqual(m.models, ['claude-opus-5-5']);
+});
+
+test('subagentMetrics: no transcript means none spawned; no per-model usage from claude leaves the cost share unknown; a model only claude saw stays the session\'s', () => {
+  assert.deepEqual(subagentMetrics('', { 'claude-opus-5-5': { costUSD: 0.4 } }), {
+    spawned: 0,
+    models: [],
+    tokens: { subagent: 0, total: 0, share: null },
+    costUsd: { subagent: 0, total: 0.4, share: 0 },
+  });
+  const jsonl = said('s1', 'claude-haiku-5-5', { input_tokens: 5, output_tokens: 5 }, 'a1');
+  assert.equal(subagentMetrics(jsonl, null).costUsd, null);
+  // canonicalModel answers a modelUsage key the transcripts spell differently.
+  assert.deepEqual(subagentMetrics(jsonl, { 'haiku[1m]': { canonicalModel: 'claude-haiku-5-5', costUSD: 0.1 }, 'claude-opus-5-5': { costUSD: 0.3 } }).costUsd, { subagent: 0.1, total: 0.4, share: 0.25 });
+  assert.deepEqual(subagentMetrics('', {}).costUsd, { subagent: 0, total: 0, share: null });
+});
+
+test('subagentNotes reports a current run that spawned none as measuring what solo does, a solo run that spawned any, and a count claude disagrees with', () => {
+  const none = { spawned: 0 };
+  const two = { spawned: 2 };
+  assert.deepEqual(subagentNotes('current', none, 0), ['none spawned: this current run measures the same thing as the solo arm']);
+  assert.deepEqual(subagentNotes('current', two, 2), []);
+  assert.deepEqual(subagentNotes('solo', none, 0), []);
+  assert.deepEqual(subagentNotes('solo', two, null), ['solo spawned 2 subagent(s): spawning was not off']);
+  assert.deepEqual(subagentNotes('bare', none, null), []);
+  assert.deepEqual(subagentNotes('current', two, 3), ['claude reports 3 spawned, the transcripts show 2']);
 });
 
 test('gateVerdict fails a green exit whose output trips failIf or lacks requireMatch, as CI does', () => {
@@ -564,12 +660,13 @@ test('addedLines keeps the lines a diff adds, read hunk by hunk, so context is s
 
 test('selectRounds narrows by --only, --arm and --run, and names a bad value', () => {
   const m = parseManifest(manifestText([ticket(), ticket({ id: 'demo-2' })]));
-  assert.equal(selectRounds(m, {}).length, 8);
+  assert.equal(selectRounds(m, {}).length, 12);
   assert.deepEqual(selectRounds(m, { only: 'demo-2', arm: 'bare', run: '2' }).map((r) => [r.ticket.id, r.arm, r.run]), [['demo-2', 'bare', 2]]);
+  assert.deepEqual(selectRounds(m, { only: 'demo-1', run: '1' }).map((r) => r.arm), ['bare', 'current', 'solo']);
   assert.throws(() => selectRounds(m, { only: 'nope' }), /unknown ticket nope/);
-  assert.throws(() => selectRounds(m, { arm: 'x' }), /arm must be one of bare, current/);
+  assert.throws(() => selectRounds(m, { arm: 'x' }), /arm must be one of bare, current, solo/);
   assert.throws(() => selectRounds(m, { run: '3' }), /run must be 1\.\.2/);
-  assert.deepEqual(ARMS, ['bare', 'current']);
+  assert.deepEqual(ARMS, ['bare', 'current', 'solo']);
 });
 
 test('estimateRound scales the prior by size, then prefers measured runs of the ticket, then other measured runs', () => {
@@ -607,6 +704,11 @@ test('planRound fetches only the parent into a fresh repo, and both arms share e
   const cur = planRound(m, m.tickets[0], 'current', 1, WHERE, []);
   assert.deepEqual(cur.claude.args, p.claude.args.slice(1));
   assert.deepEqual(cur.layout, p.layout);
+  const solo = planRound(m, m.tickets[0], 'solo', 1, WHERE, []);
+  assert.deepEqual(solo.claude.args, [...cur.claude.args, '--disallowedTools', 'Agent,Workflow']);
+  assert.deepEqual(solo.layout, p.layout);
+  assert.deepEqual(solo.estimate, cur.estimate, 'solo gets the same estimate and cap');
+  assert.equal(solo.resultsDir, join('C:\\O', 'runs', 'demo-1', 'solo-r1'));
 });
 
 test('planRound caps both arms of a ticket the same, from the prior, whatever a measured run spent (#288)', () => {
@@ -627,14 +729,21 @@ test('run.mjs --dry-run prints each round with its commands and estimate, and to
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /claude-config-220 bare r1/);
   assert.match(r.stdout, /claude-config-220 current r2/);
+  assert.match(r.stdout, /claude-config-220 solo r2/);
   assert.match(r.stdout, /est\. \$[\d.]+, ~\d+ turns/);
   assert.match(r.stdout, /--safe-mode -p --model claude-opus-5-5/);
+  assert.match(r.stdout, /--max-budget-usd \d+ --disallowedTools Agent,Workflow < /);
   assert.match(r.stdout, /fetch --quiet --no-tags \S+ 8a7f289c6ee314eea26541ec41de4d326608fdfd/);
   assert.match(r.stdout, /harness: claude-config at 8a7f289c6ee314eea26541ec41de4d326608fdfd/);
+  assert.match(r.stdout, /harness: as current, with the Agent and Workflow tools removed \(--disallowedTools\): no subagents/);
   assert.match(r.stdout, /node --test "scripts\/test\/\*\.test\.mjs"/);
-  assert.match(r.stdout, /total: 4 round\(s\), est\. \$/);
+  // Three arms, two runs each, each with its own estimate.
+  const total = /total: 6 round\(s\), est\. \$([\d.]+), ~(\d+) turns; bare 2 \$([\d.]+), current 2 \$([\d.]+), solo 2 \$([\d.]+)/.exec(r.stdout);
+  assert.ok(total, r.stdout);
+  const [usd, , ...perArm] = total.slice(1).map(Number);
+  assert.equal(Math.round(perArm.reduce((s, x) => s + x, 0) * 100) / 100, usd);
   assert.match(r.stdout, /CLAUDE_CODE_OAUTH_TOKEN is not set: a live round will refuse to start\./);
-  assert.match(r.stdout, /\$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts\/ab\/run\.mjs --only <ticket> --arm <bare\|current> --run <n>/);
+  assert.match(r.stdout, /\$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts\/ab\/run\.mjs --only <ticket> --arm <bare\|current\|solo> --run <n>/);
   assert.match(r.stdout, /not as a persistent user env var/);
   assert.match(r.stdout, /HOMEDRIVE\+HOMEPATH, APPDATA, LOCALAPPDATA, TEMP, TMP and TMPDIR/);
   assert.match(r.stdout, /the round dir is removed after capture \(--keep retains it\)/);
@@ -651,7 +760,7 @@ test('run.mjs --dry-run prints each round with its commands and estimate, and to
 test('run.mjs refuses a live run that is not narrowed to exactly one round', () => {
   const r = spawnHarness(join(AB, 'run.mjs'), ['--only', 'claude-config-220']);
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /a live run takes exactly one round: --only <ticket> --arm <bare\|current> --run <n>/);
+  assert.match(r.stderr, /a live run takes exactly one round: --only <ticket> --arm <bare\|current\|solo> --run <n>/);
 });
 
 test('run.mjs and canary.mjs refuse to start without CLAUDE_CODE_OAUTH_TOKEN, and never fall back to copying the login', () => {
@@ -661,7 +770,7 @@ test('run.mjs and canary.mjs refuse to start without CLAUDE_CODE_OAUTH_TOKEN, an
   const env = { CLAUDE_CODE_OAUTH_TOKEN: '', TEMP: join(home, 't'), TMP: join(home, 't'), TMPDIR: join(home, 't') };
   const run = spawnHarness(join(AB, 'run.mjs'), ['--only', 'claude-config-220', '--arm', 'bare', '--run', '1', '--out', join(home, 'out')], { home, env });
   const canary = spawnHarness(join(AB, 'canary.mjs'), ['--arm', 'bare', '--out', join(home, 'out')], { home, env });
-  for (const [name, r, cmd] of [['run', run, 'run\\.mjs --only <ticket>'], ['canary', canary, 'canary\\.mjs --arm <bare\\|current>']]) {
+  for (const [name, r, cmd] of [['run', run, 'run\\.mjs --only <ticket> --arm <bare\\|current\\|solo>'], ['canary', canary, 'canary\\.mjs --arm <bare\\|current\\|solo>']]) {
     assert.notEqual(r.status, 0, name);
     assert.match(r.stderr, /needs CLAUDE_CODE_OAUTH_TOKEN\. Create one once with `claude setup-token`/, name);
     assert.match(r.stderr, new RegExp(`\\$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts/ab/${cmd}`), name);
@@ -814,9 +923,44 @@ test('analyzeRequests reports loaded CLAUDE.md files, loaded memory content and 
     claudeMdFiles: ['C:\\Users\\y\\code\\CLAUDE.md', 'C:\\p\\CLAUDE.md'],
     memoryFiles: ['C:\\c\\projects\\k\\memory\\MEMORY.md'],
     markers: { root: true, project: true, memory: true },
+    tools: [],
   });
   const instructionsOnly = JSON.stringify({ system: 'You have a persistent file-based memory at C:\\m. Add a pointer in MEMORY.md.', messages: [{ content: 'hi' }] });
-  assert.deepEqual(analyzeRequests([instructionsOnly], markers), { requests: 1, claudeMdFiles: [], memoryFiles: [], markers: { root: false, project: false, memory: false } });
+  assert.deepEqual(analyzeRequests([instructionsOnly], markers), { requests: 1, claudeMdFiles: [], memoryFiles: [], markers: { root: false, project: false, memory: false }, tools: [] });
+});
+
+test('analyzeRequests (#374) lists the tools the requests offered the model, by name, across requests', () => {
+  const a = JSON.stringify({ tools: [{ name: 'Read', input_schema: {} }, { name: 'Agent', description: 'Launch a new agent' }], messages: [] });
+  const b = JSON.stringify({ tools: [{ name: 'Bash' }, { name: 'Read' }], messages: [] });
+  // A prompt that only mentions the Agent tool offers nothing.
+  const prose = JSON.stringify({ messages: [{ content: 'use the Agent tool' }] });
+  assert.deepEqual(analyzeRequests([a, b, prose, 'not json'], {}).tools, ['Agent', 'Bash', 'Read']);
+});
+
+test('canaryVerdict (#374): current needs the Agent tool offered, solo needs Agent and Workflow absent; both need the harness CLAUDE.md and no memory', () => {
+  const loaded = (tools, over = {}) => ({ requests: 1, claudeMdFiles: ['C:\\r\\code\\CLAUDE.md'], memoryFiles: [], markers: { project: true, root: true, realMemory: false }, tools, ...over });
+  const offered = ['Agent', 'Bash', 'Read', 'Workflow'];
+  const denied = ['Bash', 'Read'];
+  const v = (arm, a, opts = {}) => canaryVerdict(arm, { plant: false, loggedIn: true, ...opts }, a);
+  assert.equal(v('current', loaded(offered)), 'PASS');
+  assert.equal(v('current', loaded(denied)), 'FAIL', 'current without Agent is no multi-agent arm');
+  assert.equal(v('solo', loaded(denied)), 'PASS');
+  assert.equal(v('solo', loaded(offered)), 'FAIL');
+  assert.equal(v('solo', loaded(['Bash', 'Workflow'])), 'FAIL', 'Workflow spawns subagents too');
+  assert.equal(v('solo', loaded(['Agent'])), 'FAIL');
+  assert.equal(v('solo', loaded(denied, { markers: { project: true, root: false } })), 'FAIL', 'solo runs the harness');
+  assert.equal(v('solo', loaded(denied, { memoryFiles: ['C:\\m\\MEMORY.md'] })), 'FAIL');
+  assert.equal(v('solo', loaded(denied), { loggedIn: false }), 'FAIL');
+  assert.equal(v('solo', loaded(denied, { requests: 0 })), 'INCONCLUSIVE');
+  const bare = { requests: 1, claudeMdFiles: [], memoryFiles: [], markers: { project: false, root: false }, tools: offered };
+  assert.equal(v('bare', bare), 'PASS', 'bare is judged on what loaded, not on its tools');
+  assert.equal(v('bare', { ...bare, claudeMdFiles: ['C:\\x\\CLAUDE.md'] }), 'FAIL');
+  // --plant-memory: the planted memory must load in a harness arm and must not in bare.
+  const planted = (yes) => loaded(denied, { markers: { project: true, root: true, planted: yes }, memoryFiles: yes ? ['C:\\m\\MEMORY.md'] : [] });
+  assert.equal(v('solo', planted(true), { plant: true }), 'PASS');
+  assert.equal(v('current', planted(false), { plant: true }), 'FAIL');
+  assert.equal(v('bare', planted(false), { plant: true }), 'PASS');
+  assert.equal(v('bare', planted(true), { plant: true }), 'FAIL');
 });
 
 test('the canary stub captures each Messages request and answers it as a stream and as JSON', async () => {

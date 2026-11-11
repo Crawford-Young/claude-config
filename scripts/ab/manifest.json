@@ -24,6 +24,7 @@
       "harness": "8a7f289c6ee314eea26541ec41de4d326608fdfd",
       "lines": 139,
       "why": "git-plumbing script change with a three-case test matrix plus doc edits; the commonest harness ticket shape",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",
@@ -52,6 +53,7 @@
       "harness": "e47723c3e9c9418d2ae0f78118a80d87d320a2ed",
       "lines": 70,
       "why": "small bug with a design choice left open in the Done-when (create stubs or warn)",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",
@@ -80,6 +82,7 @@
       "harness": "1765970460bbb687aa5f3187ca1ebec92ba82c4d",
       "lines": 388,
       "why": "two-part feature across a script and its tests, with Windows process handling",
+      "spawnExpected": true,
       "gates": [
         {
           "name": "test",
@@ -108,6 +111,7 @@
       "harness": "c4bc39fa1c72fbcb1b2304b2119e10eb084a1b4f",
       "lines": 333,
       "why": "data-pipeline feature over transcript parsing plus a CI check and a doc re-derivation",
+      "spawnExpected": true,
       "gates": [
         {
           "name": "test",
@@ -136,6 +140,7 @@
       "harness": "8a4d58679fb54572971685c56c9a4b6abe70d566",
       "lines": 120,
       "why": "flaky-test fix that must keep a regression detector (red against a quadratic stub)",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",
@@ -164,6 +169,7 @@
       "harness": "9724e2d9e8ea369d8e0744d97be80c73e674bd56",
       "lines": 74,
       "why": "narrow edge-case guard where a test fixture must keep reaching a failure branch",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",
@@ -192,6 +198,7 @@
       "harness": "246611065f65983dd62b6b89d4707b06b83daa6a",
       "lines": 72,
       "why": "a source-scanning hygiene test with a self-tested matcher, an allow-list case and a doc deletion",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",
@@ -220,6 +227,7 @@
       "harness": "c06963573106d68aca935f89404f5866ed8f57ef",
       "lines": 192,
       "why": "cross-cutting fix: one shared helper replaces a guard copied into 9 hooks and scripts, proven by a test that runs a script through a Windows junction",
+      "spawnExpected": true,
       "gates": [
         {
           "name": "test",
@@ -248,6 +256,7 @@
       "harness": "230e7c19322ab2cb29fe626fb23c68d57a8aa76a",
       "lines": 71,
       "why": "hook logic tightened from loose word matching to the shape of one ask, with a test that reads a skill file so a wording change fails CI",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",
@@ -276,6 +285,7 @@
       "harness": "47107d632f66c89227c9a155ef738417fde8efbb",
       "lines": 220,
       "why": "reporting feature in a CI gate script: recursive discovery, frontmatter parsing, CLI path overrides and a never-fail contract, tested on fixture dirs only",
+      "spawnExpected": false,
       "gates": [
         {
           "name": "test",

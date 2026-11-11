@@ -1,13 +1,26 @@
 # scripts/ab: the #271 A/B runner
 
-Bare Claude Code (`--safe-mode`) against the harness at each ticket's parent, on 10 replayed claude-config tickets (`manifest.json`; harness only, user decision 2026-10-16). `run.mjs` runs one round, `grade.mjs` writes blind packets, `canary.mjs` proves what an arm loads. The headers of each script give the details.
+Three arms on 10 replayed claude-config tickets (`manifest.json`; harness only, user decision 2026-10-16): `bare` is Claude Code under `--safe-mode`; `current` is the harness at each ticket's parent; `solo` (#374) is `current` with subagent spawning off. `run.mjs` runs one round, `grade.mjs` writes blind packets, `canary.mjs` proves what an arm loads. The headers of each script give the details. The full set is 60 rounds (10 tickets, 2 runs, 3 arms); `run.mjs --dry-run` prints the estimate in total and per arm.
+
+## The solo arm and subagent metrics
+
+`solo` runs `current`'s command plus `--disallowedTools Agent,Workflow` (`claude --help`, 2.1.322: "Comma or space-separated list of tool names to deny"). `Agent` spawns a subagent, and `Workflow` runs a script that spawns them. Everything else matches `current`: the same CLAUDE.md chain, skills, agents, rules, hooks, estimate and cap. The canary proves the deny works. Its stub records the tools each request offers the model, and it passes `current` only when `Agent` is among them, `solo` only when neither tool is. On 2026-11-10 the solo request also dropped the agent-type listing. `ListAgents` and the deferred `SendMessage` stay, but they only reach agents that already exist, and a solo session has none.
+
+Each `result.json` has a `subagents` block, read from the round's own transcripts (the session's jsonl plus each subagent's under `<session>/subagents/`):
+- `spawned`: distinct subagent ids. `reportedSpawned` is claude's own `subagent_stats.spawned`, and a mismatch adds a note.
+- `models`: the models the subagents ran on.
+- `tokens`: the subagents' input, output and cache tokens, against the round's total, with their `share`.
+- `costUsd`: the subagents' $ and `share`. Claude reports $ per model, not per agent, so each model's `costUSD` is split by the priced token weight its session and subagent calls carried (output 5x an input token, a cache read 0.1x, a 5-minute cache write 1.25x, a 1-hour one 2x). A model only subagents ran is theirs exactly. `null` when claude's output had no `modelUsage`.
+- `notes`: a `current` run that spawned none says it measures the same thing as `solo`. A `solo` run that spawned any says spawning was not off.
+
+**`spawnExpected`** (each manifest ticket, `true`/`false`, required) marks a ticket large enough that a director would spawn: its merged PR had several independent files or steps. A one-script-plus-test ticket is `false`. The `current`-vs-`solo` comparison reads the `true` tickets, so one-file tickets don't dilute it. A ticket added to the manifest gets the mark judged the same way, from its merged PR's diff.
 
 ## Auth: your own token, set for one command
 
 A live round (`run.mjs` without `--dry-run`) and the canary refuse to start without `CLAUDE_CODE_OAUTH_TOKEN`. Create a token once with `claude setup-token`. Then run each cleared round from your own PowerShell, with the token set there only:
 
 ```powershell
-$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts/ab/run.mjs --only <ticket> --arm <bare|current> --run <n>
+$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts/ab/run.mjs --only <ticket> --arm <bare|current|solo> --run <n>
 ```
 
 The variable lasts until that window closes (`Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN` clears it sooner). Don't set it as a persistent user env var: every Claude Code session would then run on that token. The director never holds it, and the runner never copies your login (`.credentials.json`), because a refresh inside a copy can revoke the live one.
@@ -34,9 +47,10 @@ A clean scan means no reach showed up, not that there was none.
 
 ## Known deviations
 
-- **No memory.** Both arms start without auto-memory (user decision, 2026-10-16). The live harness has memory.
+- **No memory.** No arm starts with auto-memory (user decision, 2026-10-16). The live harness has memory.
+- **Solo still reads the dispatch rules.** The harness CLAUDE.md chain tells the session to dispatch agents, and in `solo` it can't. That is the arm: the harness, minus what its multi-agent rules buy.
 - **claude-config-124 prompts with its original body.** `tickets/claude-config-124.md` is the issue as filed at 02:35Z on 2026-10-09, not the body `gh` fetches today (user decision, 2026-10-19). The body was edited at 03:26Z, four minutes after the parent commit and before the fix commit, to spell out the fix's implementation choices. Every other ticket is its body as fetched.
-- **Hooks approximate the parent harness (m1).** The current arm's hooks come from the live `settings.json` wiring, rewritten to the harness checkout and dropped where that commit lacks the script. A hook wired later whose script already existed at the parent still runs. A hook wired at the parent but unwired since does not.
+- **Hooks approximate the parent harness (m1).** The current and solo arms' hooks come from the live `settings.json` wiring, rewritten to the harness checkout and dropped where that commit lacks the script. A hook wired later whose script already existed at the parent still runs. A hook wired at the parent but unwired since does not.
 - **Canary auth.** `claude auth status` reports `loggedIn` for any token that is set, valid or not, so the canary proves the token is present, not that it works.
 - **`--safe-mode` and settings.** Permission rules still apply under `--safe-mode`: the [CLI reference](https://code.claude.com/docs/en/cli-reference) says "permissions work normally". The docs don't say whether `settings.env` applies, and round 1 (claude-config-240 bare r1) never exercised it. If it doesn't, the bare arm runs without the live settings' env vars, which fits "bare".
-- **Spend cap.** `--max-budget-usd` is twice the ticket's prior estimate, the same in both arms. The printed estimate learns from measured runs, but the cap doesn't, so one arm's spend never caps the other's (#288).
+- **Spend cap.** `--max-budget-usd` is twice the ticket's prior estimate, the same in every arm. The printed estimate learns from measured runs, but the cap doesn't, so one arm's spend never caps the other's (#288).

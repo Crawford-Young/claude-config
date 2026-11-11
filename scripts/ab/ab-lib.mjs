@@ -6,7 +6,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
-export const ARMS = ['bare', 'current'];
+/** bare: no harness (--safe-mode). current: the harness at the ticket's parent. solo (#374): current
+ *  with subagent spawning off, so a harness result splits into the rules, hooks and skills versus the
+ *  director and its agents. */
+export const ARMS = ['bare', 'current', 'solo'];
+/** Whether an arm runs the harness checkout: its CLAUDE.md chain, skills, agents, rules and hooks. */
+export const usesHarness = (arm) => arm !== 'bare';
+/** The tools solo denies: Agent spawns a subagent, Workflow a script that spawns them. */
+export const SOLO_DENIED_TOOLS = ['Agent', 'Workflow'];
 /** Where runs, packets and canary captures go, beside qa.mjs's logs. */
 export const DEFAULT_OUT = join(homedir(), '.claude', 'ab-271');
 /** The harness repo under the workspace. */
@@ -56,6 +63,8 @@ export function parseManifest(text) {
     need(Number.isInteger(t.issue) && t.issue > 0, `${id}: issue must be an issue number`);
     for (const k of ['parent', 'merge', 'harness']) need(SHA_RE.test(t[k] ?? ''), `${id}: ${k} must be a 40-char SHA`);
     need(Number.isInteger(t.lines) && t.lines > 0, `${id}: lines must be a whole number > 0`);
+    // #374: true when the merged PR had several independent files or steps, so a director would spawn.
+    need(typeof t.spawnExpected === 'boolean', `${id}: spawnExpected must be true or false`);
     need(
       Array.isArray(t.gates) && t.gates.length > 0 && t.gates.every((g) => g?.name && g?.cmd),
       `${id}: gates must list at least one {name, cmd}`,
@@ -77,7 +86,7 @@ export function loadManifest(file) {
 
 const lf = (s) => s.replace(/\r\n/g, '\n');
 
-/** The prompt both arms get: the issue body, LF endings, every Done-when box unchecked. */
+/** The prompt every arm gets: the issue body, LF endings, every Done-when box unchecked. */
 export const promptFrom = (body) => `${lf(body).replace(/^(\s*[-*] )\[[xX]\]/gm, '$1[ ]').trimEnd()}\n`;
 
 /** The Done-when boxes of an issue body (wrapped lines joined), or its inline `**Done when:**` line. */
@@ -101,7 +110,7 @@ export function doneWhen(body) {
 const norm = (p) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 const isInside = (child, parent) => norm(child) === norm(parent) || norm(child).startsWith(`${norm(parent)}/`);
 
-/** A round's directories. The same for both arms and free of the arm's name: <root> is the session's
+/** A round's directories. The same for every arm and free of the arm's name: <root> is the session's
  *  home, <root>/code a stand-in workspace, the checkout sits where worktree.mjs puts a worktree. */
 export function roundLayout(ticket, roundId, { tmp, workspace }) {
   const root = join(tmp, 'ab', roundId);
@@ -229,11 +238,14 @@ export function pruneClaudeJson(j) {
   return Object.fromEntries(Object.entries(j).filter(([k]) => !DROP_GLOBAL.includes(k)));
 }
 
-/** claude's argv for one round. The arms differ only by --safe-mode. */
+/** claude's argv for one round. bare adds --safe-mode; solo adds a deny of SOLO_DENIED_TOOLS
+ *  (`claude --help`, 2.1.322: "--disallowedTools <tools...> Comma or space-separated list of tool names
+ *  to deny"), which the canary proves takes them out of the model's tool list. Nothing else differs. */
 export function claudeArgs(arm, { model, effort, permissionMode, budgetUsd }) {
   if (!ARMS.includes(arm)) throw new Error(`arm must be one of ${ARMS.join(', ')}, got ${JSON.stringify(arm)}`);
   const args = ['-p', '--model', model, '--output-format', 'json', '--effort', effort, '--permission-mode', permissionMode, '--permission-prompts', 'none', '--max-budget-usd', String(budgetUsd)];
-  return arm === 'bare' ? ['--safe-mode', ...args] : args;
+  if (arm === 'bare') return ['--safe-mode', ...args];
+  return arm === 'solo' ? [...args, '--disallowedTools', SOLO_DENIED_TOOLS.join(',')] : args;
 }
 
 /** The claude CLI: AB_CLAUDE_BIN (a .mjs runs under node: the test seam), else the native install, which is not on Git Bash's PATH. */
@@ -246,8 +258,8 @@ const KEEP = new Set(['CLAUDE_CONFIG_DIR']);
 const GITHUB_TOKENS = new Set(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']);
 
 /** The run.mjs and canary.mjs command lines a token instruction names. */
-export const RUN_COMMAND = 'run.mjs --only <ticket> --arm <bare|current> --run <n>';
-export const CANARY_COMMAND = 'canary.mjs --arm <bare|current>';
+export const RUN_COMMAND = `run.mjs --only <ticket> --arm <${ARMS.join('|')}> --run <n>`;
+export const CANARY_COMMAND = `canary.mjs --arm <${ARMS.join('|')}>`;
 
 /** How a live round authenticates (user decision, 2026-10-16): the user's own long-lived token, set in
  *  their own PowerShell for the one cleared command, so the director never holds it; never a copy of the login. */
@@ -281,10 +293,98 @@ export function parseClaudeJson(text) {
   try {
     const j = JSON.parse(text);
     if (j?.type !== 'result') throw new Error('not a result');
-    return { ok: true, subtype: j.subtype ?? null, isError: Boolean(j.is_error), costUsd: j.total_cost_usd ?? null, turns: j.num_turns ?? null, durationMs: j.duration_ms ?? null, sessionId: j.session_id ?? null, result: j.result ?? null };
+    return {
+      ok: true,
+      subtype: j.subtype ?? null,
+      isError: Boolean(j.is_error),
+      costUsd: j.total_cost_usd ?? null,
+      turns: j.num_turns ?? null,
+      durationMs: j.duration_ms ?? null,
+      sessionId: j.session_id ?? null,
+      result: j.result ?? null,
+      // #374: per-model tokens and costUSD, which subagentMetrics splits by agent, and claude's own spawn count.
+      modelUsage: j.modelUsage ?? null,
+      subagentsSpawned: j.subagent_stats?.spawned ?? null,
+    };
   } catch {
-    return { ok: false, subtype: null, isError: true, costUsd: null, turns: null, durationMs: null, sessionId: null, result: null };
+    return { ok: false, subtype: null, isError: true, costUsd: null, turns: null, durationMs: null, sessionId: null, result: null, modelUsage: null, subagentsSpawned: null };
   }
+}
+
+// Price of each usage field against an input token, the same ratio on every current Claude model:
+// output 5x, a 5-minute cache write 1.25x, a 1-hour one 2x, a cache read 0.1x.
+const weight = (u) => {
+  const write = u.cache_creation_input_tokens ?? 0;
+  const hour = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+  return (u.input_tokens ?? 0) + 5 * (u.output_tokens ?? 0) + 1.25 * (write - hour) + 2 * hour + 0.1 * (u.cache_read_input_tokens ?? 0);
+};
+const tokenCount = (u) => (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+const share = (part, whole, places) => (whole > 0 ? Math.round((part / whole) * 10 ** places) / 10 ** places : null);
+
+/** What a round's subagents did, from its own transcripts (`jsonl`: every transcript line, the
+ *  subagents' own files under <session>/subagents/ included) and claude's per-model usage. A subagent
+ *  is a distinct agentId on an isSidechain line; a model call is an assistant line with usage, counted
+ *  once per message id (Claude Code writes a line per content block). Tokens are input, output and
+ *  cache reads and writes. Cost: claude reports $ per model, not per agent, so each model's costUSD is
+ *  split by the priced token weight its session and subagent calls carried; a model only subagents ran
+ *  is theirs exactly, and one the transcripts never show stays the session's. costUsd is null when
+ *  claude's output had no modelUsage. → {spawned, models, tokens, costUsd}. */
+export function subagentMetrics(jsonl, modelUsage) {
+  const agents = new Set();
+  const seen = new Set();
+  const byModel = {};
+  const tokens = { subagent: 0, total: 0 };
+  for (const line of jsonl.split('\n')) {
+    let j;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const sub = Boolean(j?.isSidechain);
+    if (sub && j.agentId) agents.add(j.agentId);
+    const msg = j?.type === 'assistant' ? j.message : null;
+    if (!msg?.usage || msg.model === '<synthetic>') continue;
+    if (msg.id) {
+      if (seen.has(msg.id)) continue;
+      seen.add(msg.id);
+    }
+    const m = (byModel[msg.model] ??= { session: 0, subagent: 0 });
+    m[sub ? 'subagent' : 'session'] += weight(msg.usage);
+    const n = tokenCount(msg.usage);
+    tokens.total += n;
+    if (sub) tokens.subagent += n;
+  }
+  let costUsd = null;
+  if (modelUsage) {
+    let total = 0;
+    let subagent = 0;
+    for (const [key, u] of Object.entries(modelUsage)) {
+      const usd = u?.costUSD ?? 0;
+      total += usd;
+      const w = byModel[key] ?? byModel[u?.canonicalModel];
+      if (w?.subagent) subagent += (usd * w.subagent) / (w.subagent + w.session);
+    }
+    const usd4 = (x) => Math.round(x * 10_000) / 10_000;
+    costUsd = { subagent: usd4(subagent), total: usd4(total), share: share(subagent, total, 3) };
+  }
+  return {
+    spawned: agents.size,
+    models: Object.keys(byModel).filter((k) => byModel[k].subagent > 0).sort(),
+    tokens: { ...tokens, share: share(tokens.subagent, tokens.total, 3) },
+    costUsd,
+  };
+}
+
+/** What a run's subagent count says beside its arm: a current run that spawned none measures what solo
+ *  does; a solo run that spawned any wasn't solo; a count claude reports (`reported`, null when it
+ *  didn't) that the transcripts don't match means one of them missed some. → [note]. */
+export function subagentNotes(arm, { spawned }, reported) {
+  const notes = [];
+  if (arm === 'current' && spawned === 0) notes.push('none spawned: this current run measures the same thing as the solo arm');
+  if (arm === 'solo' && spawned > 0) notes.push(`solo spawned ${spawned} subagent(s): spawning was not off`);
+  if (reported !== null && reported !== spawned) notes.push(`claude reports ${reported} spawned, the transcripts show ${spawned}`);
+  return notes;
 }
 
 /** A gate's rc as CI reads it: a green exit still fails when the output trips failIf or lacks requireMatch. */
@@ -539,7 +639,7 @@ export function planRound(manifest, ticket, arm, run, { tmp, workspace, out, rou
   const layout = roundLayout(ticket, roundId, { tmp, workspace });
   const source = join(workspace, ticket.path);
   const estimate = estimateRound(ticket, manifest, measured);
-  // The cap comes from the prior alone, so both arms of a ticket get the same one: a cap from measured
+  // The cap comes from the prior alone, so every arm of a ticket gets the same one: a cap from measured
   // runs would hold the second arm to the first arm's spend (#288).
   const budgetUsd = Math.ceil(2 * estimateRound(ticket, manifest, []).usd);
   return {

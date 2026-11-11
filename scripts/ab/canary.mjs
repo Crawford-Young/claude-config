@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // canary.mjs: zero-cost proof of what an arm's session loads (#271).
 //
-//   node scripts/ab/canary.mjs --arm <bare|current> [--ticket <id>] [--plant-memory] [--out <dir>] [--keep]
+//   node scripts/ab/canary.mjs --arm <bare|current|solo> [--ticket <id>] [--plant-memory] [--out <dir>] [--keep]
 //
 // Builds a real round for the ticket (round.mjs: same checkout, home, config, harness and barrier as
 // a live run), then runs the round's own claude command for one turn with the API pointed at a local
 // stub: ANTHROPIC_BASE_URL is the stub, ANTHROPIC_API_KEY an invalid key (a request that escaped the
 // stub would be refused, unbilled), HTTP(S)_PROXY a closed local port (nothing else leaves the
-// machine). The stub records each Messages request, which is where Claude Code puts CLAUDE.md and
-// auto-memory, and answers "ok". No model runs. The key and the stub replace auth for that turn, so
+// machine). The stub records each Messages request, which is where Claude Code puts CLAUDE.md,
+// auto-memory and the tools the model is offered, and answers "ok". No model runs. The key and the
+// stub replace auth for that turn, so
 // the session never holds the token; `claude auth status` in the round, with the user's
 // CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, set in their env; required, as for a live
 // round, and never written anywhere), covers auth. No login is copied. However the canary ends, a
@@ -21,7 +22,8 @@
 // the positive control that loaded memory would be seen. Memory counts as loaded only when a MEMORY.md's
 // contents reach the request, not when the memory instructions do. The verdict:
 //   bare             PASS when no CLAUDE.md, no memory file and no marker reached the request
-//   current          PASS when the harness root CLAUDE.md did, and no memory file did
+//   current          PASS when the harness root CLAUDE.md did, no memory file did, and the Agent tool was offered
+//   solo             PASS as current, but with neither the Agent nor the Workflow tool offered (#374)
 // and in every case only when `claude auth status` in the round reports loggedIn.
 //   --plant-memory   PASS when the planted memory did (bare: when it did not)
 // Exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE (no request reached the stub). <out>/canary-<arm>/requests.jsonl
@@ -36,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { die, isMain, log, parseArgs, workspaceRoot } from '../lib.mjs';
-import { ARMS, CANARY_COMMAND, DEFAULT_OUT, claudeCommand, loadManifest, planRound, projectKey, tokenHelp } from './ab-lib.mjs';
+import { ARMS, CANARY_COMMAND, DEFAULT_OUT, SOLO_DENIED_TOOLS, claudeCommand, loadManifest, planRound, projectKey, tokenHelp, usesHarness } from './ab-lib.mjs';
 import { prepareRound, realClaudePaths, releaseRound, runClaude } from './round.mjs';
 
 const AB_DIR = dirname(fileURLToPath(import.meta.url));
@@ -66,7 +68,38 @@ export function analyzeRequests(bodies, markers) {
     claudeMdFiles: files(/Contents of ([^\n]*?CLAUDE(?:\.local)?\.md)/g),
     memoryFiles: files(/Contents of ([^\n]*?MEMORY\.md)/g),
     markers: Object.fromEntries(Object.entries(markers).map(([k, v]) => [k, text.includes(v)])),
+    tools: offeredTools(bodies),
   };
+}
+
+/** The names of the tools the request bodies offered the model (each body's `tools`), sorted. */
+function offeredTools(bodies) {
+  const names = new Set();
+  for (const b of bodies) {
+    try {
+      for (const t of JSON.parse(b).tools ?? []) if (typeof t?.name === 'string') names.add(t.name);
+    } catch {
+      // an unparseable body offers no tools
+    }
+  }
+  return [...names].sort();
+}
+
+/** The canary's verdict from what the requests show (`a`, from analyzeRequests). INCONCLUSIVE when no
+ *  request reached the stub; else PASS only with `loggedIn` and, by arm: bare, nothing loaded; current
+ *  and solo, the harness root CLAUDE.md and no memory file, and current offers the Agent tool while
+ *  solo offers none of SOLO_DENIED_TOOLS (#374). With `plant`, the planted memory must load in a harness
+ *  arm and must not in bare. */
+export function canaryVerdict(arm, { plant, loggedIn }, a) {
+  if (a.requests === 0) return 'INCONCLUSIVE';
+  const m = a.markers;
+  const noMemory = a.memoryFiles.length === 0 && !m.realMemory && !m.planted;
+  let ok;
+  if (plant) ok = usesHarness(arm) ? m.planted : !m.planted && a.memoryFiles.length === 0;
+  else if (arm === 'bare') ok = a.claudeMdFiles.length === 0 && noMemory && !m.project && !m.root;
+  else if (arm === 'solo') ok = m.root && noMemory && SOLO_DENIED_TOOLS.every((t) => !a.tools.includes(t));
+  else ok = m.root && noMemory && a.tools.includes('Agent');
+  return ok && loggedIn ? 'PASS' : 'FAIL';
 }
 
 const sse = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -158,8 +191,8 @@ async function probe(plan, { arm, plant, out, workspace }) {
   const nonce = randomBytes(6).toString('hex');
   writeFileSync(join(l.checkout, 'CLAUDE.md'), `# Probe\n\nAB-CANARY-PROJECT-${nonce}\n`);
   const markers = { project: `AB-CANARY-PROJECT-${nonce}` };
-  // current: the harness root CLAUDE.md in the round; bare: the user's real one, which must not load.
-  const root = arm === 'current' ? join(l.code, 'CLAUDE.md') : join(workspace, 'CLAUDE.md');
+  // current and solo: the harness root CLAUDE.md in the round; bare: the user's real one, which must not load.
+  const root = usesHarness(arm) ? join(l.code, 'CLAUDE.md') : join(workspace, 'CLAUDE.md');
   if (existsSync(root)) markers.root = readFileSync(root, 'utf8').split(/\r?\n/).find((x) => x.trim());
   const realMemory = realMemoryLine(workspace);
   if (realMemory) markers.realMemory = realMemory;
@@ -199,13 +232,7 @@ async function probe(plan, { arm, plant, out, workspace }) {
   writeFileSync(join(out, 'claude.out.txt'), `${r.stdout}\n--- stderr ---\n${r.stderr}`);
 
   const a = analyzeRequests(stub.bodies, markers);
-  const m = a.markers;
-  const noMemory = a.memoryFiles.length === 0 && !m.realMemory && !m.planted;
-  let ok;
-  if (plant) ok = arm === 'current' ? m.planted : !m.planted && a.memoryFiles.length === 0;
-  else if (arm === 'bare') ok = a.claudeMdFiles.length === 0 && noMemory && !m.project && !m.root;
-  else ok = m.root && noMemory;
-  const verdict = a.requests === 0 ? 'INCONCLUSIVE' : ok && loggedIn ? 'PASS' : 'FAIL';
+  const verdict = canaryVerdict(arm, { plant, loggedIn }, a);
   log(JSON.stringify({ arm, plant, loggedIn, claudeExit: r.status, ...a }, null, 2));
   log(`${verdict} (requests in ${join(out, 'requests.jsonl')})`);
   return verdict;
