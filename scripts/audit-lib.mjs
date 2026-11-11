@@ -316,7 +316,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const skills = {}, skillReads = {}, slash = {}, docs = {};
   const hookBlocks = {}, hookTimes = {}, hookFires = {};
   const bodied = new Set(); // SendMessage calls that carry a message (#370)
-  const redone = new Set(); // subagent ids such a call reached: warm redos
+  const redone = new Set(); // subagent ids such a call resumed after they finished: warm redos
+  const steered = new Set(); // subagent ids such a call reached while still running
   const inRange = (ts) => {
     if (!ts) return true;
     const day = ts.slice(0, 10);
@@ -415,11 +416,12 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
   }
 
-  /** A SendMessage with a body that reached a subagent run marks the run warm-redone (#370).
-   *  Its result names the run as resumedAgentId (it had finished, and resumes in its own
-   *  transcript) or pin.id (queued while it runs); a session or team inbox has neither, and
-   *  a refused send says success: false (verified 2026-11-10 on 159 sends to subagents).
-   *  Read from a timeOnly window too: the redo belongs to the run, not to the sender's spend. */
+  /** A SendMessage with a body that resumed a finished subagent run marks the run
+   *  warm-redone (#370): its result names the run as resumedAgentId (the run resumes in its
+   *  own transcript). One only queued for a running run (pin.id alone) is a steer, kept
+   *  apart. A session or team inbox has neither, and a refused send says success: false
+   *  (verified 2026-11-10 on 159 sends to subagents). Read from a timeOnly window too: the
+   *  redo belongs to the run, not to the sender's spend. */
   function trackSend(rec) {
     const c = rec.message?.content;
     if (!Array.isArray(c)) return;
@@ -430,8 +432,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       } else if (b?.type === 'tool_result' && bodied.has(b.tool_use_id)) {
         let res = rec.toolUseResult;
         if (!res || typeof res !== 'object') try { res = JSON.parse(textOf(b.content)); } catch { res = null; }
-        const id = res?.success !== false && (res?.resumedAgentId ?? res?.pin?.id);
-        if (id) redone.add(id);
+        if (res?.success === false) continue;
+        if (res?.resumedAgentId) redone.add(res.resumedAgentId);
+        else if (res?.pin?.id) steered.add(res.pin.id);
       }
     }
   }
@@ -577,7 +580,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
     for (const g of names.values()) g.windows = g.windows.size;
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
-    const agentMix = agentMixOf(runSettings, redone);
+    const agentMix = agentMixOf(runSettings, redone, steered);
 
     // cost-state is per transcript file: Claude Code's total beside the sum of the file's
     // windows. It counts more than the transcripts hold (see the header), so it is shown
@@ -832,9 +835,11 @@ export function createCollector({ prices, since, until, installedSkills = [], do
  *  under the setting most of its requests used (ties: the costlier), so a type's rows add
  *  up to its per-type runs and $; mixedRuns counts the runs that also used another
  *  setting. effort is null where the records carry none. Fit (#370): warmRedos counts the
- *  runs in `redone` (a SendMessage with a body reached them), escalations those escalatedRuns
- *  finds, redoOrEscalation the runs with either. Sorted by type, then $. */
-function agentMixOf(runSettings, redone) {
+ *  runs in `redone` (resumed by a SendMessage after they finished), steered those in `steered`
+ *  (reached while running), escalations those escalatedRuns finds, redoOrEscalation the runs
+ *  with a warm redo or an escalation. A re-review family's resumes are reRuns instead, and
+ *  its redoOrEscalation is null: not rated. Sorted by type, then $. */
+function agentMixOf(runSettings, redone, steered) {
   const rows = new Map();
   for (const run of runSettings.values()) {
     run.main = [...run.settings.values()].reduce((a, b) => (b.requests > a.requests || (b.requests === a.requests && b.usd > a.usd) ? b : a));
@@ -843,13 +848,16 @@ function agentMixOf(runSettings, redone) {
   for (const [id, { type, settings, main }] of runSettings) {
     const all = [...settings.values()];
     const key = `${type}\n${main.model}\n${main.effort}`;
-    const row = rows.get(key) || rows.set(key, { type, model: main.model, effort: main.effort, runs: 0, mixedRuns: 0, requests: 0, usd: 0, warmRedos: 0, escalations: 0, redoOrEscalation: 0 }).get(key);
+    const rated = !RE_REVIEW.has(familyOf(type));
+    const row = rows.get(key) || rows.set(key, { type, model: main.model, effort: main.effort, runs: 0, mixedRuns: 0, requests: 0, usd: 0,
+      warmRedos: 0, reRuns: 0, steered: 0, escalations: 0, redoOrEscalation: rated ? 0 : null }).get(key);
     row.runs++;
     if (all.length > 1) row.mixedRuns++;
     const [warm, esc] = [redone.has(id), escalated.has(id)];
-    row.warmRedos += warm;
-    row.escalations += esc;
-    row.redoOrEscalation += warm || esc;
+    if (warm) row[rated ? 'warmRedos' : 'reRuns']++;
+    if (steered.has(id)) row.steered++;
+    if (esc) row.escalations++;
+    if (rated && (warm || esc)) row.redoOrEscalation++;
     for (const s of all) {
       row.requests += s.requests;
       row.usd += s.usd;
@@ -864,6 +872,12 @@ function agentMixOf(runSettings, redone) {
 const LINES = ['haiku', 'sonnet', 'opus', 'fable'];
 const lineOf = (model) => MODEL_ID.exec(model || '')?.[1] ?? null;
 const lineRank = (model) => LINES.indexOf(lineOf(model));
+/** An agent type's family: the type less a trailing -<line> (implementer-opus is implementer's opus side). */
+const familyOf = (type) => type.replace(new RegExp(`-(?:${LINES.join('|')})$`), '');
+/** Families whose resumes are re-reviews after another agent's fixes, not misfits of their
+ *  own: shown as re-runs, out of the redo rate and the fit flag (11 of 13 reviewer resumes
+ *  read by hand were re-reviews, 2026-11-10). */
+const RE_REVIEW = new Set(['reviewer']);
 
 /** Runs that a later run of the same role and charge superseded on a stronger model line:
  *  an escalation. The role drops a dedupe or round suffix (review-2, impl-r2 → review,
@@ -892,16 +906,15 @@ function escalatedRuns(runs) {
 export const FIT_MIN_RUNS = 10;
 export const FIT_GAP = 0.2;
 
-/** Rows of agentMix clearly worse on redo or escalation than the next model line up in their
- *  family (the type less a trailing -<line>: implementer-opus is implementer's opus side),
- *  that line pooled over its versions and efforts: both sides FIT_MIN_RUNS runs or more and
- *  the row's rate FIT_GAP or more over the pool's. -> [{ type, model, effort, runs, rate, up, upRuns, upRate }] */
+/** Rows of agentMix clearly worse on redo or escalation than the nearest model line up in
+ *  their family with FIT_MIN_RUNS runs or more, that line pooled over its versions and
+ *  efforts: the row FIT_MIN_RUNS runs or more too, and its rate FIT_GAP or more over the
+ *  pool's. A re-review family is never rated. -> [{ type, model, effort, runs, rate, up, upRuns, upRate }] */
 export function fitFlags(rows) {
-  const familyOf = (type) => type.replace(new RegExp(`-(?:${LINES.join('|')})$`), '');
   const pools = new Map(); // family\nline -> { runs, bad }
   for (const r of rows) {
     const line = lineOf(r.model);
-    if (!LINES.includes(line)) continue;
+    if (!LINES.includes(line) || RE_REVIEW.has(familyOf(r.type))) continue;
     const k = `${familyOf(r.type)}\n${line}`;
     const p = pools.get(k) || pools.set(k, { runs: 0, bad: 0 }).get(k);
     p.runs += r.runs;
@@ -910,10 +923,10 @@ export function fitFlags(rows) {
   const flags = [];
   for (const r of rows) {
     const rank = lineRank(r.model);
-    if (rank < 0 || r.runs < FIT_MIN_RUNS) continue;
-    const up = LINES.slice(rank + 1).find((l) => pools.has(`${familyOf(r.type)}\n${l}`));
-    const p = up && pools.get(`${familyOf(r.type)}\n${up}`);
-    if (!p || p.runs < FIT_MIN_RUNS) continue;
+    if (rank < 0 || r.runs < FIT_MIN_RUNS || RE_REVIEW.has(familyOf(r.type))) continue;
+    const up = LINES.slice(rank + 1).find((l) => pools.get(`${familyOf(r.type)}\n${l}`)?.runs >= FIT_MIN_RUNS);
+    if (!up) continue;
+    const p = pools.get(`${familyOf(r.type)}\n${up}`);
     const rate = r.redoOrEscalation / r.runs, upRate = p.bad / p.runs;
     // in tenths of a point, so a gap of exactly FIT_GAP isn't lost to float error
     if (Math.round((rate - upRate) * 1e3) >= Math.round(FIT_GAP * 1e3)) flags.push({ type: r.type, model: r.model, effort: r.effort, runs: r.runs, rate, up, upRuns: p.runs, upRate });
@@ -1200,7 +1213,7 @@ const pctOf = (x) => `${Math.round(x * 100)}%`;
 
 /** The fit rule (#370) and each row it flags for a routing decision. */
 function fitLines({ minRuns, gap, flags }) {
-  const lines = [`fit flag: a row with at least ${minRuns} runs on both sides whose redo-or-escalation rate is ${Math.round(gap * 100)} points or more over the next model line up in its family (the type less a trailing -<line>, so implementer-opus is implementer's opus side; that line pooled over its versions and efforts)`];
+  const lines = [`fit flag: a row with at least ${minRuns} runs whose redo-or-escalation rate is ${Math.round(gap * 100)} points or more over the nearest model line up in its family that also has at least ${minRuns} runs (the type less a trailing -<line>, so implementer-opus is implementer's opus side; that line pooled over its versions and efforts)`];
   for (const f of flags) {
     lines.push(`⚠ fit ${f.type} · ${f.model} · ${f.effort ?? 'not recorded'}: redo or escalation ${pctOf(f.rate)} (n=${f.runs}) vs ${pctOf(f.upRate)} on ${f.up} (n=${f.upRuns}) — a routing decision`);
   }
@@ -1236,11 +1249,14 @@ export function renderMarkdown(r, { top = 15 } = {}) {
     Object.entries(r.agents).sort((a, b) => b[1].usd - a[1].usd)
       .map(([k, a]) => [k, a.runs, a.requests, usd(a.usd), usd(a.usd / a.runs), byCount(a.models).map(([m, c]) => `${m}×${c}`).join(', ')])));
   out.push('', '## Per agent type × model × effort',
-    '(a run is filed whole under the setting most of its requests used; mixed: runs that also used another; warm redo: runs a SendMessage with a message reached; ' +
-    `escalated: runs whose next run of the same role and charge (review, review-2) ran on a stronger model line, ${LINES.join(' < ')}; an unnamed run has no charge to follow)`);
-  out.push(table(['type', 'model', 'effort', 'runs', 'mixed', 'requests', '$', '$/run', 'warm redo', 'escalated', 'redo or escalation'],
+    '(a run is filed whole under the setting most of its requests used; mixed: runs that also used another; warm redo: runs a SendMessage resumed after they finished; ' +
+    'steered: runs a message reached while still running (not in the rate); ' +
+    `escalated: runs whose next run of the same role and charge (review, review-2) ran on a stronger model line, ${LINES.join(' < ')}; an unnamed run has no charge to follow; ` +
+    `${[...RE_REVIEW].join(', ')}: a resumed run is a re-review after fixes, counted as re-run and left out of the rate and the flag)`,
+    'the redo rate is an upper bound: a resumed send that assigns a follow-on step counts too, since transcripts carry no signal to tell it from a fix');
+  out.push(table(['type', 'model', 'effort', 'runs', 'mixed', 'requests', '$', '$/run', 'warm redo', 're-run', 'steered', 'escalated', 'redo or escalation'],
     (r.agentMix || []).map((m) => [m.type, m.model, m.effort ?? 'not recorded', m.runs, m.mixedRuns, m.requests, usd(m.usd), usd(m.usd / m.runs),
-      m.warmRedos, m.escalations, `${m.redoOrEscalation} (${pctOf(m.redoOrEscalation / m.runs)})`])));
+      m.warmRedos, m.reRuns, m.steered, m.escalations, m.redoOrEscalation === null ? 'not rated' : `${m.redoOrEscalation} (${pctOf(m.redoOrEscalation / m.runs)})`])));
   out.push(...fitLines(r.agentFit));
   out.push('', '## Invocations');
   out.push('**Skill tool calls**', table(['skill', 'calls'], byCount(r.skills)));
