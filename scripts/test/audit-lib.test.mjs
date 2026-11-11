@@ -997,7 +997,7 @@ const sendResult = (id, result, { textOnly = false } = {}) => ({
 });
 const fitOf = (r) => Object.fromEntries(r.agentMix.map((m) => [`${m.type} ${m.model}`, [m.runs, m.warmRedos, m.escalations, m.redoOrEscalation]]));
 
-test('a SendMessage with a body that reaches a subagent run is a warm redo of that run, counted once per run', () => {
+test('a SendMessage that resumes a finished subagent run is a warm redo of that run, counted once per run; one queued for a running run is a steer', () => {
   const c = createCollector({ prices: PRICES });
   c.add(runAt('w1', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a1', 'impl_issue_r-5'));
   c.add(runAt('w2', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a2', 'impl_issue_r-6'));
@@ -1005,12 +1005,12 @@ test('a SendMessage with a body that reaches a subagent run is a warm redo of th
   // a finished run is resumed with the message
   c.add(sendCall('s1', { to: 'a1', message: 'fix the red test' }), MAIN);
   c.add(sendResult('s1', { success: true, message: 'Resuming agent a1', resumedAgentId: 'a1', pin: { id: 'a1' } }), MAIN);
-  // a second message to the same run: still one run that needed a redo
+  // a second message to the same run: still one run that needed a redo; a record without toolUseResult is read from the result text
   c.add(sendCall('s2', { to: 'impl_issue_r-5', message: 'and the lint' }), MAIN);
-  c.add(sendResult('s2', { success: true, resumedAgentId: 'a1', pin: { id: 'a1' } }), MAIN);
-  // a running one has it queued: the pin names the run; a record without toolUseResult is read from the result text
+  c.add(sendResult('s2', { success: true, resumedAgentId: 'a1', pin: { id: 'a1' } }, { textOnly: true }), MAIN);
+  // a running one only has it queued (the pin names the run, no resumedAgentId): a steer, not a redo
   c.add(sendCall('s3', { to: 'a2', message: 'scope changed' }), MAIN);
-  c.add(sendResult('s3', { success: true, message: 'Message queued for delivery to a2', pin: { id: 'a2' } }, { textOnly: true }), MAIN);
+  c.add(sendResult('s3', { success: true, message: 'Message queued for delivery to a2', pin: { id: 'a2' } }), MAIN);
   // not redos: a notify-only call with no body, a refused send, a send to a session inbox
   c.add(sendCall('s4', { to: 'a3', notify_when_idle: true, message: '' }), MAIN);
   c.add(sendResult('s4', { success: true, pin: { id: 'a3' } }), MAIN);
@@ -1019,7 +1019,18 @@ test('a SendMessage with a body that reaches a subagent run is a warm redo of th
   c.add(sendCall('s6', { to: 'ticket-r-7', message: 'hello' }), MAIN);
   c.add(sendResult('s6', { success: true, message: "Message sent to ticket-r-7's inbox" }), MAIN);
   const rows = c.report().agentMix;
-  assert.deepEqual(rows.map((m) => [m.runs, m.warmRedos, m.escalations, m.redoOrEscalation]), [[3, 2, 0, 2]]);
+  assert.deepEqual(rows.map((m) => [m.runs, m.warmRedos, m.steered, m.escalations, m.redoOrEscalation]), [[3, 1, 1, 0, 1]]);
+});
+
+test('a resumed reviewer is a re-run (a re-review after fixes): its rows count it apart and carry no redo rate', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(runAt('rv1', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('r1', 'review_issue_r-5', 'reviewer'));
+  c.add(runAt('rv2', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('r2', 'review_issue_r-6', 'reviewer'));
+  c.add(sendCall('rs1', { to: 'r1', message: 'fixes are in, re-review' }), MAIN);
+  c.add(sendResult('rs1', { success: true, resumedAgentId: 'r1', pin: { id: 'r1' } }), MAIN);
+  const [row] = c.report().agentMix;
+  assert.deepEqual([row.runs, row.warmRedos, row.reRuns, row.redoOrEscalation], [2, 0, 1, null]);
+  assert.match(renderMarkdown(c.report()), /\| reviewer \| claude-opus-5 \| high \| 2 \| 0 \| 2 \| \$10\.00 \| \$5\.00 \| 0 \| 1 \| 0 \| 0 \| not rated \|/);
 });
 
 test('a warm redo sent from a timeOnly window still counts for the run it reached (--session keeps the run, not the sender)', () => {
@@ -1057,7 +1068,7 @@ test('a later run of the same role and charge on a stronger model line is an esc
   assert.deepEqual(fitOf(c.report()), {
     'implementer claude-haiku-4-5': [8, 0, 2, 2],
     'implementer-opus claude-opus-5': [3, 0, 0, 0],
-    'reviewer claude-opus-5': [1, 0, 0, 0],
+    'reviewer claude-opus-5': [1, 0, 0, null], // a reviewer carries no redo rate
   });
 });
 
@@ -1082,15 +1093,23 @@ test('fitFlags: a row clearly worse than the next model line up in its family is
     // the next line up, pooled over its versions and efforts and over the family's -opus type: 3 of 10 = 30%
     fitRow('implementer-opus', 'claude-opus-5-5', 'high', 6, 1),
     fitRow('implementer', 'claude-opus-5', 'medium', 4, 2),
-    fitRow('reviewer', 'claude-sonnet-5-5', 'high', 20, 10), // 50% vs opus 8 of 20 = 40%: under the gap
-    fitRow('reviewer', 'claude-opus-5-5', 'high', 20, 8),
+    fitRow('explore', 'claude-sonnet-5-5', 'high', 20, 10), // 50% vs opus 8 of 20 = 40%: under the gap
+    fitRow('explore', 'claude-opus-5-5', 'high', 20, 8),
+    // a reviewer is never rated: its resumes are re-reviews, not misfits
+    fitRow('reviewer', 'claude-sonnet-5-5', 'high', 20, 20),
+    fitRow('reviewer', 'claude-opus-5-5', 'high', 20, 0),
     fitRow('recon', 'claude-sonnet-5-5', 'low', 30, 30), // no model up in its family to compare with
+    // the nearest line up with enough runs is the comparison: sonnet (n=5) is thin, so haiku meets opus
+    fitRow('general-purpose', 'claude-haiku-5-5', 'low', 10, 8),
+    fitRow('general-purpose', 'claude-sonnet-5-5', 'low', 5, 0),
+    fitRow('general-purpose', 'claude-opus-5-5', 'high', 10, 1),
   ];
   assert.deepEqual(fitFlags(rows), [
     { type: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', runs: 10, rate: 0.5, up: 'opus', upRuns: 10, upRate: 0.3 },
+    { type: 'general-purpose', model: 'claude-haiku-5-5', effort: 'low', runs: 10, rate: 0.8, up: 'opus', upRuns: 10, upRate: 0.1 },
   ]);
-  // the pooled next line up is thin too: no flag
-  assert.deepEqual(fitFlags(rows.filter((r) => r.model !== 'claude-opus-5')), []);
+  // the pooled next line up is thin too, and none above it qualifies: no flag
+  assert.deepEqual(fitFlags(rows.filter((r) => r.model !== 'claude-opus-5' && r.type !== 'general-purpose')), []);
 });
 
 test('the type × model × effort section shows the redo and escalation columns, its flag rule and each flag', () => {
@@ -1103,10 +1122,14 @@ test('the type × model × effort section shows the redo and escalation columns,
   const r = c.report();
   assert.deepEqual(r.agentFit.flags.map((f) => [f.type, f.model, f.runs, f.rate, f.up, f.upRuns, f.upRate]), [['implementer', 'claude-haiku-4-5', 10, 0.6, 'opus', 10, 0]]);
   const md = renderMarkdown(r);
-  assert.match(md, /\| type \| model \| effort \| runs \| mixed \| requests \| \$ \| \$\/run \| warm redo \| escalated \| redo or escalation \|/);
-  assert.match(md, /\| implementer \| claude-haiku-4-5 \| high \| 10 \| 0 \| 10 \| \$10\.00 \| \$1\.00 \| 0 \| 6 \| 6 \(60%\) \|/);
-  assert.match(md, /\| implementer-opus \| claude-opus-5 \| high \| 10 \| 0 \| 10 \| \$50\.00 \| \$5\.00 \| 0 \| 0 \| 0 \(0%\) \|/);
-  assert.match(md, /at least 10 runs on both sides/);
+  assert.match(md, /\| type \| model \| effort \| runs \| mixed \| requests \| \$ \| \$\/run \| warm redo \| re-run \| steered \| escalated \| redo or escalation \|/);
+  assert.match(md, /\| implementer \| claude-haiku-4-5 \| high \| 10 \| 0 \| 10 \| \$10\.00 \| \$1\.00 \| 0 \| 0 \| 0 \| 6 \| 6 \(60%\) \|/);
+  assert.match(md, /\| implementer-opus \| claude-opus-5 \| high \| 10 \| 0 \| 10 \| \$50\.00 \| \$5\.00 \| 0 \| 0 \| 0 \| 0 \| 0 \(0%\) \|/);
+  assert.match(md, /warm redo: runs a SendMessage resumed after they finished/);
+  assert.match(md, /steered: runs a message reached while still running \(not in the rate\)/);
+  assert.match(md, /reviewer: a resumed run is a re-review after fixes, counted as re-run and left out of the rate and the flag/);
+  assert.match(md, /upper bound: a resumed send that assigns a follow-on step counts too/);
+  assert.match(md, /over the nearest model line up in its family that also has at least 10 runs/);
   assert.match(md, /20 points/);
   assert.match(md, /⚠ fit implementer · claude-haiku-4-5 · high: redo or escalation 60% \(n=10\) vs 0% on opus \(n=10\) — a routing decision/);
 });
