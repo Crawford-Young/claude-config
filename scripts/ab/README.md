@@ -54,3 +54,23 @@ A clean scan means no reach showed up, not that there was none.
 - **Canary auth.** `claude auth status` reports `loggedIn` for any token that is set, valid or not, so the canary proves the token is present, not that it works.
 - **`--safe-mode` and settings.** Permission rules still apply under `--safe-mode`: the [CLI reference](https://code.claude.com/docs/en/cli-reference) says "permissions work normally". The docs don't say whether `settings.env` applies, and round 1 (claude-config-240 bare r1) never exercised it. If it doesn't, the bare arm runs without the live settings' env vars, which fits "bare".
 - **Spend cap.** `--max-budget-usd` is twice the ticket's prior estimate, the same in every arm. The printed estimate learns from measured runs, but the cap doesn't, so one arm's spend never caps the other's (#288).
+
+## Grading twice, and the results (#375)
+
+`grade.mjs` writes each gradable run three ways, each under its own salted id, so two copies of a run can't be matched by id:
+
+- `packets/` for the first grader.
+- `packets-second/` for a second, separate grader.
+- `packets-user/` for your blind sample: 10 runs (all of them when fewer exist), spread as evenly across arms as the runs allow, picked by the salt. A re-run keeps that pick, so a packet you've graded never moves.
+
+Give each slot's packets to its own fresh grader, and never one grader two slots of the same run. Grading is a live round: each needs your clearance, like a run.
+
+Once the packets are graded, run `node scripts/ab/results.mjs [--pair current:bare[,solo:bare]] [--seed 1] [--iterations 10000]`. It joins `result.json`, `blind-key.json` and every `grade.json`, and writes `results.md` and `results.json` beside `runs/`. Both name the arms, so neither goes to a grader.
+
+- **Per ticket:** one row per ticket. Each arm's cell is the median of its counted runs, with the range when they differ: Done-when pass rate, gates (as runs all green), quality, cost, turns, wall time, and input, output, cache-read and cache-write tokens. A run's pass rate is passed boxes over all boxes, averaged over the graders who graded it. Unverifiable is not a pass, and it shifts every arm alike, because the boxes are the same. Tokens are summed from the run's saved transcripts, main and subagent. Each API message counts once by id (Claude Code writes one line per content block). On round 1 (claude-config-240 bare r1) that sum matches `claude.json`'s own usage exactly.
+- **Paired difference:** for each `--pair a:b` (default `current:bare`; any two arms the runs hold), each ticket gets median(a) − median(b), with a 95% interval from resampling each arm's runs. Across tickets it reports the mean of those differences, with a 95% interval from resampling tickets, and the tickets won, tied and lost from a's side. Lower wins for cost, turns, time and tokens. The bootstrap is seeded (`--seed`), so a result repeats. With one run a side, a ticket's interval is just its point.
+- **Grader agreement:** Cohen's kappa on Done-when verdicts, for the two graders over every packet both graded, and for you against each grader over your sample. Quality scores are reported only when both kappas reach **0.60** and you've graded at least 10 sample packets; otherwise they're withheld, with the reason. Why kappa and not raw agreement: when most boxes pass, raw agreement is high by chance alone (two graders who each pass 90% of boxes at random agree 82% of the time). 0.60 is the floor of "substantial" agreement (Landis & Koch, 1977); below it, grader noise is as large as the arm differences this A/B can detect. Pass rates stay in the table either way, with the agreement shown beside them.
+- **Runs left out or flagged, per arm:** each one is named, because dropping runs silently favours the arm that fails more.
+  - Excluded (contaminated) and resultless runs count in no metric.
+  - A held run has no grade, but counts in the run-side metrics (gates, cost, turns, time, tokens).
+  - Timed-out and budget-capped runs count in every metric, because they are the arm's real outcome. A timed-out run has no cost or turns, since claude was killed before it reported them. Budget-capped means claude's `error_max_budget_usd`, or spend at or over the cap.
