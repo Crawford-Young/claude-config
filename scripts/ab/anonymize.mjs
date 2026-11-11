@@ -1,13 +1,16 @@
-// Blinding for #271 grading: strips what tells the two arms apart from a run's diff and gate output.
-// Both arms share one layout under <tmp>/ab/<round id>, so a path names no arm; still, every round
+// Blinding for #271 grading: strips what tells the arms apart from a run's diff and gate output.
+// Every arm shares one layout under <tmp>/ab/<round id>, so a path names no arm; still, every round
 // path is replaced in each spelling a log can carry it. The other tells: the safe-mode flag and env
 // var, an arm label, harness-workflow files (COMMIT_MSG_<n>.txt, dropped whole) and commit-body
-// vocabulary. Redactions share one placeholder in both arms. Harness file names stay: every ticket is a
+// vocabulary. Redactions share one placeholder in every arm. Harness file names stay: every ticket is a
 // claude-config ticket (round 5), so the repo holds them and a mention says nothing about the arm.
+
+import { ARMS } from './ab-lib.mjs';
 
 const ESC = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SAFE_MODE = /CLAUDE_CODE_SAFE_MODE(?:=\S*)?|(?:--)?safe[-_ ]?mode/gi;
-const ARM_LABEL = /-(?:bare|current)-r(\d+)\b/gi;
+// Built from ARMS, so an arm is blinded the day it is added (#374: solo was not).
+const ARM_LABEL = new RegExp(`-(?:${ARMS.join('|')})-r(\\d+)\\b`, 'gi');
 const TEMP_PATH = /AppData[\\/]+Local[\\/]+Temp/i;
 // An added commit-body line, plain, bold or bulleted: `+What:`, `+**What:**`, `+- Verified:`, `+  * **Next:**`.
 const COMMIT_VOCAB = /^\+[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(?:What|Verified|Next|Ruled out):/m;
