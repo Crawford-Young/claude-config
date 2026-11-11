@@ -315,6 +315,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   const reportedModels = new Map(); // sessionId -> that record's modelUsage
   const skills = {}, skillReads = {}, slash = {}, docs = {};
   const hookBlocks = {}, hookTimes = {}, hookFires = {};
+  const bodied = new Set(); // SendMessage calls that carry a message (#370)
+  const redone = new Set(); // subagent ids such a call reached: warm redos
   const inRange = (ts) => {
     if (!ts) return true;
     const day = ts.slice(0, 10);
@@ -413,13 +415,37 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
   }
 
+  /** A SendMessage with a body that reached a subagent run marks the run warm-redone (#370).
+   *  Its result names the run as resumedAgentId (it had finished, and resumes in its own
+   *  transcript) or pin.id (queued while it runs); a session or team inbox has neither, and
+   *  a refused send says success: false (verified 2026-11-10 on 159 sends to subagents).
+   *  Read from a timeOnly window too: the redo belongs to the run, not to the sender's spend. */
+  function trackSend(rec) {
+    const c = rec.message?.content;
+    if (!Array.isArray(c)) return;
+    for (const b of c) {
+      if (b?.type === 'tool_use' && b.name === 'SendMessage') {
+        const body = b.input?.message ?? b.input?.content;
+        if (typeof body === 'string' ? body.trim() : body) bodied.add(b.id);
+      } else if (b?.type === 'tool_result' && bodied.has(b.tool_use_id)) {
+        let res = rec.toolUseResult;
+        if (!res || typeof res !== 'object') try { res = JSON.parse(textOf(b.content)); } catch { res = null; }
+        const id = res?.success !== false && (res?.resumedAgentId ?? res?.pin?.id);
+        if (id) redone.add(id);
+      }
+    }
+  }
+
   function add(rec, ctx) {
     if (!rec || typeof rec !== 'object') return;
     const sid = ctx.sessionId, win = ctx.window ?? sid;
     fileOf.set(win, sid);
     if (ctx.timeOnly) {
       timeOnly.add(win);
-      if (inRange(rec.timestamp)) timeRecord(rec, ctx);
+      if (inRange(rec.timestamp)) {
+        timeRecord(rec, ctx);
+        trackSend(rec);
+      }
       return;
     }
     if (rec.type === 'custom-title') {
@@ -439,6 +465,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
     if (!inRange(rec.timestamp)) return;
     timeRecord(rec, ctx);
+    trackSend(rec);
 
     if (rec.type === 'assistant') {
       const u = rec.message?.usage;
@@ -448,7 +475,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       const key = rec.requestId || rec.message?.id || rec.uuid;
       const prev = requests.get(key);
       if (!prev || (u.output_tokens || 0) > (prev.u.output_tokens || 0)) {
-        requests.set(key, { u, model, effort: rec.effort ?? prev?.effort ?? null, day: (rec.timestamp || '').slice(0, 10), ctx });
+        requests.set(key, { u, model, effort: rec.effort ?? prev?.effort ?? null, day: (rec.timestamp || '').slice(0, 10), t: Date.parse(rec.timestamp || '') || Infinity, ctx });
       }
       return;
     }
@@ -487,9 +514,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     const writeTiers = new Map(); // file + model -> cache-write tokens its transcript records, by tier
     const totals = { requests: 0, usd: 0, tokens: zero() };
     const days = new Map(), sessions = new Map(), agents = {}, agentRuns = {}, unpriced = {}, runUsd = new Map();
-    const runSettings = new Map(); // agent id -> { type, settings: model\neffort -> { model, effort, requests, usd } }
+    const runSettings = new Map(); // agent id -> { type, name, first (ms), settings: model\neffort -> { model, effort, requests, usd } }
     const names = new Map(); // session key -> one row over every window and named subagent it holds
-    for (const { u, model, effort, day, ctx } of requests.values()) {
+    for (const { u, model, effort, day, t, ctx } of requests.values()) {
       const { usd } = priceUsage(u, model, prices);
       const tk = tokensOf(u);
       if (usd === null) {
@@ -524,7 +551,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         bump(a.models, model);
         (agentRuns[ctx.agent.type] ||= new Set()).add(ctx.agent.id);
         runUsd.set(ctx.agent.id, (runUsd.get(ctx.agent.id) || 0) + cost);
-        const run = runSettings.get(ctx.agent.id) || runSettings.set(ctx.agent.id, { type: ctx.agent.type, settings: new Map() }).get(ctx.agent.id);
+        const run = runSettings.get(ctx.agent.id) || runSettings.set(ctx.agent.id, { type: ctx.agent.type, name: ctx.agent.name, first: t, settings: new Map() }).get(ctx.agent.id);
+        run.first = Math.min(run.first, t);
         const sk = `${model}\n${effort}`;
         const st = run.settings.get(sk) || run.settings.set(sk, { model, effort, requests: 0, usd: 0 }).get(sk);
         st.requests++;
@@ -549,7 +577,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
     for (const g of names.values()) g.windows = g.windows.size;
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
-    const agentMix = agentMixOf(runSettings);
+    const agentMix = agentMixOf(runSettings, redone);
 
     // cost-state is per transcript file: Claude Code's total beside the sum of the file's
     // windows. It counts more than the transcripts hold (see the header), so it is shown
@@ -602,6 +630,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       names: [...names.values()].sort((a, b) => b.usd - a.usd),
       agents,
       agentMix,
+      agentFit: { minRuns: FIT_MIN_RUNS, gap: FIT_GAP, flags: fitFlags(agentMix) },
       skills,
       skillReads,
       slash,
@@ -802,22 +831,94 @@ export function createCollector({ prices, since, until, installedSkills = [], do
 /** Per agent type × model × effort (#113): runs, requests and $. A run is filed whole
  *  under the setting most of its requests used (ties: the costlier), so a type's rows add
  *  up to its per-type runs and $; mixedRuns counts the runs that also used another
- *  setting. effort is null where the records carry none. Sorted by type, then $. */
-function agentMixOf(runSettings) {
+ *  setting. effort is null where the records carry none. Fit (#370): warmRedos counts the
+ *  runs in `redone` (a SendMessage with a body reached them), escalations those escalatedRuns
+ *  finds, redoOrEscalation the runs with either. Sorted by type, then $. */
+function agentMixOf(runSettings, redone) {
   const rows = new Map();
-  for (const { type, settings } of runSettings.values()) {
+  for (const run of runSettings.values()) {
+    run.main = [...run.settings.values()].reduce((a, b) => (b.requests > a.requests || (b.requests === a.requests && b.usd > a.usd) ? b : a));
+  }
+  const escalated = escalatedRuns(runSettings);
+  for (const [id, { type, settings, main }] of runSettings) {
     const all = [...settings.values()];
-    const main = all.reduce((a, b) => (b.requests > a.requests || (b.requests === a.requests && b.usd > a.usd) ? b : a));
     const key = `${type}\n${main.model}\n${main.effort}`;
-    const row = rows.get(key) || rows.set(key, { type, model: main.model, effort: main.effort, runs: 0, mixedRuns: 0, requests: 0, usd: 0 }).get(key);
+    const row = rows.get(key) || rows.set(key, { type, model: main.model, effort: main.effort, runs: 0, mixedRuns: 0, requests: 0, usd: 0, warmRedos: 0, escalations: 0, redoOrEscalation: 0 }).get(key);
     row.runs++;
     if (all.length > 1) row.mixedRuns++;
+    const [warm, esc] = [redone.has(id), escalated.has(id)];
+    row.warmRedos += warm;
+    row.escalations += esc;
+    row.redoOrEscalation += warm || esc;
     for (const s of all) {
       row.requests += s.requests;
       row.usd += s.usd;
     }
   }
   return [...rows.values()].sort((a, b) => a.type.localeCompare(b.type) || b.usd - a.usd);
+}
+
+// ---- fit: redo and escalation rate (#370) ------------------------------------
+
+/** Model lines weakest first: a later run on a later line is an escalation. */
+const LINES = ['haiku', 'sonnet', 'opus', 'fable'];
+const lineOf = (model) => MODEL_ID.exec(model || '')?.[1] ?? null;
+const lineRank = (model) => LINES.indexOf(lineOf(model));
+
+/** Runs that a later run of the same role and charge superseded on a stronger model line:
+ *  an escalation. The role drops a dedupe or round suffix (review-2, impl-r2 → review,
+ *  impl), so a re-dispatch's new role label still joins its charge (#360). Only the run just
+ *  before the stronger one counts. An unnamed run or a role-less name has no chain.
+ *  runs: id -> { name, first (ms), main: { model } } */
+function escalatedRuns(runs) {
+  const chains = new Map();
+  for (const [id, run] of runs) {
+    const p = parseAgentName(run.name);
+    if (!p?.role) continue;
+    const k = `${p.role.replace(/-r?\d+$/, '')}\n${p.key}`;
+    (chains.get(k) || chains.set(k, []).get(k)).push({ id, first: run.first, rank: lineRank(run.main.model) });
+  }
+  const out = new Set();
+  for (const chain of chains.values()) {
+    chain.sort((a, b) => a.first - b.first);
+    for (let i = 1; i < chain.length; i++) if (chain[i - 1].rank >= 0 && chain[i].rank > chain[i - 1].rank) out.add(chain[i - 1].id);
+  }
+  return out;
+}
+
+/** Minimum runs on each side of a fit comparison, and the gap in redo-or-escalation rate
+ *  (a fraction: 0.2 is 20 points) that makes a row clearly worse than the next line up.
+ *  At 10 runs one run moves a rate 10 points, so a flag needs two runs' worth of gap. */
+export const FIT_MIN_RUNS = 10;
+export const FIT_GAP = 0.2;
+
+/** Rows of agentMix clearly worse on redo or escalation than the next model line up in their
+ *  family (the type less a trailing -<line>: implementer-opus is implementer's opus side),
+ *  that line pooled over its versions and efforts: both sides FIT_MIN_RUNS runs or more and
+ *  the row's rate FIT_GAP or more over the pool's. -> [{ type, model, effort, runs, rate, up, upRuns, upRate }] */
+export function fitFlags(rows) {
+  const familyOf = (type) => type.replace(new RegExp(`-(?:${LINES.join('|')})$`), '');
+  const pools = new Map(); // family\nline -> { runs, bad }
+  for (const r of rows) {
+    const line = lineOf(r.model);
+    if (!LINES.includes(line)) continue;
+    const k = `${familyOf(r.type)}\n${line}`;
+    const p = pools.get(k) || pools.set(k, { runs: 0, bad: 0 }).get(k);
+    p.runs += r.runs;
+    p.bad += r.redoOrEscalation;
+  }
+  const flags = [];
+  for (const r of rows) {
+    const rank = lineRank(r.model);
+    if (rank < 0 || r.runs < FIT_MIN_RUNS) continue;
+    const up = LINES.slice(rank + 1).find((l) => pools.has(`${familyOf(r.type)}\n${l}`));
+    const p = up && pools.get(`${familyOf(r.type)}\n${up}`);
+    if (!p || p.runs < FIT_MIN_RUNS) continue;
+    const rate = r.redoOrEscalation / r.runs, upRate = p.bad / p.runs;
+    // in tenths of a point, so a gap of exactly FIT_GAP isn't lost to float error
+    if (Math.round((rate - upRate) * 1e3) >= Math.round(FIT_GAP * 1e3)) flags.push({ type: r.type, model: r.model, effort: r.effort, runs: r.runs, rate, up, upRuns: p.runs, upRate });
+  }
+  return flags;
 }
 
 // ---- model stamps (#113) -----------------------------------------------------
@@ -1095,6 +1196,18 @@ function priceCheckLines({ models, exceptions }) {
   return lines;
 }
 
+const pctOf = (x) => `${Math.round(x * 100)}%`;
+
+/** The fit rule (#370) and each row it flags for a routing decision. */
+function fitLines({ minRuns, gap, flags }) {
+  const lines = [`fit flag: a row with at least ${minRuns} runs on both sides whose redo-or-escalation rate is ${Math.round(gap * 100)} points or more over the next model line up in its family (the type less a trailing -<line>, so implementer-opus is implementer's opus side; that line pooled over its versions and efforts)`];
+  for (const f of flags) {
+    lines.push(`⚠ fit ${f.type} · ${f.model} · ${f.effort ?? 'not recorded'}: redo or escalation ${pctOf(f.rate)} (n=${f.runs}) vs ${pctOf(f.upRate)} on ${f.up} (n=${f.upRuns}) — a routing decision`);
+  }
+  if (!flags.length) lines.push('no row flagged');
+  return lines;
+}
+
 export function renderMarkdown(r, { top = 15 } = {}) {
   const { totals: t, costState } = r;
   const delta = costState.reportedUsd ? ((costState.computedUsd - costState.reportedUsd) / costState.reportedUsd) * 100 : null;
@@ -1122,9 +1235,13 @@ export function renderMarkdown(r, { top = 15 } = {}) {
   out.push(table(['type', 'runs', 'requests', '$', '$/run', 'models'],
     Object.entries(r.agents).sort((a, b) => b[1].usd - a[1].usd)
       .map(([k, a]) => [k, a.runs, a.requests, usd(a.usd), usd(a.usd / a.runs), byCount(a.models).map(([m, c]) => `${m}×${c}`).join(', ')])));
-  out.push('', '## Per agent type × model × effort', '(a run is filed whole under the setting most of its requests used; mixed: runs that also used another)');
-  out.push(table(['type', 'model', 'effort', 'runs', 'mixed', 'requests', '$', '$/run'],
-    (r.agentMix || []).map((m) => [m.type, m.model, m.effort ?? 'not recorded', m.runs, m.mixedRuns, m.requests, usd(m.usd), usd(m.usd / m.runs)])));
+  out.push('', '## Per agent type × model × effort',
+    '(a run is filed whole under the setting most of its requests used; mixed: runs that also used another; warm redo: runs a SendMessage with a message reached; ' +
+    `escalated: runs whose next run of the same role and charge (review, review-2) ran on a stronger model line, ${LINES.join(' < ')}; an unnamed run has no charge to follow)`);
+  out.push(table(['type', 'model', 'effort', 'runs', 'mixed', 'requests', '$', '$/run', 'warm redo', 'escalated', 'redo or escalation'],
+    (r.agentMix || []).map((m) => [m.type, m.model, m.effort ?? 'not recorded', m.runs, m.mixedRuns, m.requests, usd(m.usd), usd(m.usd / m.runs),
+      m.warmRedos, m.escalations, `${m.redoOrEscalation} (${pctOf(m.redoOrEscalation / m.runs)})`])));
+  out.push(...fitLines(r.agentFit));
   out.push('', '## Invocations');
   out.push('**Skill tool calls**', table(['skill', 'calls'], byCount(r.skills)));
   out.push('', '**SKILL.md reads**', table(['skill', 'reads'], byCount(r.skillReads)));

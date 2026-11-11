@@ -152,7 +152,9 @@ test('--json carries agentMix: a subagent run under its model and the effort its
   writeFileSync(join(proj, 'a', 'subagents', 'agent-x.meta.json'), JSON.stringify({ agentType: 'recon' }));
   const r = spawnHarness(cli, ['--root', root, '--json']);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(JSON.parse(r.stdout).agentMix.map(({ type, model, effort, runs }) => [type, model, effort, runs]), [['recon', 'claude-opus-5', 'low', 1]]);
+  const j = JSON.parse(r.stdout);
+  assert.deepEqual(j.agentMix.map(({ type, model, effort, runs, warmRedos, escalations, redoOrEscalation }) => [type, model, effort, runs, warmRedos, escalations, redoOrEscalation]), [['recon', 'claude-opus-5', 'low', 1, 0, 0, 0]]);
+  assert.deepEqual(j.agentFit, { minRuns: 10, gap: 0.2, flags: [] }, 'the fit rule rides with the rows (#370)');
 });
 
 test('--stamps checks model stamps against prices.json: exit 1 naming each stale one, 0 when clean (#113)', () => {
