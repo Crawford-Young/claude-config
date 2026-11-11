@@ -1,5 +1,5 @@
 {
-  "$comment": "#271 A/B ticket set: 10 claude-config tickets. Round 5 (user, 2026-10-16): the A/B is harness only, so dog-eat-dog-13, strate-10 and strate-30 are dropped and claude-config-129, -178 and -124 added. parent = the main commit the PR's first commit landed on (merge~N for a rebase merge of N commits), checked against `gh pr view --json mergeCommit,commits` on 2026-10-16. lines = the PR's changed lines. harness = the claude-config commit the current arm runs, which is the parent (round 3, user: \"Harness at ticket's parent\", \"No memory\"). The prompt is tickets/<id>.md, the issue body as fetched 2026-10-16, except claude-config-124: its original body of 2026-10-09T02:35Z (user, 2026-10-19), because the 03:26Z edit, made between the parent and the fix commit, spells out the fix's implementation choices. gates = qa.mjs's list at the parent, run after the session; a gate's requireMatch/failIf make a green exit fail as CI would. Round 2 (director, 2026-10-16): claude-config-216 swapped for claude-config-193 (PR 229 also fixed #217).",
+  "$comment": "#271 A/B ticket set: 10 claude-config tickets. Round 5 (user, 2026-10-16): the A/B is harness only, so dog-eat-dog-13, strate-10 and strate-30 are dropped and claude-config-129, -178 and -124 added. parent = the main commit the PR's first commit landed on (merge~N for a rebase merge of N commits), checked against `gh pr view --json mergeCommit,commits` on 2026-10-16. lines = the PR's changed lines. harness = the claude-config commit the current arm runs, which is the parent (round 3, user: \"Harness at ticket's parent\", \"No memory\"). The prompt is tickets/<id>.md, the issue body as fetched 2026-10-16, except claude-config-124: its original body of 2026-10-09T02:35Z (user, 2026-10-19), because the 03:26Z edit, made between the parent and the fix commit, spells out the fix's implementation choices. gates = qa.mjs's list at the parent, run after the session; a gate's requireMatch/failIf make a green exit fail as CI would. Round 2 (director, 2026-10-16): claude-config-216 swapped for claude-config-193 (PR 229 also fixed #217). pending (#369, user 2026-11-10): the seven project tickets (apps strate#86, #87, #89+#90; web component-library#135, #136, PR 106; games dog-eat-dog#12), each with its repo's own headless gates from its CI at the parent, a setup command, and the harness at the claude-config main commit before its parent. They are validated but never run: the runner has no setup, LFS or project-checkout step yet.",
   "issue": "Crawford-Young/claude-config#271",
   "owner": "Crawford-Young",
   "model": "claude-opus-5-5",
@@ -299,6 +299,271 @@
         {
           "name": "harness-map",
           "cmd": "node scripts/harness-map.mjs check"
+        }
+      ]
+    }
+  ],
+  "pending": [
+    {
+      "id": "strate-86",
+      "path": "apps/strate",
+      "issue": 86,
+      "kind": "bug",
+      "title": "bug(core): teammates record their own name as agent type",
+      "pr": 93,
+      "merge": "63a278363a065fbcbe6a34d20c7a0ffd91956474",
+      "parent": "4219682007b50d1e74484e1f6291e4cb94557f66",
+      "harness": "2420dfe85517edc27b8ade242d33df2b66d5f059",
+      "lines": 236,
+      "spawnExpected": true,
+      "setup": [
+        "bun ci"
+      ],
+      "why": "Rust core bug fixed across layers: a schema migration, ingest and discovery, the audit rollup, regenerated fixtures and the TS api (21 files), so independent steps a director would split",
+      "gates": [
+        {
+          "name": "typecheck",
+          "cmd": "bun run typecheck"
+        },
+        {
+          "name": "lint",
+          "cmd": "bun run lint"
+        },
+        {
+          "name": "test",
+          "cmd": "bun run test"
+        },
+        {
+          "name": "build",
+          "cmd": "bun run build"
+        },
+        {
+          "name": "fmt",
+          "cmd": "cargo fmt --all --check"
+        },
+        {
+          "name": "clippy",
+          "cmd": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        {
+          "name": "cargo-test",
+          "cmd": "cargo test --workspace"
+        }
+      ]
+    },
+    {
+      "id": "strate-87",
+      "path": "apps/strate",
+      "issue": 87,
+      "kind": "debt",
+      "title": "debt(audit): GroupBy is dead outside tests since the breakdown columns",
+      "pr": 96,
+      "merge": "24b7f383a41a8240141f2925afa8a7b11dfeb9f9",
+      "parent": "63a278363a065fbcbe6a34d20c7a0ffd91956474",
+      "harness": "cc72494fd17de026f90c9538eb2517c86fa02c09",
+      "lines": 726,
+      "spawnExpected": true,
+      "setup": [
+        "bun ci"
+      ],
+      "why": "dead-code removal through the Rust store, the Tauri commands and the React hooks and views, each with its tests (24 files)",
+      "gates": [
+        {
+          "name": "typecheck",
+          "cmd": "bun run typecheck"
+        },
+        {
+          "name": "lint",
+          "cmd": "bun run lint"
+        },
+        {
+          "name": "test",
+          "cmd": "bun run test"
+        },
+        {
+          "name": "build",
+          "cmd": "bun run build"
+        },
+        {
+          "name": "fmt",
+          "cmd": "cargo fmt --all --check"
+        },
+        {
+          "name": "clippy",
+          "cmd": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        {
+          "name": "cargo-test",
+          "cmd": "cargo test --workspace"
+        }
+      ]
+    },
+    {
+      "id": "strate-89",
+      "path": "apps/strate",
+      "issue": 89,
+      "kind": "feat",
+      "title": "feat(core): context window for claude-haiku-5-5 (#89) + debt(core): a pricing-logic change alone does not re-price stored rows (#90)",
+      "pr": 92,
+      "merge": "4219682007b50d1e74484e1f6291e4cb94557f66",
+      "parent": "9873e911e336ac5037c461c202f6e3a30de3a8f2",
+      "harness": "e3d98fa6aea03e7f3c0b20258a6f4ec92f17fdc1",
+      "lines": 95,
+      "spawnExpected": true,
+      "setup": [
+        "bun ci"
+      ],
+      "why": "two issues shipped as one PR (#89 a data entry and its test, #90 a re-price trigger and its test), two independent steps; the prompt joins both bodies under one Done-when",
+      "gates": [
+        {
+          "name": "typecheck",
+          "cmd": "bun run typecheck"
+        },
+        {
+          "name": "lint",
+          "cmd": "bun run lint"
+        },
+        {
+          "name": "test",
+          "cmd": "bun run test"
+        },
+        {
+          "name": "build",
+          "cmd": "bun run build"
+        },
+        {
+          "name": "fmt",
+          "cmd": "cargo fmt --all --check"
+        },
+        {
+          "name": "clippy",
+          "cmd": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        {
+          "name": "cargo-test",
+          "cmd": "cargo test --workspace"
+        }
+      ]
+    },
+    {
+      "id": "component-library-135",
+      "path": "web/component-library",
+      "issue": 135,
+      "kind": "feat",
+      "title": "feat: StatTile and TrendChart (strate#51)",
+      "pr": 142,
+      "merge": "7be69a02e7d61eef667de783e577c137089dece5",
+      "parent": "d3bda19e2acb6c88d7a2a016023438dac5b17dd6",
+      "harness": "6a83c26e2cab9219c83fb597de1e8292ba789d2b",
+      "lines": 1282,
+      "spawnExpected": true,
+      "setup": [
+        "pnpm install --frozen-lockfile"
+      ],
+      "why": "two new components plus a shared chart-parts refactor, stories, a11y entries and a changeset (16 files); a commit slice of PR 142 (its two #135 commits)",
+      "gates": [
+        {
+          "name": "typecheck",
+          "cmd": "pnpm typecheck"
+        },
+        {
+          "name": "lint",
+          "cmd": "pnpm lint"
+        },
+        {
+          "name": "test",
+          "cmd": "pnpm test"
+        }
+      ]
+    },
+    {
+      "id": "component-library-136",
+      "path": "web/component-library",
+      "issue": 136,
+      "kind": "feat",
+      "title": "feat: Sparkbars and InlineStackedBar (strate#54)",
+      "pr": 142,
+      "merge": "05580acf11d7d80255a34ae43de4dc56a127d9ea",
+      "parent": "7be69a02e7d61eef667de783e577c137089dece5",
+      "harness": "6a83c26e2cab9219c83fb597de1e8292ba789d2b",
+      "lines": 598,
+      "spawnExpected": true,
+      "setup": [
+        "pnpm install --frozen-lockfile"
+      ],
+      "why": "two independent components, each with tests and a story, plus a11y entries and a changeset (14 files); a commit slice of PR 142",
+      "gates": [
+        {
+          "name": "typecheck",
+          "cmd": "pnpm typecheck"
+        },
+        {
+          "name": "lint",
+          "cmd": "pnpm lint"
+        },
+        {
+          "name": "test",
+          "cmd": "pnpm test"
+        }
+      ]
+    },
+    {
+      "id": "component-library-106",
+      "path": "web/component-library",
+      "issue": 106,
+      "kind": "bug",
+      "title": "bug(week-calendar-view): the create popover offers \"New activity…\" when nothing can handle it",
+      "pr": 106,
+      "merge": "28df4d6c30e103e2da7fb07210e4b764fcc3a11c",
+      "parent": "564031e89b3dd0418592401ac221818bcbf89640",
+      "harness": "624fe97cdef63908640b4a53f9e055bd9af02ba2",
+      "lines": 107,
+      "spawnExpected": false,
+      "setup": [
+        "pnpm install --frozen-lockfile"
+      ],
+      "why": "PR 106 has no issue (issue = the PR number): the prompt is a bug report written from its summary, symptom only, with its test-plan checkboxes as the Done-when (user, 2026-11-10); one component fix with its tests and a story",
+      "gates": [
+        {
+          "name": "typecheck",
+          "cmd": "pnpm typecheck"
+        },
+        {
+          "name": "lint",
+          "cmd": "pnpm lint"
+        },
+        {
+          "name": "test",
+          "cmd": "pnpm test"
+        }
+      ]
+    },
+    {
+      "id": "dog-eat-dog-12",
+      "path": "games/dog-eat-dog",
+      "issue": 12,
+      "kind": "debt",
+      "title": "Reword history-narrating comments to current behaviour",
+      "pr": 23,
+      "merge": "683fadb6646a67bcf89b815bd6513dfa58f94402",
+      "parent": "00c6a07917d9ffd1fff199b57adafdb23ef52429",
+      "harness": "35d5c913352fec0ce2cd44046aa85865fec5f5d4",
+      "lines": 104,
+      "spawnExpected": false,
+      "setup": [],
+      "why": "one mechanical comment pass over 6 files (about 100 lines), no step worth a subagent. Caveat: the body is given as filed, and its last file item is wrong: the issue's own comment says tests/unit/test_lab_smoke.gd has no \"retired\" comment (user, 2026-11-10). Needs the LFS assets and Godot 4.7.1 (GODOT) for its gates",
+      "gates": [
+        {
+          "name": "import",
+          "cmd": "just import"
+        },
+        {
+          "name": "cache",
+          "cmd": "just cache"
+        },
+        {
+          "name": "test",
+          "cmd": "just test"
         }
       ]
     }

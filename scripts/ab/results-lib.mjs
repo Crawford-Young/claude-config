@@ -3,6 +3,8 @@
 // rule that withholds quality, the runs left out or flagged, and the markdown. results.mjs reads the
 // files and hands the runs in.
 
+import { modelCalls } from './ab-lib.mjs';
+
 /** Kappa floor for both grader-grader and user-grader agreement on Done-when verdicts. Raw agreement
  *  is inflated when most boxes pass (two graders who each pass 90% of boxes at random agree 82% of
  *  the time); Cohen's kappa takes chance out. 0.6 is the floor of "substantial" agreement (Landis &
@@ -87,26 +89,49 @@ export function kappa(pairs) {
   return { n, agreement: po, kappa: pe === 1 ? 1 : (po - pe) / (1 - pe) };
 }
 
-/** Token totals over a run's transcripts (main and subagent .jsonl texts). Claude Code writes one API
- *  message as one line per content block, each with the message's full usage, so a message counts
- *  once by id. Null when there are no transcripts: unknown, not zero. */
+/** Token totals over a run's transcripts (main and subagent .jsonl texts), each model call counted by
+ *  the run metrics' own rule (ab-lib's modelCalls). Null when there are no transcripts: unknown, not zero. */
 export function transcriptTokens(texts) {
   if (!texts.length) return null;
-  const seen = new Map();
+  const calls = modelCalls(texts.join('\n'));
+  const sum = (k) => calls.reduce((s, { usage: u }) => s + (u[k] ?? 0), 0);
+  return { inputTokens: sum('input_tokens'), outputTokens: sum('output_tokens'), cacheReadTokens: sum('cache_read_input_tokens'), cacheWriteTokens: sum('cache_creation_input_tokens') };
+}
+
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+// A command segment whose program is claude: at the start, or after ; & | ( $( or a newline, past any
+// VAR=value prefixes, PowerShell's call operator and a quoted or bare path; or npx of the package. Not
+// after a backtick: round 1's sed script named "`claude -n`" as a markdown code span.
+const CLAUDE_LAUNCH =
+  /(?:(?:^|[;&|(\n]|\$\()\s*(?:&\s*)?(?:[A-Za-z_]\w*=\S*\s+)*["']?(?:[^\s"';&|]*[\\/])?claude(?:\.exe)?["']?(?=\s|$|[;&|)])|\bnpx\s+(?:-\S+\s+)*@anthropic-ai\/claude-code\b)/i;
+
+/** The shell commands in a run's transcripts that launch claude (Bash or PowerShell tool calls, each
+ *  once by tool_use id). A nested `claude -p` or `--bg` runs outside the session: solo's tool deny
+ *  doesn't reach it and the subagent metrics don't see it (#374), so results.mjs flags the run. */
+export function claudeLaunches(texts) {
+  const seen = new Set();
+  const found = [];
+  const visit = (o) => {
+    if (Array.isArray(o)) return o.forEach(visit);
+    if (!o || typeof o !== 'object') return;
+    if (o.type === 'tool_use' && SHELL_TOOLS.has(o.name) && typeof o.input?.command === 'string') {
+      const key = o.id ?? o.input.command;
+      if (!seen.has(key) && CLAUDE_LAUNCH.test(o.input.command)) found.push(o.input.command);
+      seen.add(key);
+      return;
+    }
+    Object.values(o).forEach(visit);
+  };
   for (const text of texts) {
     for (const line of text.split(/\r?\n/)) {
-      let j;
       try {
-        j = JSON.parse(line);
+        visit(JSON.parse(line));
       } catch {
-        continue;
+        // not a transcript line
       }
-      const u = j?.type === 'assistant' ? j.message?.usage : null;
-      if (u) seen.set(j.message.id ?? j.requestId ?? j.uuid ?? line, u);
     }
   }
-  const sum = (k) => [...seen.values()].reduce((s, u) => s + (u[k] ?? 0), 0);
-  return { inputTokens: sum('input_tokens'), outputTokens: sum('output_tokens'), cacheReadTokens: sum('cache_read_input_tokens'), cacheWriteTokens: sum('cache_creation_input_tokens') };
+  return found;
 }
 
 /** A run the runner killed at its timeout, and one the spend cap stopped (claude's own subtype, or
@@ -183,11 +208,21 @@ export function gradeAgreement(runs, { kappaMin = KAPPA_MIN, userMin = USER_MIN 
 const outcome = (d, better) => (Math.abs(d) < TIE ? 'tied' : (d > 0) === (better === 'higher') ? 'won' : 'lost');
 const byRun = (a, b) => a.ticket.localeCompare(b.ticket, 'en', { numeric: true }) || a.run - b.run;
 
+/** Why `ticket` has no counted run of `arm`: it has none at all, or each one it has was left out. */
+function missingReason(runs, ticket, arm) {
+  const own = runs.filter((r) => r.ticket === ticket && r.arm === arm).sort((a, b) => a.run - b.run);
+  if (!own.length) return `no ${arm} run`;
+  return `no counted ${arm} run: ${own.map((r) => `r${r.run} ${r.status === 'no-result' ? 'has no result' : `excluded (${r.reason})`}`).join(', ')}`;
+}
+
 /** The comparison. `runs`: [{ticket, arm, run, status: counted|excluded|no-result, reason, held,
- *  heldReason, flags: {timedOut, budgetCapped}, values, grades: {first, second, user}}]. Excluded and
- *  resultless runs count in no metric; a held run has no grade, so it counts in the run-side metrics
- *  only; timed-out and budget-capped runs count in all (they are the arm's real outcome). */
-export function compare(runs, { pairs, iterations = 10000, seed = 1, kappaMin, userMin, joined = true } = {}) {
+ *  heldReason, flags: {timedOut, budgetCapped}, values, grades: {first, second, user}, subagents:
+ *  {spawned, costShare} | null, claudeLaunches: [command]}]. Excluded and resultless runs count in no
+ *  metric; a held run has no grade, so it counts in the run-side metrics only; timed-out and
+ *  budget-capped runs count in all (they are the arm's real outcome). A pair with solo is reported
+ *  twice (#374): over every ticket, then over `spawnExpected` (ticket ids) only, where the director
+ *  would spawn. A ticket a pair can't compare is named with why, per pair and per metric. */
+export function compare(runs, { pairs, spawnExpected = [], iterations = 10000, seed = 1, kappaMin, userMin, joined = true } = {}) {
   const counted = runs.filter((r) => r.status === 'counted');
   const agreement = gradeAgreement(counted.filter((r) => !r.held), { kappaMin, userMin });
   if (!joined) agreement.withheld.unshift('no blind-key.json: the grades are not joined (run grade.mjs, then grade the packets)');
@@ -206,24 +241,45 @@ export function compare(runs, { pairs, iterations = 10000, seed = 1, kappaMin, u
           const s = metrics.includes(m) ? summarize(vs.map((v) => v[m.key])) : null;
           return s && m.key === 'gates' ? { ...s, green: present(vs.map((v) => v.gates)).filter((x) => x === 1).length } : s;
         };
-        return [arm, { runs: vs.length, ...Object.fromEntries(METRICS.map((m) => [m.key, cell(m)])) }];
+        const subagents = counted
+          .filter((r) => r.ticket === ticket && r.arm === arm && r.subagents)
+          .sort((x, y) => x.run - y.run)
+          .map((r) => ({ run: r.run, spawned: r.subagents.spawned, costShare: r.subagents.costShare }));
+        return [arm, { runs: vs.length, ...Object.fromEntries(METRICS.map((m) => [m.key, cell(m)])), subagents }];
       }),
     ),
   }));
-  const paired = pairs.map(([a, b]) => {
-    const out = { a, b, metrics: {} };
+  const spawnSet = new Set(spawnExpected);
+  const scopes = ([a, b]) => [
+    { a, b, scope: 'all', tickets },
+    ...(a === 'solo' || b === 'solo' ? [{ a, b, scope: 'spawn-expected', tickets: tickets.filter((t) => spawnSet.has(t)) }] : []),
+  ];
+  const paired = pairs.flatMap(scopes).map(({ a, b, scope, tickets: inScope }) => {
+    const hasCounted = (ticket, arm) => counted.some((r) => r.ticket === ticket && r.arm === arm);
+    const missing = inScope.flatMap((ticket) => [a, b].filter((arm) => !hasCounted(ticket, arm)).map((arm) => ({ ticket, arm, reason: missingReason(runs, ticket, arm) })));
+    const out = { a, b, scope, tickets: inScope, missing, metrics: {} };
     if (!agreement.qualityReported) out.withheld = `quality is withheld: ${agreement.withheld.join('; ')}`;
     for (const m of metrics) {
       const perTicket = [];
-      for (const ticket of tickets) {
+      const skipped = [];
+      for (const ticket of inScope) {
+        const gone = missing.filter((x) => x.ticket === ticket);
+        if (gone.length) {
+          skipped.push({ ticket, reason: gone.map((x) => x.reason).join('; ') });
+          continue;
+        }
         const [xa, xb] = [a, b].map((arm) => present(cellRuns(ticket, arm).map((v) => v[m.key])));
-        if (!xa.length || !xb.length) continue;
+        const lacking = [[a, xa], [b, xb]].filter(([, xs]) => !xs.length).map(([arm]) => arm);
+        if (lacking.length) {
+          skipped.push({ ticket, reason: `no ${m.label} value for ${lacking.join(' and ')}` });
+          continue;
+        }
         const r = bootstrapPairDiff(xa, xb, { iterations, seed });
         perTicket.push({ ticket, ...r, outcome: outcome(r.d, m.better) });
       }
       const ci = bootstrapMean(perTicket.map((t) => t.d), { iterations, seed });
       const count = (o) => perTicket.filter((t) => t.outcome === o).length;
-      out.metrics[m.key] = { perTicket, tickets: perTicket.length, mean: ci?.mean ?? null, lo: ci?.lo ?? null, hi: ci?.hi ?? null, won: count('won'), tied: count('tied'), lost: count('lost') };
+      out.metrics[m.key] = { perTicket, tickets: perTicket.length, mean: ci?.mean ?? null, lo: ci?.lo ?? null, hi: ci?.hi ?? null, won: count('won'), tied: count('tied'), lost: count('lost'), missing: skipped };
     }
     return out;
   });
@@ -236,6 +292,8 @@ export function compare(runs, { pairs, iterations = 10000, seed = 1, kappaMin, u
     if (r.flags.timedOut) add('timed out', 'the runner killed claude at its timeout');
     if (r.flags.budgetCapped) add('budget-capped', `stopped at the spend cap ($${r.values.costUsd ?? '?'})`);
     if (r.held) add('held', r.heldReason);
+    const launches = r.claudeLaunches ?? [];
+    if (launches.length) add('nested claude', `Bash ran claude: ${launches[0]}${launches.length > 1 ? ` (+${launches.length - 1} more)` : ''}`);
   }
   return { arms, pairs: paired, agreement, tickets: table, leftOut, iterations, seed };
 }
@@ -263,7 +321,12 @@ const LEFT_NOTE = {
   'timed out': 'counts; no cost or turns when claude was killed',
   'budget-capped': 'counts',
   held: 'no grade; run-side metrics count',
+  'nested claude': 'counts; a nested claude escapes the solo arm and the subagent metrics',
 };
+
+const pct = (x) => `${Math.round(x * 1000) / 10}%`;
+/** One arm's subagent cell: each run's spawn count with its share of cost, or – when no run has the block. */
+const fmtSubagents = (list) => (list.length ? list.map((x) => `r${x.run} ${x.spawned}${x.costShare === null ? '' : ` (${pct(x.costShare)})`}`).join(', ') : '–');
 
 /** results.md from compare()'s output; `source` names the results dir. */
 export function renderResults(res, { source }) {
@@ -282,34 +345,36 @@ export function renderResults(res, { source }) {
   L.push(a.qualityReported ? 'Quality scores are reported: agreement is at or over the floor.' : `Quality scores are withheld: ${a.withheld.join('; ')}.`, '');
 
   L.push('## Per ticket', '');
-  L.push(`| ticket | runs | ${METRICS.map((m) => m.label).join(' | ')} |`);
-  L.push(`|---|---|${METRICS.map(() => '---').join('|')}|`);
+  L.push(`| ticket | runs | ${METRICS.map((m) => m.label).join(' | ')} | subagents (spawned, $ share) |`);
+  L.push(`|---|---|${METRICS.map(() => '---').join('|')}|---|`);
   for (const t of res.tickets) {
     const cells = METRICS.map((m) => {
       if (!shown.includes(m)) return 'withheld';
       return res.arms.map((arm) => `${arm} ${fmtCell(m.key, t.arms[arm][m.key])}`).join('<br>');
     });
-    L.push(`| ${t.ticket} | ${res.arms.map((arm) => `${arm} ${t.arms[arm].runs}`).join('<br>')} | ${cells.join(' | ')} |`);
+    const subagents = res.arms.map((arm) => `${arm} ${fmtSubagents(t.arms[arm].subagents)}`).join('<br>');
+    L.push(`| ${t.ticket} | ${res.arms.map((arm) => `${arm} ${t.arms[arm].runs}`).join('<br>')} | ${cells.join(' | ')} | ${subagents} |`);
   }
   L.push('');
 
   for (const p of res.pairs) {
-    L.push(`## ${p.a} − ${p.b}`, '');
+    L.push(`## ${p.a} − ${p.b}${p.scope === 'spawn-expected' ? `, spawn-expected tickets only (${p.tickets.join(', ') || 'none'})` : ''}`, '');
     L.push(`Per ticket: median(${p.a}) − median(${p.b}). Summary: the mean of those over tickets, with its interval from resampling tickets; won / tied / lost counts tickets from ${p.a}'s side (lower wins for cost, turns, time and tokens).`, '');
     if (p.withheld) L.push(`Quality is left out: ${p.withheld.replace(/^quality is withheld: /, '')}.`, '');
-    L.push('| metric | tickets | mean Δ [95% CI] | won / tied / lost |', '|---|---|---|---|');
+    if (p.missing.length) L.push(`Not compared: ${p.missing.map((x) => `${x.ticket} (${x.reason})`).join('; ')}.`, '');
+    L.push('| metric | tickets | mean Δ [95% CI] | won / tied / lost | not compared |', '|---|---|---|---|---|');
     for (const m of shown) {
       const x = p.metrics[m.key];
       const ci = x.mean === null ? '–' : `${fmtDiff(m.key, x.mean)} [${fmtDiff(m.key, x.lo)}, ${fmtDiff(m.key, x.hi)}]`;
-      L.push(`| ${m.label} | ${x.tickets} | ${ci} | ${x.won} / ${x.tied} / ${x.lost} |`);
+      L.push(`| ${m.label} | ${x.tickets} | ${ci} | ${x.won} / ${x.tied} / ${x.lost} | ${x.missing.map((y) => y.ticket).join(', ') || '–'} |`);
     }
     L.push('');
-    const ticketIds = res.tickets.map((t) => t.ticket);
     L.push(`| ticket | ${shown.map((m) => m.label).join(' | ')} |`, `|---|${shown.map(() => '---').join('|')}|`);
-    for (const id of ticketIds) {
+    for (const id of p.tickets) {
       const cells = shown.map((m) => {
         const t = p.metrics[m.key].perTicket.find((x) => x.ticket === id);
-        return t ? `${fmtDiff(m.key, t.d)} [${fmtDiff(m.key, t.lo)}, ${fmtDiff(m.key, t.hi)}] ${t.outcome}` : '–';
+        if (t) return `${fmtDiff(m.key, t.d)} [${fmtDiff(m.key, t.lo)}, ${fmtDiff(m.key, t.hi)}] ${t.outcome}`;
+        return `– (${p.metrics[m.key].missing.find((x) => x.ticket === id).reason})`;
       });
       L.push(`| ${id} | ${cells.join(' | ')} |`);
     }

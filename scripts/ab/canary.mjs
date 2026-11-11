@@ -23,7 +23,10 @@
 // contents reach the request, not when the memory instructions do. The verdict:
 //   bare             PASS when no CLAUDE.md, no memory file and no marker reached the request
 //   current          PASS when the harness root CLAUDE.md did, no memory file did, and the Agent tool was offered
-//   solo             PASS as current, but with neither the Agent nor the Workflow tool offered (#374)
+//   solo             PASS as current, but with neither the Agent nor the Workflow tool offered (#374);
+//                    when the offer has a deferred-tool loader (ToolSearch), only beside a passing
+//                    current canary under the same --out, from the same claude version, that read Agent
+//                    in its list (each run writes <out>/canary-<arm>/summary.json: verdict, tools, version)
 // and in every case only when `claude auth status` in the round reports loggedIn.
 //   --plant-memory   PASS when the planted memory did (bare: when it did not)
 // Exit 0 PASS, 1 FAIL, 2 INCONCLUSIVE (no request reached the stub). <out>/canary-<arm>/requests.jsonl
@@ -38,7 +41,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { die, isMain, log, parseArgs, workspaceRoot } from '../lib.mjs';
-import { ARMS, CANARY_COMMAND, DEFAULT_OUT, SOLO_DENIED_TOOLS, claudeCommand, loadManifest, planRound, projectKey, tokenHelp, usesHarness } from './ab-lib.mjs';
+import { ARMS, CANARY_COMMAND, DEFAULT_OUT, SOLO_DENIED_TOOLS, claudeCommand, loadManifest, planRound, projectKey, readResult, tokenHelp, usesHarness } from './ab-lib.mjs';
 import { prepareRound, realClaudePaths, releaseRound, runClaude } from './round.mjs';
 
 const AB_DIR = dirname(fileURLToPath(import.meta.url));
@@ -85,19 +88,29 @@ function offeredTools(bodies) {
   return [...names].sort();
 }
 
+/** Why solo's missing Agent may prove nothing, or null. With a deferred-tool loader (ToolSearch) in the
+ *  offer, a tool can be absent from the list and still loadable, so the absence counts only beside a
+ *  passing current canary (`current`, its summary.json) from the same claude `version` that read Agent
+ *  in its list the same way. */
+export function deferralGap(a, { version, current }) {
+  if (!a.tools.includes('ToolSearch')) return null;
+  if (current?.verdict === 'PASS' && current.tools?.includes('Agent') && current.version === version) return null;
+  return `the offer has a deferred-tool loader (ToolSearch), so a missing Agent may only be deferred: run --arm current with the same --out first, on this claude (${version ?? 'unknown version'}), and it must pass with Agent in its list`;
+}
+
 /** The canary's verdict from what the requests show (`a`, from analyzeRequests). INCONCLUSIVE when no
  *  request reached the stub; else PASS only with `loggedIn` and, by arm: bare, nothing loaded; current
  *  and solo, the harness root CLAUDE.md and no memory file, and current offers the Agent tool while
- *  solo offers none of SOLO_DENIED_TOOLS (#374). With `plant`, the planted memory must load in a harness
+ *  solo offers none of SOLO_DENIED_TOOLS (#374) and has no deferralGap. With `plant`, the planted memory must load in a harness
  *  arm and must not in bare. */
-export function canaryVerdict(arm, { plant, loggedIn }, a) {
+export function canaryVerdict(arm, { plant, loggedIn, version = null, current = null }, a) {
   if (a.requests === 0) return 'INCONCLUSIVE';
   const m = a.markers;
   const noMemory = a.memoryFiles.length === 0 && !m.realMemory && !m.planted;
   let ok;
   if (plant) ok = usesHarness(arm) ? m.planted : !m.planted && a.memoryFiles.length === 0;
   else if (arm === 'bare') ok = a.claudeMdFiles.length === 0 && noMemory && !m.project && !m.root;
-  else if (arm === 'solo') ok = m.root && noMemory && SOLO_DENIED_TOOLS.every((t) => !a.tools.includes(t));
+  else if (arm === 'solo') ok = m.root && noMemory && SOLO_DENIED_TOOLS.every((t) => !a.tools.includes(t)) && !deferralGap(a, { version, current });
   else ok = m.root && noMemory && a.tools.includes('Agent');
   return ok && loggedIn ? 'PASS' : 'FAIL';
 }
@@ -167,7 +180,8 @@ async function main() {
   if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) die(tokenHelp(CANARY_COMMAND));
   const arm = args.arm;
   const plant = Boolean(args['plant-memory']);
-  const out = join(args.out || DEFAULT_OUT, `canary-${arm}${plant ? '-planted' : ''}`);
+  const base = args.out || DEFAULT_OUT;
+  const out = join(base, `canary-${arm}${plant ? '-planted' : ''}`);
   const workspace = workspaceRoot();
   const manifest = loadManifest(join(AB_DIR, 'manifest.json'));
   const ticket = manifest.tickets.find((t) => t.id === (args.ticket || 'claude-config-240'));
@@ -176,7 +190,7 @@ async function main() {
   let verdict;
   // However the canary ends, a round that fails to build included, the round dir is removed (--keep names it for removal).
   try {
-    verdict = await probe(plan, { arm, plant, out, workspace });
+    verdict = await probe(plan, { arm, plant, out, base, workspace });
   } finally {
     await releaseRound(plan.layout.root, Boolean(args.keep));
   }
@@ -184,7 +198,7 @@ async function main() {
 }
 
 /** Build the round, run its claude command for one turn against the stub, and judge what loaded. → the verdict. */
-async function probe(plan, { arm, plant, out, workspace }) {
+async function probe(plan, { arm, plant, out, base, workspace }) {
   const l = plan.layout;
   const { env: roundEnv, prompt } = prepareRound(plan, { workspace });
 
@@ -207,6 +221,7 @@ async function probe(plan, { arm, plant, out, workspace }) {
   const cmd = claudeCommand();
   const auth = spawnSync(cmd[0], [...cmd.slice(1), 'auth', 'status'], { cwd: l.checkout, env: { ...roundEnv, CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }, encoding: 'utf8' });
   const loggedIn = /"loggedIn":\s*true/.test(auth.stdout ?? '');
+  const version = spawnSync(cmd[0], [...cmd.slice(1), '--version'], { encoding: 'utf8' }).stdout?.trim() || null;
 
   const stub = await startStub();
   const deadProxy = 'http://127.0.0.1:9';
@@ -232,8 +247,13 @@ async function probe(plan, { arm, plant, out, workspace }) {
   writeFileSync(join(out, 'claude.out.txt'), `${r.stdout}\n--- stderr ---\n${r.stderr}`);
 
   const a = analyzeRequests(stub.bodies, markers);
-  const verdict = canaryVerdict(arm, { plant, loggedIn }, a);
-  log(JSON.stringify({ arm, plant, loggedIn, claudeExit: r.status, ...a }, null, 2));
+  // Solo's missing Agent is read beside the current canary recorded under the same --out (#374).
+  const current = arm === 'solo' && !plant ? readResult(join(base, 'canary-current', 'summary.json')) : null;
+  const verdict = canaryVerdict(arm, { plant, loggedIn, version, current }, a);
+  writeFileSync(join(out, 'summary.json'), `${JSON.stringify({ arm, plant, verdict, tools: a.tools, version }, null, 2)}\n`);
+  log(JSON.stringify({ arm, plant, loggedIn, version, claudeExit: r.status, ...a }, null, 2));
+  const gap = arm === 'solo' && !plant ? deferralGap(a, { version, current }) : null;
+  if (gap) log(`solo: ${gap}`);
   log(`${verdict} (requests in ${join(out, 'requests.jsonl')})`);
   return verdict;
 }

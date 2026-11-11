@@ -1,23 +1,29 @@
 #!/usr/bin/env node
 // results.mjs: unblind the #271 A/B and write the paired comparison (#375).
 //
-//   node scripts/ab/results.mjs [--out <dir>] [--pair current:bare[,solo:bare]] [--seed 1] [--iterations 10000]
+//   node scripts/ab/results.mjs [--out <dir>] [--manifest <file>] [--pair current:bare[,current:solo]] [--seed 1] [--iterations 10000]
 //
 // Joins <out>/runs/<ticket>/<arm>-r<n>/result.json (and the run's transcripts, for tokens) with
 // blind-key.json and the grade.json of every packet slot grade.mjs wrote. Writes <out>/results.md and
 // <out>/results.json: one row per ticket with each arm's median and range per metric; for each pair
-// (default current minus bare; any two arms the runs hold) the per-ticket difference and the mean over
-// tickets with seeded bootstrap intervals and tickets won / tied / lost; grader agreement on Done-when
-// verdicts, which withholds the quality scores below its floor; and every excluded, held, timed-out,
-// budget-capped and resultless run per arm. Run it after grading: it names the arms, so its output
-// never goes to a grader. Reads only; touches nothing but the two output files.
+// (default current minus bare, plus current minus solo when the runs hold solo; any two arms the runs
+// hold) the per-ticket difference and the mean over tickets with seeded bootstrap intervals and tickets
+// won / tied / lost, a pair with solo again over the manifest's spawnExpected tickets, and every ticket
+// a pair can't compare, with why; each run's subagents (spawned, share of cost); grader agreement on
+// Done-when verdicts, which withholds the quality scores below its floor; and every excluded, held,
+// timed-out, budget-capped and resultless run per arm, and each run whose Bash launched claude itself.
+// Run it after grading: it names the arms, so its output never goes to a grader. Reads only; touches
+// nothing but the two output files.
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { die, isMain, log, parseArgs, readIfExists } from '../lib.mjs';
-import { DEFAULT_OUT, readResult } from './ab-lib.mjs';
+import { DEFAULT_OUT, parseManifest, readResult } from './ab-lib.mjs';
 import { GRADE_SLOTS, exclusionReason } from './grade.mjs';
-import { compare, renderResults, runFlags, runValues, transcriptTokens } from './results-lib.mjs';
+import { claudeLaunches, compare, renderResults, runFlags, runValues, transcriptTokens } from './results-lib.mjs';
+
+const AB_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** Every .jsonl text under `dir` (main and subagent transcripts). */
 function jsonlTexts(dir) {
@@ -55,6 +61,8 @@ function loadRuns(out, key) {
       }
       const k = `${base.ticket}|${base.arm}|${base.run}`;
       const reason = exclusionReason(result);
+      const texts = jsonlTexts(join(dir, 'transcripts'));
+      const s = result.subagents;
       runs.push({
         ...base,
         status: reason ? 'excluded' : 'counted',
@@ -62,8 +70,11 @@ function loadRuns(out, key) {
         held: held.has(k),
         heldReason: held.get(k),
         flags: runFlags(result),
-        values: runValues(result, transcriptTokens(jsonlTexts(join(dir, 'transcripts')))),
+        values: runValues(result, transcriptTokens(texts)),
         grades: grades.get(k) ?? {},
+        // #374: run.mjs's subagents block (a result from before it has none), and any claude the session launched itself.
+        subagents: s ? { spawned: s.spawned, costShare: s.costUsd?.share ?? null } : null,
+        claudeLaunches: claudeLaunches(texts),
       });
     }
   }
@@ -90,13 +101,17 @@ function main() {
   const keyText = readIfExists(join(out, 'blind-key.json'));
   let runs;
   let pairs;
+  let spawnExpected;
   try {
+    const manifest = parseManifest(readFileSync(args.manifest || join(AB_DIR, 'manifest.json'), 'utf8'));
+    spawnExpected = manifest.tickets.filter((t) => t.spawnExpected).map((t) => t.id);
     runs = loadRuns(out, keyText ? JSON.parse(keyText) : null);
-    pairs = parsePairs(args.pair || 'current:bare', [...new Set(runs.map((r) => r.arm))].sort());
+    const arms = [...new Set(runs.map((r) => r.arm))].sort();
+    pairs = parsePairs(args.pair || (arms.includes('solo') ? 'current:bare,current:solo' : 'current:bare'), arms);
   } catch (e) {
     die(e.message);
   }
-  const res = compare(runs, { pairs, iterations: Number(args.iterations ?? 10000), seed: Number(args.seed ?? 1), joined: Boolean(keyText) });
+  const res = compare(runs, { pairs, spawnExpected, iterations: Number(args.iterations ?? 10000), seed: Number(args.seed ?? 1), joined: Boolean(keyText) });
   writeFileSync(join(out, 'results.json'), `${JSON.stringify(res, null, 2)}\n`);
   writeFileSync(join(out, 'results.md'), renderResults(res, { source: out }));
   const a = res.agreement;

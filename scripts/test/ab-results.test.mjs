@@ -10,7 +10,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnHarness, tempDir } from './_spawn.mjs';
 import { GRADE_SLOTS, USER_SAMPLE, blindId, userSample } from '../ab/grade.mjs';
-import { KAPPA_MIN, bootstrapMean, bootstrapPairDiff, gradeAgreement, kappa, median, rng, runFlags, summarize, transcriptTokens } from '../ab/results-lib.mjs';
+import { rm } from 'node:fs/promises';
+import { KAPPA_MIN, bootstrapMean, bootstrapPairDiff, claudeLaunches, gradeAgreement, kappa, median, rng, runFlags, summarize, transcriptTokens } from '../ab/results-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const AB = join(HERE, '..', 'ab');
@@ -31,7 +32,7 @@ function buildOut(out) {
   const m = join(out, 'm');
   put(join(m, 'manifest.json'), JSON.stringify({
     model: 'claude-opus-5-5', effort: 'high', permissionMode: 'auto', runsPerArm: 2, prior: { usdPerRun: 1, turnsPerRun: 10 },
-    tickets: FIXTURE.tickets.map((t) => ({ id: t.id, path: 'claude-config', issue: t.issue, title: t.title, parent: sha('a'), merge: sha('b'), harness: sha('a'), lines: 10, gates: [{ name: 'test', cmd: 'x' }, { name: 'frontmatter', cmd: 'y' }] })),
+    tickets: FIXTURE.tickets.map((t) => ({ id: t.id, path: 'claude-config', issue: t.issue, title: t.title, spawnExpected: t.spawnExpected, parent: sha('a'), merge: sha('b'), harness: sha('a'), lines: 10, gates: [{ name: 'test', cmd: 'x' }, { name: 'frontmatter', cmd: 'y' }] })),
   }));
   for (const t of FIXTURE.tickets) put(join(m, 'tickets', `${t.id}.md`), `# ${t.title}\n\n## Done when\n${t.boxes.map((b) => `- [ ] ${b}`).join('\n')}\n`);
   FIXTURE.runs.forEach((r, i) => {
@@ -54,6 +55,8 @@ function buildOut(out) {
       contaminationExplained: [],
       estimate: { usd: 1, turns: 10, basis: 'prior', budgetUsd: 8 },
       tokenRedactions: 0,
+      // run.mjs's #374 block; the fixture gives [spawned, cost share].
+      ...(r.subagents && { subagents: { spawned: r.subagents[0], models: [], tokens: { subagent: 0, total: 0, share: null }, costUsd: { subagent: 0, total: r.cost, share: r.subagents[1] }, reportedSpawned: r.subagents[0], notes: [] } }),
     };
     put(join(dir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
     put(join(dir, 'diff.patch'), `diff --git a/f.txt b/f.txt\n+fixed ${r.ticket}\n${r.held ? '+**What:** a commit template line\n' : ''}`);
@@ -66,6 +69,7 @@ function buildOut(out) {
       { type: 'user', message: { role: 'user', content: 'the prompt' } },
       { type: 'assistant', requestId: `req-${i}`, message: { id: `msg-${i}`, usage, content: [{ type: 'thinking' }] } },
       { type: 'assistant', requestId: `req-${i}`, message: { id: `msg-${i}`, usage, content: [{ type: 'text', text: 'done' }] } },
+      ...(r.nestedClaude ? [{ type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu-${i}`, name: 'Bash', input: { command: r.nestedClaude } }] } }] : []),
     ].map((l) => JSON.stringify(l)).join('\n'));
     put(join(project, `s-${i}`, 'subagents', 'agent-1.jsonl'), JSON.stringify({ type: 'assistant', isSidechain: true, requestId: `sub-${i}`, message: { id: `sub-${i}`, usage: { input_tokens: 0, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }));
   });
@@ -103,7 +107,7 @@ function gradedOut(prefix) {
   return { out, manifest, grade: g };
 }
 const results = (out, args = []) => {
-  const r = spawnHarness(RESULTS, ['--out', out, '--iterations', '2000', ...args]);
+  const r = spawnHarness(RESULTS, ['--out', out, '--manifest', join(out, 'm', 'manifest.json'), '--iterations', '2000', ...args]);
   assert.equal(r.status, 0, r.stderr);
   return { r, json: JSON.parse(readFileSync(join(out, 'results.json'), 'utf8')), md: readFileSync(join(out, 'results.md'), 'utf8') };
 };
@@ -224,7 +228,7 @@ test('userSample picks 10 runs balanced across arms, repeats under a salt, and k
 test('grade.mjs writes every packet for two separate graders and a blind user sample, each in its own dir with its own ids', () => {
   const { out, manifest, grade } = gradedOut('ab-grade-');
   // 16 run dirs: one crashed (no result), one excluded, one held -> 13 packets per grader.
-  assert.match(grade.stdout, /13 packet\(s\) in .*; excluded as contaminated: bare 1, current 0; held as still identifying their arm: bare 0, current 1/);
+  assert.match(grade.stdout, /13 packet\(s\) in .*; excluded as contaminated: bare 1, current 0, solo 0; held as still identifying their arm: bare 0, current 1, solo 0/);
   assert.match(grade.stdout, /second grader: 13 packet\(s\) in .*packets-second; user sample: 10 packet\(s\) in .*packets-user/);
   const key = JSON.parse(readFileSync(join(out, 'blind-key.json'), 'utf8'));
   const runKey = (r) => `${r.ticket}/${r.arm}/${r.run}`;
@@ -307,8 +311,10 @@ test('results.mjs gives the paired difference per ticket and per metric (current
 
   // Any two named arms, deterministic under a seed.
   const solo = results(out, ['--pair', 'solo:bare,current:solo', '--seed', '5']);
-  assert.deepEqual(solo.json.pairs.map((p) => [p.a, p.b]), [['solo', 'bare'], ['current', 'solo']]);
+  // #374: a pair with solo is reported over all tickets, then over the spawn-expected ones (t-1, t-3).
+  assert.deepEqual(solo.json.pairs.map((p) => [p.a, p.b, p.scope]), [['solo', 'bare', 'all'], ['solo', 'bare', 'spawn-expected'], ['current', 'solo', 'all'], ['current', 'solo', 'spawn-expected']]);
   assert.deepEqual(solo.json.pairs[0].metrics.passRate.perTicket.map((t) => t.d), [0.75, 0, 0]);
+  assert.deepEqual(solo.json.pairs[1].metrics.passRate.perTicket.map((t) => [t.ticket, t.d]), [['t-1', 0.75], ['t-3', 0]]);
   assert.deepEqual(results(out, ['--pair', 'solo:bare,current:solo', '--seed', '5']).json.pairs, solo.json.pairs);
   const bad = spawnHarness(RESULTS, ['--out', out, '--pair', 'current:nope']);
   assert.notEqual(bad.status, 0);
@@ -361,14 +367,73 @@ test('results.mjs lists every excluded, held, timed-out, budget-capped and resul
   const list = (arm) => json.leftOut[arm].map((x) => `${x.ticket} r${x.run} ${x.kind}`);
   assert.deepEqual(list('bare'), ['t-2 r2 timed out', 't-3 r2 excluded']);
   assert.deepEqual(list('current'), ['t-3 r1 budget-capped', 't-3 r2 held', 't-3 r3 no result']);
-  assert.deepEqual(list('solo'), []);
+  // #374: a claude launched from the session's Bash escapes solo and the subagent metrics, so it is flagged.
+  assert.deepEqual(list('solo'), ['t-2 r1 nested claude']);
+  assert.match(json.leftOut.solo[0].reason, /^Bash ran claude: cd sub && claude -p "finish the ticket"$/);
   assert.match(json.leftOut.bare[1].reason, /^contaminated: workspace 2x in tool inputs/);
   assert.match(json.leftOut.current[1].reason, /commit-body vocabulary/);
   assert.match(md, /^## Runs left out or flagged, per arm/m);
   assert.match(md, /^### bare: 2$/m);
   assert.match(md, /^- t-3 r2 excluded \(dropped from every metric\): contaminated/m);
   assert.match(md, /^- t-3 r2 held \(no grade; run-side metrics count\)/m);
-  assert.match(md, /^### solo: 0$/m);
+  assert.match(md, /^### solo: 1$/m);
+  assert.match(md, /^- t-2 r1 nested claude \(counts; a nested claude escapes the solo arm and the subagent metrics\)/m);
+});
+
+test('#374: with a solo arm the default pairs are current:bare and current:solo, and current:solo is reported again over the spawn-expected tickets', () => {
+  const { out } = gradedOut('ab-solo-pairs-');
+  fillGrades(out);
+  const { json, md } = results(out);
+  assert.deepEqual(json.pairs.map((p) => [p.a, p.b, p.scope]), [['current', 'bare', 'all'], ['current', 'solo', 'all'], ['current', 'solo', 'spawn-expected']]);
+  const [, all, spawn] = json.pairs;
+  // current pass rate: t-1 median(1, 0.75) = 0.875, t-2 median(1, 0) = 0.5, t-3 0 (r2 held); solo: 1, 0.5, 1.
+  assert.deepEqual(all.metrics.passRate.perTicket.map((t) => [t.ticket, t.d]), [['t-1', -0.125], ['t-2', 0], ['t-3', -1]]);
+  assert.deepEqual(spawn.tickets, ['t-1', 't-3']);
+  assert.deepEqual(spawn.metrics.passRate.perTicket.map((t) => t.ticket), ['t-1', 't-3']);
+  near(spawn.metrics.passRate.mean, -0.5625, 'spawn-expected mean');
+  assert.match(md, /^## current − solo$/m);
+  assert.match(md, /^## current − solo, spawn-expected tickets only \(t-1, t-3\)$/m);
+});
+
+test('#374: the per-ticket table shows each run\'s subagents, spawned and share of cost', () => {
+  const { out } = gradedOut('ab-subagents-');
+  fillGrades(out);
+  const { json, md } = results(out);
+  const t1 = json.tickets.find((t) => t.ticket === 't-1');
+  assert.deepEqual(t1.arms.current.subagents, [{ run: 1, spawned: 2, costShare: 0.31 }, { run: 2, spawned: 0, costShare: 0 }]);
+  assert.deepEqual(t1.arms.bare.subagents, [], 'a result without the block shows nothing');
+  assert.match(md, /\| subagents \(spawned, \$ share\) \|/);
+  assert.match(md, /current r1 2 \(31%\), r2 0 \(0%\)/);
+});
+
+test('a ticket missing one arm of a pair is named with the reason, not just a lower count', async () => {
+  const { out } = gradedOut('ab-missing-');
+  fillGrades(out);
+  const dir = join(out, 'runs', 't-2', 'solo-r1');
+  await rm(join(dir, 'result.json'));
+  let { json, md } = results(out, ['--pair', 'current:solo']);
+  assert.deepEqual(json.pairs[0].missing, [{ ticket: 't-2', arm: 'solo', reason: 'no counted solo run: r1 has no result' }]);
+  assert.deepEqual(json.pairs[0].metrics.passRate.missing, [{ ticket: 't-2', reason: 'no counted solo run: r1 has no result' }]);
+  assert.match(md, /^Not compared: t-2 \(no counted solo run: r1 has no result\)\.$/m);
+  await rm(dir, { recursive: true });
+  ({ json } = results(out, ['--pair', 'current:solo']));
+  assert.deepEqual(json.pairs[0].missing, [{ ticket: 't-2', arm: 'solo', reason: 'no solo run' }]);
+  assert.deepEqual(results(out, ['--pair', 'current:bare']).json.pairs[0].missing, []);
+});
+
+test('claudeLaunches finds a claude started from Bash or PowerShell, not a mention of claude', () => {
+  const call = (name, command, id = command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: { command } }] } });
+  const launches = [
+    'claude -p "x"',
+    'cd a && claude --bg do it',
+    '~/.local/bin/claude.exe -p hi',
+    'FOO=1 claude -p',
+    'npx @anthropic-ai/claude-code -p go',
+  ];
+  // The last: round 1's sed that edits a comment naming the `claude -n` launch line (a markdown code span).
+  const quiet = ['git log --grep claude', 'ls ~/.claude', 'cat claude-config/x.md', 'echo claude', 'node scripts/claude.mjs', 'sed -i "s|^// prints the `claude -n` launch line|x|" a.mjs'];
+  const text = [...launches.map((c) => call('Bash', c)), call('PowerShell', '& "C:\\u\\.local\\bin\\claude.exe" -p x'), ...quiet.map((c) => call('Bash', c)), call('Bash', 'claude -p "x"'), call('Read', 'claude -p')].join('\n');
+  assert.deepEqual(claudeLaunches([text]), [...launches, '& "C:\\u\\.local\\bin\\claude.exe" -p x']);
 });
 
 test('results.mjs without a blind key still writes the run-side table and says the grades are not joined', () => {
@@ -380,4 +445,10 @@ test('results.mjs without a blind key still writes the run-side table and says t
   assert.equal(json.agreement.qualityReported, false);
   assert.match(md, /no blind-key\.json/);
   assert.ok(existsSync(join(out, 'results.json')));
+  // Counted runs on both sides but no value for a metric: each ticket is named per metric.
+  const pr = json.pairs[0].metrics.passRate;
+  assert.equal(pr.tickets, 0);
+  assert.deepEqual(pr.missing.map((x) => x.ticket), ['t-1', 't-2', 't-3']);
+  assert.equal(pr.missing[0].reason, 'no Done-when pass rate value for current and bare');
+  assert.deepEqual(json.pairs[0].missing, [], 'every ticket has counted runs of both arms');
 });

@@ -40,7 +40,8 @@ import {
 import { anonymize, dropFiles, leaks, pathVariants } from '../ab/anonymize.mjs';
 import { blindId, buildPacket, exclusionReason, gradeTemplate } from '../ab/grade.mjs';
 import { TOKEN_PLACEHOLDER, redactSecret, treeHasLine } from '../ab/round.mjs';
-import { analyzeRequests, canaryVerdict, startStub } from '../ab/canary.mjs';
+import { analyzeRequests, canaryVerdict, deferralGap, startStub } from '../ab/canary.mjs';
+import { transcriptTokens } from '../ab/results-lib.mjs';
 
 const AB = join(dirname(fileURLToPath(import.meta.url)), '..', 'ab');
 const MANIFEST = join(AB, 'manifest.json');
@@ -109,6 +110,42 @@ test('#374: the manifest marks the tickets whose merged PR had several independe
   // 170: two features in one script; 113: a cost axis, a CI check and a doc re-derivation over 8 files;
   // 129: one helper swapped into 9 hooks and scripts. The other seven are one script or test plus its doc line.
   assert.deepEqual(m.tickets.filter((t) => t.spawnExpected).map((t) => t.id).sort(), ['claude-config-113', 'claude-config-129', 'claude-config-170']);
+});
+
+test('#369: the manifest holds the seven project tickets as pending, apps 3, web 3, games 1, each with its repo gates, a prompt and a spawn mark', () => {
+  const m = loadManifest(MANIFEST);
+  const byDomain = (d) => m.pending.filter((t) => t.path.startsWith(`${d}/`)).map((t) => t.id);
+  assert.deepEqual(byDomain('apps'), ['strate-86', 'strate-87', 'strate-89']);
+  assert.deepEqual(byDomain('web'), ['component-library-135', 'component-library-136', 'component-library-106']);
+  assert.deepEqual(byDomain('games'), ['dog-eat-dog-12']);
+  const parent = (id) => m.pending.find((t) => t.id === id).parent;
+  // Parents as the user picked them (#369, 2026-11-10), full SHAs from the local clones.
+  for (const [id, short] of [['strate-86', '421968200'], ['strate-87', '63a278363'], ['strate-89', '9873e911e'], ['component-library-136', '7be69a0'], ['component-library-135', 'd3bda19e2'], ['component-library-106', '564031e89'], ['dog-eat-dog-12', '00c6a07']]) {
+    assert.ok(parent(id).startsWith(short), id);
+  }
+  const gates = (id) => m.pending.find((t) => t.id === id).gates.map((g) => g.cmd);
+  assert.deepEqual(gates('strate-89'), ['bun run typecheck', 'bun run lint', 'bun run test', 'bun run build', 'cargo fmt --all --check', 'cargo clippy --workspace --all-targets -- -D warnings', 'cargo test --workspace']);
+  assert.deepEqual(gates('component-library-106'), ['pnpm typecheck', 'pnpm lint', 'pnpm test']);
+  assert.deepEqual(gates('dog-eat-dog-12'), ['just import', 'just cache', 'just test']);
+  assert.deepEqual(m.pending.filter((t) => !t.spawnExpected).map((t) => t.id), ['component-library-106', 'dog-eat-dog-12']);
+  for (const t of m.pending) {
+    assert.ok(doneWhen(t.body).length >= 2, `${t.id} has Done-when boxes`);
+    assert.doesNotMatch(t.body, /[A-Z]:[\\/]Users|AppData/i, t.id);
+  }
+  assert.equal(doneWhen(m.pending.find((t) => t.id === 'strate-89').body).length, 4, '#89 and #90 under one Done-when');
+  assert.doesNotMatch(m.pending.find((t) => t.id === 'component-library-106').body, /!== undefined|passes `undefined`|wrapper/, 'symptom only, no fix');
+  assert.match(m.pending.find((t) => t.id === 'dog-eat-dog-12').why, /test_lab_smoke\.gd/, 'the as-filed body\'s wrong file item is noted');
+  // Pending tickets never run: the runner has no setup, LFS or per-repo harness step for them yet.
+  assert.equal(selectRounds(m, {}).length, 60);
+});
+
+test('parseManifest checks each pending ticket like a ticket, except that its path is a project repo', () => {
+  const p = (over) => manifestText([ticket()], { pending: [ticket({ id: 'proj-1', path: 'web/lib', ...over })] });
+  assert.equal(parseManifest(p({})).pending[0].id, 'proj-1');
+  assert.throws(() => parseManifest(p({ parent: 'abc' })), /pending proj-1: parent must be a 40-char SHA/);
+  assert.throws(() => parseManifest(p({ spawnExpected: undefined })), /pending proj-1: spawnExpected must be true or false/);
+  assert.throws(() => parseManifest(p({ path: 'claude-config' })), /pending proj-1: path must be a project repo/);
+  assert.throws(() => parseManifest(p({ id: 'demo-1' })), /duplicate ticket id demo-1/);
 });
 
 test('claude-config-124 prompts with its original body, not the edit that mirrors the fix commit (user, 2026-10-19)', () => {
@@ -379,6 +416,20 @@ test('subagentMetrics: no transcript means none spawned; no per-model usage from
   // canonicalModel answers a modelUsage key the transcripts spell differently.
   assert.deepEqual(subagentMetrics(jsonl, { 'haiku[1m]': { canonicalModel: 'claude-haiku-5-5', costUSD: 0.1 }, 'claude-opus-5-5': { costUSD: 0.3 } }).costUsd, { subagent: 0.1, total: 0.4, share: 0.25 });
   assert.deepEqual(subagentMetrics('', {}).costUsd, { subagent: 0, total: 0, share: null });
+});
+
+test('subagentMetrics and transcriptTokens count a model call by one rule: message id, then requestId, then uuid; <synthetic> never counts', () => {
+  const line = (o) => JSON.stringify({ type: 'assistant', ...o });
+  const u = { input_tokens: 4, output_tokens: 6 };
+  const jsonl = [
+    line({ requestId: 'r1', message: { model: 'claude-opus-5-5', usage: u } }),
+    line({ requestId: 'r1', message: { model: 'claude-opus-5-5', usage: u } }),
+    line({ uuid: 'u1', message: { model: 'claude-opus-5-5', usage: u } }),
+    line({ uuid: 'u1', message: { model: 'claude-opus-5-5', usage: u } }),
+    line({ message: { id: 'syn', model: '<synthetic>', usage: { input_tokens: 99, output_tokens: 99 } } }),
+  ].join('\n');
+  assert.equal(subagentMetrics(jsonl, null).tokens.total, 20);
+  assert.deepEqual(transcriptTokens([jsonl]), { inputTokens: 8, outputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0 });
 });
 
 test('subagentNotes reports a current run that spawned none as measuring what solo does, a solo run that spawned any, and a count claude disagrees with', () => {
@@ -845,6 +896,14 @@ test('anonymize redacts safe-mode and arm labels with one shared placeholder, an
   assert.deepEqual(leaks(out, CTX), []);
 });
 
+test('anonymize redacts every arm label, solo included, and leaks names one left in', () => {
+  for (const arm of ARMS) {
+    assert.equal(anonymize(`see x-${arm}-r3`, CTX), 'see x-<arm>-r3', arm);
+    assert.deepEqual(leaks(`ran in x-${arm}-r1`, CTX).map((l) => l.pattern), ['arm label'], arm);
+  }
+  assert.deepEqual(leaks('a solo-run of x-solos-r1', CTX), [], 'a word that only contains an arm name is no label');
+});
+
 test('dropFiles removes harness-workflow files such as COMMIT_MSG_<n>.txt from a diff', () => {
   const diff = 'diff --git a/a.ts b/a.ts\n+x\ndiff --git a/COMMIT_MSG_9.txt b/COMMIT_MSG_9.txt\nnew file mode 100644\n+What: y\ndiff --git a/sub/commit_msg.txt b/sub/commit_msg.txt\n+z\n';
   assert.equal(dropFiles(diff), 'diff --git a/a.ts b/a.ts\n+x\n');
@@ -955,6 +1014,17 @@ test('canaryVerdict (#374): current needs the Agent tool offered, solo needs Age
   const bare = { requests: 1, claudeMdFiles: [], memoryFiles: [], markers: { project: false, root: false }, tools: offered };
   assert.equal(v('bare', bare), 'PASS', 'bare is judged on what loaded, not on its tools');
   assert.equal(v('bare', { ...bare, claudeMdFiles: ['C:\\x\\CLAUDE.md'] }), 'FAIL');
+  // A deferred-tool loader (ToolSearch) means a tool can be missing from the list yet loadable, so a solo
+  // pass needs a current canary from the same claude version, recorded beside it, that read Agent in its list.
+  const deferring = loaded(['Bash', 'Read', 'ToolSearch']);
+  const ref = { arm: 'current', plant: false, verdict: 'PASS', tools: ['Agent', 'Bash', 'ToolSearch'], version: '2.1.322' };
+  assert.equal(v('solo', deferring), 'FAIL', 'no current record: Agent may only be deferred');
+  assert.equal(v('solo', deferring, { version: '2.1.322', current: ref }), 'PASS');
+  assert.equal(v('solo', deferring, { version: '2.1.330', current: ref }), 'FAIL', 'a record from another claude version proves nothing');
+  assert.equal(v('solo', deferring, { version: '2.1.322', current: { ...ref, tools: ['Bash', 'ToolSearch'] } }), 'FAIL', 'current did not read Agent either');
+  assert.equal(v('solo', deferring, { version: '2.1.322', current: { ...ref, verdict: 'FAIL' } }), 'FAIL');
+  assert.match(deferralGap(deferring, { version: '2.1.322', current: null }), /run --arm current .* first/);
+  assert.equal(deferralGap(loaded(denied), { version: '2.1.322', current: null }), null, 'no loader: the list is the whole offer');
   // --plant-memory: the planted memory must load in a harness arm and must not in bare.
   const planted = (yes) => loaded(denied, { markers: { project: true, root: true, planted: yes }, memoryFiles: yes ? ['C:\\m\\MEMORY.md'] : [] });
   assert.equal(v('solo', planted(true), { plant: true }), 'PASS');
@@ -994,5 +1064,5 @@ test('the canary stub stops answering after its request cap', async () => {
 
 test('the ticket prompt files carry no machine paths', () => {
   const m = loadManifest(MANIFEST);
-  for (const t of m.tickets) assert.doesNotMatch(readFileSync(join(AB, 'tickets', `${t.id}.md`), 'utf8'), /[A-Z]:[\\/]Users|AppData/i, t.id);
+  for (const t of [...m.tickets, ...m.pending]) assert.doesNotMatch(readFileSync(join(AB, 'tickets', `${t.id}.md`), 'utf8'), /[A-Z]:[\\/]Users|AppData/i, t.id);
 });

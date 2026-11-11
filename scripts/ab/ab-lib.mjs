@@ -49,38 +49,45 @@ export function parseManifest(text) {
   need(Number.isInteger(m.runsPerArm) && m.runsPerArm >= 1, 'runsPerArm must be a whole number >= 1');
   need(m.prior?.usdPerRun > 0 && m.prior?.turnsPerRun > 0, 'prior needs usdPerRun and turnsPerRun > 0');
   need(Array.isArray(m.tickets) && m.tickets.length > 0, 'tickets must be a non-empty list');
+  need(m.pending === undefined || Array.isArray(m.pending), 'pending must be a list');
   const seen = new Set();
-  for (const t of m.tickets || []) {
+  const check = (t, pending) => {
     const id = t.id;
     if (!ID_RE.test(id ?? '')) {
       problems.push(`ticket id must be a kebab slug, got ${JSON.stringify(id)}`);
-      continue;
+      return;
     }
     if (seen.has(id)) problems.push(`duplicate ticket id ${id}`);
     seen.add(id);
-    // Round 5 (user, 2026-10-16): the A/B is harness only; a product repo would need the setup and LFS handling the runner dropped.
-    need(t.path === HARNESS_PATH, `${id}: path must be ${HARNESS_PATH} (the A/B is harness only)`);
-    need(Number.isInteger(t.issue) && t.issue > 0, `${id}: issue must be an issue number`);
-    for (const k of ['parent', 'merge', 'harness']) need(SHA_RE.test(t[k] ?? ''), `${id}: ${k} must be a 40-char SHA`);
-    need(Number.isInteger(t.lines) && t.lines > 0, `${id}: lines must be a whole number > 0`);
+    const label = pending ? `pending ${id}` : id;
+    // Round 5 (user, 2026-10-16): the A/B runs harness tickets only; a project repo needs the setup and
+    // LFS handling the runner dropped, so the #369 project tickets wait in `pending` until it has them.
+    if (pending) need(typeof t.path === 'string' && /^[a-z]+\/[\w.-]+$/.test(t.path) && t.path !== HARNESS_PATH, `${label}: path must be a project repo (<domain>/<repo>)`);
+    else need(t.path === HARNESS_PATH, `${label}: path must be ${HARNESS_PATH} (the A/B is harness only)`);
+    need(Number.isInteger(t.issue) && t.issue > 0, `${label}: issue must be an issue number`);
+    for (const k of ['parent', 'merge', 'harness']) need(SHA_RE.test(t[k] ?? ''), `${label}: ${k} must be a 40-char SHA`);
+    need(Number.isInteger(t.lines) && t.lines > 0, `${label}: lines must be a whole number > 0`);
     // #374: true when the merged PR had several independent files or steps, so a director would spawn.
-    need(typeof t.spawnExpected === 'boolean', `${id}: spawnExpected must be true or false`);
+    need(typeof t.spawnExpected === 'boolean', `${label}: spawnExpected must be true or false`);
     need(
       Array.isArray(t.gates) && t.gates.length > 0 && t.gates.every((g) => g?.name && g?.cmd),
-      `${id}: gates must list at least one {name, cmd}`,
+      `${label}: gates must list at least one {name, cmd}`,
     );
     for (const g of t.gates ?? []) {
-      for (const k of ['failIf', 'requireMatch']) if (g?.[k] !== undefined) need(isRegex(g[k]), `${id}: gate ${g.name} ${k} is not a regex`);
+      for (const k of ['failIf', 'requireMatch']) if (g?.[k] !== undefined) need(isRegex(g[k]), `${label}: gate ${g.name} ${k} is not a regex`);
     }
-  }
+  };
+  for (const t of m.tickets || []) check(t, false);
+  for (const t of Array.isArray(m.pending) ? m.pending : []) check(t, true);
   if (problems.length) throw new Error(`manifest invalid:\n  ${problems.join('\n  ')}`);
+  m.pending ??= [];
   return m;
 }
 
-/** The manifest at `file`, each ticket carrying `body`, the text of tickets/<id>.md beside it. */
+/** The manifest at `file`, each ticket (pending ones too) carrying `body`, the text of tickets/<id>.md beside it. */
 export function loadManifest(file) {
   const m = parseManifest(readFileSync(file, 'utf8'));
-  for (const t of m.tickets) t.body = readFileSync(join(dirname(file), 'tickets', `${t.id}.md`), 'utf8');
+  for (const t of [...m.tickets, ...m.pending]) t.body = readFileSync(join(dirname(file), 'tickets', `${t.id}.md`), 'utf8');
   return m;
 }
 
@@ -321,37 +328,54 @@ const weight = (u) => {
 const tokenCount = (u) => (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
 const share = (part, whole, places) => (whole > 0 ? Math.round((part / whole) * 10 ** places) / 10 ** places : null);
 
-/** What a round's subagents did, from its own transcripts (`jsonl`: every transcript line, the
- *  subagents' own files under <session>/subagents/ included) and claude's per-model usage. A subagent
- *  is a distinct agentId on an isSidechain line; a model call is an assistant line with usage, counted
- *  once per message id (Claude Code writes a line per content block). Tokens are input, output and
- *  cache reads and writes. Cost: claude reports $ per model, not per agent, so each model's costUSD is
- *  split by the priced token weight its session and subagent calls carried; a model only subagents ran
- *  is theirs exactly, and one the transcripts never show stays the session's. costUsd is null when
- *  claude's output had no modelUsage. → {spawned, models, tokens, costUsd}. */
-export function subagentMetrics(jsonl, modelUsage) {
-  const agents = new Set();
+/** Every model call in transcript text (jsonl lines, any number of files joined): an assistant line
+ *  with usage, counted once by message id, else requestId, else uuid, else the line itself (Claude
+ *  Code writes one line per content block, each with the message's full usage). `<synthetic>` lines,
+ *  which Claude Code writes itself, are no call. One rule for the run metrics and the results (#374).
+ *  → [{sub, model, usage}], `sub` true for a subagent's (isSidechain) line. */
+export function modelCalls(text) {
   const seen = new Set();
-  const byModel = {};
-  const tokens = { subagent: 0, total: 0 };
-  for (const line of jsonl.split('\n')) {
+  const calls = [];
+  for (const line of text.split(/\r?\n/)) {
     let j;
     try {
       j = JSON.parse(line);
     } catch {
       continue;
     }
-    const sub = Boolean(j?.isSidechain);
-    if (sub && j.agentId) agents.add(j.agentId);
     const msg = j?.type === 'assistant' ? j.message : null;
     if (!msg?.usage || msg.model === '<synthetic>') continue;
-    if (msg.id) {
-      if (seen.has(msg.id)) continue;
-      seen.add(msg.id);
+    const key = msg.id ?? j.requestId ?? j.uuid ?? line;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    calls.push({ sub: Boolean(j.isSidechain), model: msg.model, usage: msg.usage });
+  }
+  return calls;
+}
+
+/** What a round's subagents did, from its own transcripts (`jsonl`: every transcript line, the
+ *  subagents' own files under <session>/subagents/ included) and claude's per-model usage. A subagent
+ *  is a distinct agentId on an isSidechain line; a model call is one modelCalls() finds. Tokens are input, output and
+ *  cache reads and writes. Cost: claude reports $ per model, not per agent, so each model's costUSD is
+ *  split by the priced token weight its session and subagent calls carried; a model only subagents ran
+ *  is theirs exactly, and one the transcripts never show stays the session's. costUsd is null when
+ *  claude's output had no modelUsage. → {spawned, models, tokens, costUsd}. */
+export function subagentMetrics(jsonl, modelUsage) {
+  const agents = new Set();
+  for (const line of jsonl.split(/\r?\n/)) {
+    try {
+      const j = JSON.parse(line);
+      if (j?.isSidechain && j.agentId) agents.add(j.agentId);
+    } catch {
+      // not a transcript line
     }
-    const m = (byModel[msg.model] ??= { session: 0, subagent: 0 });
-    m[sub ? 'subagent' : 'session'] += weight(msg.usage);
-    const n = tokenCount(msg.usage);
+  }
+  const byModel = {};
+  const tokens = { subagent: 0, total: 0 };
+  for (const { sub, model, usage } of modelCalls(jsonl)) {
+    const m = (byModel[model] ??= { session: 0, subagent: 0 });
+    m[sub ? 'subagent' : 'session'] += weight(usage);
+    const n = tokenCount(usage);
     tokens.total += n;
     if (sub) tokens.subagent += n;
   }
