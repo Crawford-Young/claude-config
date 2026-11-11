@@ -9,7 +9,9 @@
 // the window they ran in, except a named one, which goes by its own meta.json name, else
 // a description that parses to a non-bare agent name (#272, #318).
 // --idle-gap <min> (default 10) is the silence that counts as away, not active.
-// Agent spend is also split per type × model × effort (#113). --stamps reads no
+// Agent spend is also split per type × model × effort (#113), each row with the share of
+// its runs that needed a warm redo or an escalation and a flag where that share is clearly
+// worse than the next model line up (#370). --stamps reads no
 // transcripts: it lists each `verified: YYYY-MM` stamp in the CLAUDE.md chain, workspace/docs/,
 // agents/ and skills/ of --repo (default this checkout) that names a model older than its
 // line's newest in prices.json, and exits 1 if there is one (a normal run warns too).

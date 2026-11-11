@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkStamps, commandHead, createCollector, currentGenerations, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, staleStamps, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
+import { checkStamps, commandHead, createCollector, currentGenerations, FIT_GAP, FIT_MIN_RUNS, fitFlags, priceUsage, parseHookBlock, walkTranscripts, readJsonl, renderMarkdown, staleStamps, transcriptWindows, windowSplitter } from '../audit-lib.mjs';
 import { tempDir } from './_spawn.mjs';
 
 // $/MTok — round numbers so expected costs are easy to read
@@ -984,6 +984,131 @@ test('agentMix renders one row per setting with $/run; a missing effort reads "n
   assert.match(md, /## Per agent type × model × effort/);
   assert.match(md, /\| reviewer \| claude-opus-5 \| high \| 2 \| 1 \| 5 \| \$25\.00 \| \$12\.50 \|/);
   assert.match(md, /\| reviewer \| claude-haiku-4-5 \| not recorded \| 1 \| 0 \| 1 \| \$1\.00 \| \$1\.00 \|/);
+});
+
+// ---- redo and escalation rate (#370) ---------------------------------------------
+
+const named = (id, name, type = 'implementer') => ({ sessionId: 's1', agent: { id, type, name } });
+const runAt = (requestId, model, ts) => ({ ...asst(requestId, usage({ input_tokens: 1e6 }), { model, ts }), effort: 'high' });
+const sendCall = (id, input) => asst(`send-${id}`, usage(), { ts: '2026-10-01T13:00:00Z', content: [{ type: 'tool_use', id, name: 'SendMessage', input }] });
+const sendResult = (id, result, { textOnly = false } = {}) => ({
+  type: 'user', uuid: `u${n++}`, timestamp: '2026-10-01T13:00:01Z', ...(!textOnly && { toolUseResult: result }),
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: JSON.stringify(result) }] }] },
+});
+const fitOf = (r) => Object.fromEntries(r.agentMix.map((m) => [`${m.type} ${m.model}`, [m.runs, m.warmRedos, m.escalations, m.redoOrEscalation]]));
+
+test('a SendMessage with a body that reaches a subagent run is a warm redo of that run, counted once per run', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(runAt('w1', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a1', 'impl_issue_r-5'));
+  c.add(runAt('w2', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a2', 'impl_issue_r-6'));
+  c.add(runAt('w3', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a3', 'impl_issue_r-7'));
+  // a finished run is resumed with the message
+  c.add(sendCall('s1', { to: 'a1', message: 'fix the red test' }), MAIN);
+  c.add(sendResult('s1', { success: true, message: 'Resuming agent a1', resumedAgentId: 'a1', pin: { id: 'a1' } }), MAIN);
+  // a second message to the same run: still one run that needed a redo
+  c.add(sendCall('s2', { to: 'impl_issue_r-5', message: 'and the lint' }), MAIN);
+  c.add(sendResult('s2', { success: true, resumedAgentId: 'a1', pin: { id: 'a1' } }), MAIN);
+  // a running one has it queued: the pin names the run; a record without toolUseResult is read from the result text
+  c.add(sendCall('s3', { to: 'a2', message: 'scope changed' }), MAIN);
+  c.add(sendResult('s3', { success: true, message: 'Message queued for delivery to a2', pin: { id: 'a2' } }, { textOnly: true }), MAIN);
+  // not redos: a notify-only call with no body, a refused send, a send to a session inbox
+  c.add(sendCall('s4', { to: 'a3', notify_when_idle: true, message: '' }), MAIN);
+  c.add(sendResult('s4', { success: true, pin: { id: 'a3' } }), MAIN);
+  c.add(sendCall('s5', { to: 'a3', message: 'go on' }), MAIN);
+  c.add(sendResult('s5', { success: false, message: 'Agent a3 was stopped by the user and won\'t be resumed.' }), MAIN);
+  c.add(sendCall('s6', { to: 'ticket-r-7', message: 'hello' }), MAIN);
+  c.add(sendResult('s6', { success: true, message: "Message sent to ticket-r-7's inbox" }), MAIN);
+  const rows = c.report().agentMix;
+  assert.deepEqual(rows.map((m) => [m.runs, m.warmRedos, m.escalations, m.redoOrEscalation]), [[3, 2, 0, 2]]);
+});
+
+test('a warm redo sent from a timeOnly window still counts for the run it reached (--session keeps the run, not the sender)', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(runAt('t1', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a1', 'impl_issue_r-5'));
+  const director = { ...MAIN, timeOnly: true };
+  c.add(sendCall('ts1', { to: 'a1', message: 'fix it' }), director);
+  c.add(sendResult('ts1', { success: true, resumedAgentId: 'a1', pin: { id: 'a1' } }), director);
+  assert.deepEqual(c.report().agentMix.map((m) => [m.runs, m.warmRedos]), [[1, 1]]);
+});
+
+test('a report with no flagged row says so under the fit rule', () => {
+  assert.match(renderMarkdown(mixFixture()), /fit flag: [^\n]*\nno row flagged/);
+});
+
+test('a later run of the same role and charge on a stronger model line is an escalation of the run before it', () => {
+  const c = createCollector({ prices: PRICES });
+  // impl on haiku, then impl-2 on opus: the haiku run needed an escalation
+  c.add(runAt('e1', 'claude-haiku-4-5', '2026-10-01T10:00:00Z'), named('h1', 'impl_issue_r-5'));
+  c.add(runAt('e2', 'claude-opus-5', '2026-10-01T11:00:00Z'), named('o1', 'impl-2_issue_r-5', 'implementer-opus'));
+  // a reviewer on opus after an implementer on haiku is another role, not an escalation
+  c.add(runAt('e3', 'claude-haiku-4-5', '2026-10-01T10:00:00Z'), named('h2', 'impl_issue_r-6'));
+  c.add(runAt('e4', 'claude-opus-5', '2026-10-01T11:00:00Z'), named('o2', 'review_issue_r-6', 'reviewer'));
+  // a cold redo on the same model line, and a step down, are not escalations
+  c.add(runAt('e5', 'claude-haiku-4-5', '2026-10-01T10:00:00Z'), named('h3', 'impl_issue_r-7'));
+  c.add(runAt('e6', 'claude-haiku-4-5', '2026-10-01T11:00:00Z'), named('h4', 'impl-2_issue_r-7'));
+  c.add(runAt('e7', 'claude-opus-5', '2026-10-01T10:00:00Z'), named('o3', 'impl_issue_r-8', 'implementer-opus'));
+  c.add(runAt('e8', 'claude-haiku-4-5', '2026-10-01T11:00:00Z'), named('h5', 'impl-2_issue_r-8'));
+  // only the run just before the stronger one escalated: h6 was cold-redone as h7, which was escalated
+  c.add(runAt('e9', 'claude-haiku-4-5', '2026-10-02T10:00:00Z'), named('h6', 'impl_issue_r-9'));
+  c.add(runAt('e10', 'claude-haiku-4-5', '2026-10-02T11:00:00Z'), named('h7', 'impl-2_issue_r-9'));
+  c.add(runAt('e11', 'claude-opus-5', '2026-10-02T12:00:00Z'), named('o4', 'impl-3_issue_r-9', 'implementer-opus'));
+  // an unnamed run has no charge to follow
+  c.add(runAt('e12', 'claude-haiku-4-5', '2026-10-01T10:00:00Z'), sub('u1', 'implementer'));
+  assert.deepEqual(fitOf(c.report()), {
+    'implementer claude-haiku-4-5': [8, 0, 2, 2],
+    'implementer-opus claude-opus-5': [3, 0, 0, 0],
+    'reviewer claude-opus-5': [1, 0, 0, 0],
+  });
+});
+
+test('a run both redone warm and escalated counts once in redoOrEscalation', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(runAt('b1', 'claude-haiku-4-5', '2026-10-01T10:00:00Z'), named('h1', 'impl_issue_r-5'));
+  c.add(sendCall('b-s', { to: 'h1', message: 'retry' }), MAIN);
+  c.add(sendResult('b-s', { success: true, resumedAgentId: 'h1', pin: { id: 'h1' } }), MAIN);
+  c.add(runAt('b2', 'claude-opus-5', '2026-10-01T14:00:00Z'), named('o1', 'impl-2_issue_r-5'));
+  assert.deepEqual(fitOf(c.report())['implementer claude-haiku-4-5'], [1, 1, 1, 1]);
+});
+
+const fitRow = (type, model, effort, runs, redoOrEscalation) => ({ type, model, effort, runs, redoOrEscalation });
+
+test('fitFlags: a row clearly worse than the next model line up in its family is flagged; thin rows and small gaps are not', () => {
+  assert.equal(FIT_MIN_RUNS, 10);
+  assert.equal(FIT_GAP, 0.2);
+  const rows = [
+    fitRow('implementer', 'claude-sonnet-5-5', 'medium', 10, 5), // 50%
+    fitRow('implementer', 'claude-sonnet-5-5', 'low', 9, 9), // 100%, but n=9: thin
+    fitRow('implementer', 'claude-haiku-5-5', 'low', 12, 6), // 50% vs sonnet (pooled 14/19 = 74%): better, not flagged
+    // the next line up, pooled over its versions and efforts and over the family's -opus type: 3 of 10 = 30%
+    fitRow('implementer-opus', 'claude-opus-5-5', 'high', 6, 1),
+    fitRow('implementer', 'claude-opus-5', 'medium', 4, 2),
+    fitRow('reviewer', 'claude-sonnet-5-5', 'high', 20, 10), // 50% vs opus 8 of 20 = 40%: under the gap
+    fitRow('reviewer', 'claude-opus-5-5', 'high', 20, 8),
+    fitRow('recon', 'claude-sonnet-5-5', 'low', 30, 30), // no model up in its family to compare with
+  ];
+  assert.deepEqual(fitFlags(rows), [
+    { type: 'implementer', model: 'claude-sonnet-5-5', effort: 'medium', runs: 10, rate: 0.5, up: 'opus', upRuns: 10, upRate: 0.3 },
+  ]);
+  // the pooled next line up is thin too: no flag
+  assert.deepEqual(fitFlags(rows.filter((r) => r.model !== 'claude-opus-5')), []);
+});
+
+test('the type × model × effort section shows the redo and escalation columns, its flag rule and each flag', () => {
+  const c = createCollector({ prices: PRICES });
+  for (let i = 0; i < 10; i++) {
+    c.add(runAt(`f-h${i}`, 'claude-haiku-4-5', '2026-10-01T10:00:00Z'), named(`h${i}`, `impl_issue_r-${i + 1}`));
+    if (i < 6) c.add(runAt(`f-o${i}`, 'claude-opus-5', '2026-10-01T11:00:00Z'), named(`o${i}`, `impl-2_issue_r-${i + 1}`, 'implementer-opus'));
+    else c.add(runAt(`f-o${i}`, 'claude-opus-5', '2026-10-01T11:00:00Z'), named(`o${i}`, `impl_issue_q-${i + 1}`, 'implementer-opus'));
+  }
+  const r = c.report();
+  assert.deepEqual(r.agentFit.flags.map((f) => [f.type, f.model, f.runs, f.rate, f.up, f.upRuns, f.upRate]), [['implementer', 'claude-haiku-4-5', 10, 0.6, 'opus', 10, 0]]);
+  const md = renderMarkdown(r);
+  assert.match(md, /\| type \| model \| effort \| runs \| mixed \| requests \| \$ \| \$\/run \| warm redo \| escalated \| redo or escalation \|/);
+  assert.match(md, /\| implementer \| claude-haiku-4-5 \| high \| 10 \| 0 \| 10 \| \$10\.00 \| \$1\.00 \| 0 \| 6 \| 6 \(60%\) \|/);
+  assert.match(md, /\| implementer-opus \| claude-opus-5 \| high \| 10 \| 0 \| 10 \| \$50\.00 \| \$5\.00 \| 0 \| 0 \| 0 \(0%\) \|/);
+  assert.match(md, /at least 10 runs on both sides/);
+  assert.match(md, /20 points/);
+  assert.match(md, /⚠ fit implementer · claude-haiku-4-5 · high: redo or escalation 60% \(n=10\) vs 0% on opus \(n=10\) — a routing decision/);
 });
 
 // ---- stale model stamps (#113) -------------------------------------------------
