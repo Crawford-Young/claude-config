@@ -95,10 +95,19 @@ const lines = [
   call('Bash', { command: 'pwd' }), served(roundAlias + '/code/.worktrees/claude-config-1'),
   { type: 'attachment', attachment: { type: 'environment', content: 'use it instead of \`/tmp\`' } },
   { echoed: e.CLAUDE_CODE_OAUTH_TOKEN },
+  // The session's own model call, with its usage.
+  { type: 'assistant', message: { id: 'msg_m1', model: 'claude-opus-5-5', role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 100, output_tokens: 50 } } },
 ];
 writeFileSync(join(cfg, 'projects', 'k', 's.jsonl'), lines.map((l) => JSON.stringify(l)).join('\\n') + '\\n');
+// A session that spawns one subagent: Claude Code writes its transcript under <session>/subagents/.
+if (e.AB_FAKE_SPAWN) {
+  mkdirSync(join(cfg, 'projects', 'k', 's', 'subagents'), { recursive: true });
+  const sub = { type: 'assistant', isSidechain: true, agentId: 'a1', message: { id: 'msg_s1', model: 'claude-sonnet-5-5', role: 'assistant', content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 20 } } };
+  writeFileSync(join(cfg, 'projects', 'k', 's', 'subagents', 'agent-a1.jsonl'), JSON.stringify(sub) + '\\n');
+}
+const modelUsage = e.AB_FAKE_SPAWN ? { 'claude-opus-5-5': { costUSD: 0.2 }, 'claude-sonnet-5-5': { costUSD: 0.05 } } : { 'claude-opus-5-5': { costUSD: 0.25 } };
 process.stderr.write('env: ' + e.CLAUDE_CODE_OAUTH_TOKEN + '\\n');
-process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, num_turns: 2, total_cost_usd: 0.25, session_id: 's', result: 'done ' + e.CLAUDE_CODE_OAUTH_TOKEN }));
+process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, num_turns: 2, total_cost_usd: 0.25, session_id: 's', result: 'done ' + e.CLAUDE_CODE_OAUTH_TOKEN, modelUsage, subagent_stats: { spawned: e.AB_FAKE_SPAWN ? 1 : 0 } }));
 // A session that wrecks its checkout: the runner's capture throws right after claude.stderr.log.
 if (e.AB_FAKE_WRECK) { rmSync('.git', { recursive: true, force: true }); writeFileSync('.git', 'gitdir: missing\\n'); }
 // A session that leaves its token in a file the runner can't write: every redaction walk throws at it.
@@ -122,6 +131,8 @@ const LEAKS = {
 };
 /** The live hook path hooks/README.md spells, as the real one does. */
 const README_PATH = `${code.replace(/\\/g, '/')}/claude-config/hooks/bash-guard.mjs`;
+/** The arms a full round runs in; the wreck and locked rounds run current and bare only. */
+const ARMS3 = ['current', 'bare', 'solo'];
 /** Every file under `dir`, recursively. */
 const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map((f) => join(dir, String(f))).filter((f) => statSync(f).isFile()) : []);
 
@@ -173,13 +184,14 @@ before(() => {
     issue: 'o/r#1', owner: 'o', model: 'claude-opus-5-5', effort: 'high', permissionMode: 'auto', runsPerArm: 1,
     prior: { usdPerRun: 1, turnsPerRun: 5, source: 's' },
     tickets: [{
-      id: 'claude-config-1', path: 'claude-config', issue: 1, kind: 'bug', title: 't', pr: 2, merge: fx.merge, parent: fx.parent, harness: fx.parent, lines: 10, why: 'w',
+      id: 'claude-config-1', path: 'claude-config', issue: 1, kind: 'bug', title: 't', pr: 2, merge: fx.merge, parent: fx.parent, harness: fx.parent, lines: 10, why: 'w', spawnExpected: true,
       gates: [{ name: 'test', cmd: 'node gate.mjs', requireMatch: 'tests [1-9]' }, { name: 'shrunk', cmd: 'node gate.mjs', requireMatch: 'tests [2-9]' }],
     }],
   }));
   put(join(home, 'm', 'tickets', 'claude-config-1.md'), '## Done when\n- [ ] it works\n');
   put(join(home, 'fake-claude.mjs'), FAKE);
-  // current keeps its round (--keep); bare takes the default, which removes it after capture.
+  // current keeps its round (--keep); bare and solo take the default, which removes it after capture.
+  // Only current spawns a subagent (AB_FAKE_SPAWN).
   const runArm = (arm, { temp, out, wrecks, locks }) => {
     const report = join(home, `report-${arm}${wrecks ? '-wreck' : ''}${locks ? '-locked' : ''}.json`);
     const r = spawnHarness(RUN, ['--manifest', join(home, 'm', 'manifest.json'), '--only', 'claude-config-1', '--arm', arm, '--run', '1', '--out', out, ...(arm === 'current' ? ['--keep'] : [])], {
@@ -189,6 +201,7 @@ before(() => {
         AB_CLAUDE_BIN: join(home, 'fake-claude.mjs'), AB_FAKE_REPORT: report, AB_FAKE_FIX: fx.merge, AB_FAKE_REAL_TEMP: temp,
         AB_FAKE_LEAK: LEAKS.workspace, AB_FAKE_CONFIG_LEAK: LEAKS.config, AB_FAKE_TEMP_LEAK: LEAKS.temp,
         CLAUDE_CODE_OAUTH_TOKEN: TOKEN,
+        ...(arm === 'current' && { AB_FAKE_SPAWN: '1' }),
         ...(wrecks && { AB_FAKE_WRECK: '1' }),
         ...(locks && { AB_FAKE_LOCKED: '1' }),
       },
@@ -196,27 +209,62 @@ before(() => {
     const dir = join(out, 'runs', 'claude-config-1', `${arm}-r1`);
     return { r, report: existsSync(report) ? JSON.parse(readFileSync(report, 'utf8')) : null, dir, result: existsSync(join(dir, 'result.json')) ? JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8')) : null };
   };
-  for (const arm of ['current', 'bare']) fx[arm] = runArm(arm, { temp: realTemp, out: join(home, 'out') });
+  for (const arm of ARMS3) fx[arm] = runArm(arm, { temp: realTemp, out: join(home, 'out') });
   fx.wreck = {};
   for (const arm of ['current', 'bare']) fx.wreck[arm] = runArm(arm, { temp: wreck.temp, out: wreck.out, wrecks: true });
   fx.locked = {};
   if (!asRoot) for (const arm of ['current', 'bare']) fx.locked[arm] = runArm(arm, { temp: locked.temp, out: locked.out, locks: true });
 });
 
-test('a live round runs to a result in both arms', () => {
-  for (const arm of ['current', 'bare']) {
+test('a live round runs to a result in every arm', () => {
+  for (const arm of ARMS3) {
     assert.equal(fx[arm].r.status, 0, `${arm}: ${fx[arm].r.stderr}`);
     const res = fx[arm].result;
     assert.equal(res.arm, arm);
     assert.equal(res.claude.costUsd, 0.25);
     assert.equal(res.claude.turns, 2);
-    assert.equal(res.harness, arm === 'current' ? fx.parent : null);
+    assert.equal(res.harness, arm === 'bare' ? null : fx.parent);
     assert.equal(res.interventions, undefined, 'never measured, so not recorded');
   }
 });
 
+test('#374: solo runs the same harness as current, with the Agent and Workflow tools denied', () => {
+  const cur = fx.current.report;
+  const solo = fx.solo.report;
+  const root = fx.solo.result.roundRoot;
+  assert.deepEqual(solo.argv, [...cur.argv, '--disallowedTools', 'Agent,Workflow']);
+  assert.deepEqual(solo.ancestors, [join(root, 'code', 'CLAUDE.md')]);
+  for (const k of ['skills', 'agents', 'rules', 'claudeJson', 'prompt', 'harnessCheckout']) assert.deepEqual(solo[k], cur[k], k);
+  assert.equal(solo.settings.hooks.SessionStart[0].hooks[0].args[0], `${join(root, 'code', 'claude-config').replace(/\\/g, '/')}/hooks/session-start.mjs`);
+  assert.deepEqual(Object.keys(solo.settings.hooks), Object.keys(cur.settings.hooks));
+  assert.deepEqual(solo.settings.permissions.deny.length, cur.settings.permissions.deny.length);
+});
+
+test("#374: each result records the round's subagents from its own transcripts: how many, their models, their share of tokens and cost", () => {
+  assert.deepEqual(fx.current.result.subagents, {
+    spawned: 1,
+    models: ['claude-sonnet-5-5'],
+    tokens: { subagent: 30, total: 180, share: 0.167 },
+    costUsd: { subagent: 0.05, total: 0.25, share: 0.2 },
+    reportedSpawned: 1,
+    notes: [],
+  });
+  assert.match(fx.current.r.stdout, /subagents: 1 spawned on claude-sonnet-5-5, 16\.7% of tokens, 20% of cost/);
+  for (const arm of ['bare', 'solo']) {
+    assert.deepEqual(fx[arm].result.subagents, {
+      spawned: 0,
+      models: [],
+      tokens: { subagent: 0, total: 150, share: 0 },
+      costUsd: { subagent: 0, total: 0.25, share: 0 },
+      reportedSpawned: 0,
+      notes: [],
+    }, arm);
+    assert.match(fx[arm].r.stdout, /subagents: none spawned/, arm);
+  }
+});
+
 test('C1: the checkout holds the parent only, with no branch, remote or object that leads to the fix', () => {
-  for (const arm of ['current', 'bare']) {
+  for (const arm of ARMS3) {
     const rep = fx[arm].report;
     assert.equal(rep.fixVisible, false, arm);
     assert.doesNotMatch(rep.logAll, /the answer/, arm);
@@ -260,11 +308,11 @@ test('M2: both arms get the same prompt, the issue body alone', () => {
 });
 
 test('M3: neither arm starts with any auto-memory or transcript', () => {
-  for (const arm of ['current', 'bare']) assert.deepEqual(fx[arm].report.projects, [], arm);
+  for (const arm of ARMS3) assert.deepEqual(fx[arm].report.projects, [], arm);
 });
 
 test('Major A: the session alone gets CLAUDE_CODE_OAUTH_TOKEN; no login is copied and the value is written nowhere, result.json included', () => {
-  for (const arm of ['current', 'bare']) {
+  for (const arm of ARMS3) {
     const { r, report, result, dir } = fx[arm];
     assert.equal(report.hasToken, true, arm);
     assert.deepEqual(report.credFiles, [], `${arm}: no credentials file in the round config`);
@@ -282,7 +330,7 @@ test('Major A: the session alone gets CLAUDE_CODE_OAUTH_TOKEN; no login is copie
 });
 
 test('Major B and 3: the session and the gates find the round as home and as temp through every variable', () => {
-  for (const arm of ['current', 'bare']) {
+  for (const arm of ARMS3) {
     const { report, result, dir } = fx[arm];
     const root = result.roundRoot;
     const tmp = join(root, 'tmp');
@@ -295,15 +343,17 @@ test('Major B and 3: the session and the gates find the round as home and as tem
 });
 
 test('Major 3: the round dir is removed after capture unless --keep, and a kept round names a PowerShell removal', () => {
-  assert.equal(existsSync(fx.bare.result.roundRoot), false, 'bare: removed');
-  assert.match(fx.bare.r.stdout, /removed the round dir/);
+  for (const arm of ['bare', 'solo']) {
+    assert.equal(existsSync(fx[arm].result.roundRoot), false, `${arm}: removed`);
+    assert.match(fx[arm].r.stdout, /removed the round dir/, arm);
+  }
   assert.equal(existsSync(fx.current.result.roundRoot), true, 'current: --keep');
   assert.ok(fx.current.r.stdout.includes(`Remove-Item -Recurse -Force "${fx.current.result.roundRoot}"`));
-  for (const arm of ['current', 'bare']) assert.doesNotMatch(fx[arm].r.stdout, /rm -rf/, arm);
+  for (const arm of ARMS3) assert.doesNotMatch(fx[arm].r.stdout, /rm -rf/, arm);
 });
 
 test('M4: push is refused before any network and no credential helper or GitHub token reaches the session', () => {
-  for (const arm of ['current', 'bare']) {
+  for (const arm of ARMS3) {
     const rep = fx[arm].report;
     assert.notEqual(rep.push.rc, 0, arm);
     assert.match(rep.push.out, /transport 'https' not allowed/, arm);
@@ -330,7 +380,7 @@ test('M5 / Major 2 / round 6 A+B: a path the round served (a Read of hooks/READM
   const gitBashTmp = process.platform === 'win32';
   // The order of `paths` follows spelling order, which differs by host; compare them as a set.
   const bySet = (xs) => xs.map((x) => ({ ...x, paths: [...x.paths].sort() }));
-  for (const arm of ['current', 'bare']) {
+  for (const arm of ARMS3) {
     const { result, dir } = fx[arm];
     assert.ok(existsSync(join(dir, 'transcripts', 'k', 's.jsonl')), arm);
     assert.deepEqual(
@@ -408,7 +458,7 @@ test('grade.mjs excludes a contaminated run, holds a packet that still names its
   appendFileSync(join(runs, 'current-r2', 'diff.patch'), 'diff --git a/tmpl.md b/tmpl.md\n+**What:** <mechanism>\n');
   const r = spawnHarness(GRADE, ['--out', out, '--manifest', join(home, 'm', 'manifest.json')], { home });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /1 packet\(s\) in .*; excluded as contaminated: bare 1, current 0; held as still identifying their arm: bare 0, current 1/);
+  assert.match(r.stdout, /1 packet\(s\) in .*; excluded as contaminated: bare 1, current 0, solo 0; held as still identifying their arm: bare 0, current 1, solo 0/);
   assert.equal(readdirSync(join(out, 'packets')).length, 1);
   const key = JSON.parse(readFileSync(join(out, 'blind-key.json'), 'utf8'));
   assert.deepEqual(Object.values(key.packets), [{ ticket: 'claude-config-1', arm: 'current', run: 1 }]);
@@ -419,7 +469,7 @@ test('grade.mjs excludes a contaminated run, holds a packet that still names its
 });
 
 test('the diff holds every change the session left, and gates are judged on output as well as exit code', () => {
-  for (const arm of ['current', 'bare']) {
+  for (const arm of ARMS3) {
     const { result, dir } = fx[arm];
     const diff = readFileSync(join(dir, 'diff.patch'), 'utf8');
     assert.match(diff, /new\.txt/);

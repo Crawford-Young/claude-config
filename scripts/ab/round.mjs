@@ -2,11 +2,11 @@
 //
 // A round lives under <tmp>/ab/<round id>, which is the session's HOME:
 //   code/.worktrees/claude-config-<N>  the ticket checkout: the parent and its history only, no branch, no remote
-//   code/claude-config          current arm only: the harness checkout at the ticket's harness commit
-//   code/{CLAUDE.md,<domain>/}  current arm only: that commit's workspace/ (the ancestor CLAUDE.md chain)
+//   code/claude-config          current and solo only: the harness checkout at the ticket's harness commit
+//   code/{CLAUDE.md,<domain>/}  current and solo only: that commit's workspace/ (the ancestor CLAUDE.md chain)
 //   .claude/                    CLAUDE_CONFIG_DIR: settings for the arm, the account (no login: auth is the
 //                               user's CLAUDE_CODE_OAUTH_TOKEN), an empty projects/ (no memory, and
-//                               transcripts no other round can see); current adds skills/, agents/, rules/
+//                               transcripts no other round can see); current and solo add skills/, agents/, rules/
 //   AppData/{Roaming,Local}     APPDATA and LOCALAPPDATA, so Windows code finds the round as its home too
 //   tmp/                        TEMP, TMP and TMPDIR, so the session's temp files stay in the round (Git
 //                               Bash's /tmp still mounts the real %TEMP%; the contamination scan watches it)
@@ -18,7 +18,7 @@ import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { log } from '../lib.mjs';
-import { RUN_COMMAND, ancestorClaudeMds, barrierEnv, checkoutSteps, childEnv, gitconfigEntries, promptFrom, pruneClaudeJson, tokenHelp, transformSettings } from './ab-lib.mjs';
+import { RUN_COMMAND, ancestorClaudeMds, barrierEnv, checkoutSteps, childEnv, gitconfigEntries, promptFrom, pruneClaudeJson, tokenHelp, transformSettings, usesHarness } from './ab-lib.mjs';
 
 /** Run an argv; throw with its output on failure. → stdout */
 export function must(argv, opts = {}) {
@@ -62,7 +62,7 @@ export function prepareRound(plan, { workspace }) {
   const real = realClaudePaths();
   for (const d of [l.root, l.appData, l.localAppData, l.tmp]) mkdirSync(d, { recursive: true });
   fetchCheckout(plan.source, ticket.parent, l.checkout, [ticket.merge]);
-  if (arm === 'current') {
+  if (usesHarness(arm)) {
     fetchCheckout(plan.harnessSource, ticket.harness, l.harness, [ticket.merge]);
     cpSync(join(l.harness, 'workspace'), l.code, { recursive: true });
     for (const d of readdirSync(join(l.harness, 'skills'), { withFileTypes: true })) {
@@ -82,7 +82,7 @@ export function prepareRound(plan, { workspace }) {
 
   const above = ancestorClaudeMds(l.checkout);
   if (arm === 'bare' && above.length) throw new Error(`a CLAUDE.md above the bare checkout would load: ${above.join(', ')}`);
-  if (arm === 'current' && !above.includes(join(l.code, 'CLAUDE.md'))) throw new Error(`the current checkout has no harness CLAUDE.md above it (found: ${above.join(', ') || 'none'})`);
+  if (usesHarness(arm) && !above.includes(join(l.code, 'CLAUDE.md'))) throw new Error(`the ${arm} checkout has no harness CLAUDE.md above it (found: ${above.join(', ') || 'none'})`);
 
   return { env: childEnv(process.env, barrierEnv(l)), prompt: promptFrom(ticket.body) };
 }
