@@ -9,7 +9,7 @@ Applies to every repo under `~/code/web/`. Primary stack is Next.js fullstack (A
 > - [`../docs/web/ENV.md`](../docs/web/ENV.md) — env var conventions
 > - [`../docs/web/COMPONENT-LIBRARY.md`](../docs/web/COMPONENT-LIBRARY.md) — Radix+CVA component guide
 > - [`../docs/web/TYPESCRIPT-STYLE.md`](../docs/web/TYPESCRIPT-STYLE.md) — full TypeScript style guide
-> - [`../docs/brand/`](../docs/brand/) — brand identity, design system, motion
+> - [`../docs/brand/`](../docs/brand/) — brand identity, design system, motion; load before any artifact or design output — tokens, type and radius in `brand-identity.md`, spacing, elevation and icons in `design-system.md`
 
 ## Stack (verified: 2026-10, #80)
 
@@ -71,15 +71,3 @@ Prettier owns formatting. Full guide → TYPESCRIPT-STYLE.md.
 - OIDC scope overrides REPLACE the default set — re-include `openid`, and test that it survives.
 - CSP `form-action` covers the whole redirect chain and the console error names the wrong host — prefer client-side `signIn()`; verify the served header after any CSP edit.
 - Windows: killing a backgrounded dev-server wrapper leaves the child process serving the stale build — kill the port holder.
-
-## Design system
-
-Compact token reference for artifact/design output. Authority: `docs/brand/brand-identity.md` — on conflict, that file wins.
-
-- Accent (emerald, both modes): `--accent #10b981` · hover `#34d399` · active `#6ee7b7` · subtle `#d1fae5` light / `#022c22` dark.
-- Neutrals (zinc): light `--background #ffffff` / `--surface #fafafa` / `--surface-raised #f4f4f5` / `--border #e4e4e7` / `--foreground #09090b`; dark `#09090b` / `#18181b` / `#27272a` / `#27272a` / `#fafafa`.
-- Status: `--destructive #dc2626` · `--success #22c55e` · `--warning #f59e0b` · `--info #0ea5e9`.
-- Type: Geist Sans (UI), Geist Mono (code/stats/dates). Display `text-7xl–9xl font-bold -0.04em`; Headline `text-3xl–4xl font-semibold -0.02em`; Body `text-base leading-relaxed`; Micro `text-xs font-medium uppercase 0.04em`.
-- Radius: `--radius-sm 0.25rem` · `--radius 0.5rem` · `--radius-lg 0.75rem` · `--radius-xl 1rem` · full `9999px`.
-- Spacing: component internals `1 1.5 2 3 4`; layout gaps `4 6 8 12 16 24` — nothing off-scale.
-- Elevation = surface step + shadow together. Icons: Lucide only, 16px dominant. Dark-first, semantic tokens only, no true `#000`/`#fff` surfaces.

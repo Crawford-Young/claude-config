@@ -3,6 +3,7 @@
 Adds the Godot stack. Applies to every project under `~/code/games/`.
 
 > **Hand-load [`../docs/games/DIAGNOSTICS.md`](../docs/games/DIAGNOSTICS.md)** before any work touching movement, physics, or game feel — probe discipline and the tuning loop are wave-shape decisions.
+> **Hand-load [`../docs/games/EXPORT.md`](../docs/games/EXPORT.md)** before any export, export-preset or web-build work — the export gotchas that pass a green exit code.
 
 ## Stack (verified: 2026-10, #80)
 
@@ -30,19 +31,16 @@ Adds the Godot stack. Applies to every project under `~/code/games/`.
 
 - New `class_name` scripts are invisible to headless GUT until the global script-class cache rebuilds — run `godot --headless --editor --quit --path .` after adding one; `--import` does NOT rebuild it.
 - Reimport after every `.tscn`/asset edit before any headless run: `godot --headless --path . --import` (wrap as `just import`).
-- **A GUT test file that fails to PARSE passes the gate silently** — GUT 9.7.1 drops the file and exits 0, so the suite shrinks instead of failing. Every gate read checks the `Scripts N` count didn't drop AND greps for "could not find script".
-- **GUT timing tests depending on a window NOT elapsing must size the window far beyond await drift** — real frames tick during `await wait_for_signal`, so a tight window can pass by drift alone; use an absurd window (100s) so only the mechanism under test can produce the asserted behavior.
-- **Export gates read the savepack manifest, not just the exit code** — `export_filter="all_resources"` packs everything scanned, so EXIT:0 alone doesn't mean a clean export; it can still ship node_modules and GUT editor scenes (which break the export outright). Read "Storing File:" lines for anything non-game; route dev tooling through `exclude_filter` (`addons/gut/*, tests/*, node_modules/*, package.json, .gutconfig.json, scenes/dev/*, scripts/dev/*`) — dev-scene dirs count.
-- **Godot re-imports its own export output** — a web export under the project root gets scanned back in as project resources. Drop `.gdignore` in the build dir; have the export recipe `touch` it since build dirs are gitignored.
-- **Emoji on web builds = bundle a whole COLR font** — default fonts carry no emoji glyphs, web export has no system fallback, and subsetters strip color tables (verified dead end). Bundle full Twemoji Mozilla COLRv0 ttf (~1.5MB), FontVariation fallback scoped to the label, ttf via LFS, CC-BY attribution.
-- **A correct node drawn BEHIND an opaque sibling passes every assertion AND the playtest gate** — sibling order is the whole mechanism. Any wave adding a HUD element over an opaque-painting scene asserts DRAW ORDER (`hud.get_index() > host.get_index()`), not just visibility.
-- **An invariant holding only by arithmetic luck between two independently-tuned numbers is not an invariant — clamp it structurally.** Tunables whose product must stay under a bound drift apart at the next feel retune; write the bound as a clamp (e.g. `clampf(v, top*0.05, top*0.95)` for a speed ratio that must stay bounded).
-- **A feel lever appearing in docs as a LITERAL drifts every time it moves** — keep the literal (player-facing prose should name the number), but re-grep every doc for the old value in the same action batch that ships the new one.
+- **On every GUT gate read, check the `Scripts N` count didn't drop AND grep for "could not find script"** — GUT 9.7.1 drops a test file that fails to PARSE and exits 0, so the suite shrinks instead of failing.
+- **Size a GUT window that must NOT elapse far beyond await drift (e.g. 100s)** — real frames tick during `await wait_for_signal`, so a tight window can pass by drift alone, and only an absurd one leaves the mechanism under test as the sole cause.
+- **Assert DRAW ORDER (`hud.get_index() > host.get_index()`), not just visibility, for any HUD element over an opaque-painting scene** — a correct node drawn behind an opaque sibling passes every assertion and the playtest gate.
+- **Clamp an invariant structurally when it rests on two independently-tuned numbers** — tunables whose product must stay under a bound drift apart at the next feel retune; write the bound as a clamp (e.g. `clampf(v, top*0.05, top*0.95)` for a speed ratio that must stay bounded).
+- **Re-grep every doc for a feel lever's old value in the same batch that ships its new one** — player-facing prose should name the number, so the literal drifts every time the lever moves.
 
 ## Geometry & Docs Invariants
 
-- **Any wave changing floor geometry re-verifies the FULL marker/respawn set live against the FINAL state — including every erosion/degradation loop.** Markers are placed early; holes are authored later by different tasks, and no per-task review sees the pairing. A respawn over a hole is a softlock that passes every gate. Raycast down from each marker in the running physics space at each loop; report the sample count every run so a drifting probe window can't shrink coverage silently (what-is-dark 3b T9.4: 58 erodable bodies + 5 chasms opened under verified markers).
-- **Doc claims about CONTROLS and INPUT are live-testable in one probe — test them, never review them by reading.** The line a design ruling touches is the line most likely false: editing it under the ruling feels like verifying it (n=2, both caught only at whole-branch review: "air-only" erosion wording vs ground-scaling code; README "hold Jump to ride" vs a ride taking no input).
+- **Any wave changing floor geometry re-verifies the FULL marker/respawn set live against the FINAL state, including every erosion/degradation loop** — markers land early and holes later, in tasks no single review pairs, and a respawn over a hole is a softlock that passes every gate. Raycast down from each marker in the running physics space at each loop, and report the sample count every run so a drifting probe window can't shrink coverage silently.
+- **Live-test doc claims about CONTROLS and INPUT in one probe, never review them by reading** — the line a design ruling touches is the line most likely false, because editing it under the ruling feels like verifying it.
 
 ## TDD Scope
 
@@ -50,7 +48,7 @@ Full TDD with 100% coverage applies to **pure logic**: state machines, damage/sc
 
 ## Playtest Gate (mandatory)
 
-Coverage, GUT and a clean headless run do not catch what a human playing the game catches — missing HUD elements, copy bugs and contrast regressions pass a fully green suite. Every games task ends with driving the running build; a rework wave rides each game at its step, since a ride can delete what later steps built on (dog-eat-dog #18). Playtest verdicts can be design rulings, not just bug reports — treat them as spec input.
+Coverage, GUT and a clean headless run do not catch what a human playing the game catches — missing HUD elements, copy bugs and contrast regressions pass a fully green suite. Every games task ends with driving the running build; a rework wave rides each game at its step, since a ride can delete what later steps built on. Playtest verdicts can be design rulings, not just bug reports — treat them as spec input.
 
 **Known blind spot: the gate cannot see ABSENCE.** A player reads a missing element as unbuilt, not broken — it returns as a feature request rounds later or never. Anything whose failure mode is "isn't there" needs an assertion; the human gate is not the backstop for it.
 
