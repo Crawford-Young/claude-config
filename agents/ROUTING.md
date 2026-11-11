@@ -1,6 +1,6 @@
 # Model Routing
 
-Evidence-distilled guide for choosing a model per dispatch. A new rule is one imperative line naming its reason; the incident behind each rule lives in `~/code/docs/harness-evolution/archive/rule-history.md`, the retired per-type profiles beside it in `2026-08-21-agent-profiles.md`. Keep this file short.
+Evidence-distilled guide for choosing a model per dispatch. When a dispatch surprises, add a rule here as one imperative line naming its reason, and put the incident in `~/code/docs/harness-evolution/archive/rule-history.md` (the retired per-type profiles sit beside it in `2026-08-21-agent-profiles.md`). Keep this file short.
 
 Roster: `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the same at opus and high), `reviewer` (review; Write only for scratch probe files), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it.
 
@@ -19,14 +19,13 @@ Levels: `low` / `medium` / `high` / `xhigh` / `max`; the unset default is the *m
 
 Rules:
 
-- Dispatch an opus implementer as `implementer-opus`, named `<role>_<kind>_<target>` from `session-name.mjs`, because a named call drops its own `effort` param and only the frontmatter's `effort: high` survives.
+- Dispatch an opus implementer as `implementer-opus`, named `<role>_<kind>_<target>` from `session-name.mjs`, because a named call drops only its own `effort` param — the frontmatter's `effort: high` still holds.
 - Set `model:` explicitly when sonnet isn't the pick for a type without a frontmatter default — an omitted one gets sonnet filled in (hook-enforced), or is blocked on a billed or unknown session, because a child that didn't get the fill would inherit the session model.
 - Raise effort before switching models — escalating within a model is cheaper than escalating across one; the exception is the Escalation rule's integration/architecture signals, which go straight to opus.
 - Subagent model precedence (since v2.1.251): dispatch parameter → agent frontmatter `model:` (`inherit` = the session's model) → `CLAUDE_CODE_SUBAGENT_MODEL` → session default.
-- Never set `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` — it pins every subagent to one model, overriding the per-dispatch selection this file describes.
-- Use a `fork` only when the child needs the parent's full context or exact tool pool — it runs on the parent's model and context and skips the tool filters ordinary subagents get.
+- We do not use `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` — it pins every subagent to one model, overriding per-dispatch model selection, which is the entire mechanism this file describes.
+- Use a `fork` only when the child needs the parent's full context or exact tool pool **and** the session model is not fable — a fork runs on the parent's model, context and tool pool (skipping ordinary subagents' tool filters), so a fork from a fable session *is* a fable dispatch: `agent-model-guard.mjs` resolves the live session model for forks (a `model: sonnet` cannot launder one) and blocks it without `FABLE OK`.
 - Never fork to get past the depth limit — at the wall a fork's `Agent` call errors.
-- Never fork from a fable session without `FABLE OK` — a fork inherits the session model, so `agent-model-guard.mjs` resolves the live session model for forks (a `model: sonnet` cannot launder one) and blocks without clearance.
 - The `Agent` tool is withheld by spawn depth, not by backgrounding — a background subagent below the depth limit keeps it.
 - Do not route to haiku (user decision 2026-09-04): effort was silently dropped on every measured Haiku 4.5 message, forfeiting the tuning axis this table is built on; Haiku 5.5 documents all five effort levels, so the exclusion is pending a re-test (verified: 2026-10, Haiku 5.5).
 - Dispatch gate-checkable work (a test suite, a typecheck — not prose or judgment) at lower effort first and re-run failures at default — only for short tasks, where the re-run costs less than the effort saved.
