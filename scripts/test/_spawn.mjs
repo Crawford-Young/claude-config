@@ -31,10 +31,11 @@ const PATH_OVERRIDES = {
 const SCRUBBED = ['CLAUDE_PID'];
 
 /** Env vars that inject git config: GIT_CONFIG_GLOBAL / _SYSTEM / _NOSYSTEM / _PARAMETERS and the
- *  GIT_CONFIG_COUNT / _KEY_n / _VALUE_n family a CI box or cloud sandbox sets (#373). */
-const GIT_CONFIG_ENV = /^GIT_CONFIG/i;
+ *  GIT_CONFIG_COUNT / _KEY_n / _VALUE_n family a CI box or cloud sandbox sets (#373), plus the
+ *  GIT_DIR / GIT_WORK_TREE repo location git sets for a hook that runs the suite. */
+const GIT_CONFIG_ENV = /^GIT_(?:CONFIG|DIR$|WORK_TREE$)/i;
 
-/** Delete every git-config env var from `env`, in place; → `env`. */
+/** Delete every such git env var from `env`, in place; → `env`. */
 export function clearGitConfigEnv(env) {
   for (const k of Object.keys(env)) if (GIT_CONFIG_ENV.test(k)) delete env[k];
   return env;
@@ -59,18 +60,19 @@ export function tempDir(prefix, parent = tmpdir()) {
 
 /**
  * Run `fn` with git's global and system config switched off in this process (an empty
- * GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM), then clear them again, pass or throw. For an
- * assertion about a repo's own config alone; code that refuses a GIT_CONFIG* env (canonicalShip)
- * must not run inside it. → fn's result.
+ * GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM), then put back the git env it found, pass or throw.
+ * For an assertion about a repo's own config alone; code that refuses a GIT_CONFIG* env
+ * (canonicalShip) must not run inside it. → fn's result.
  */
 export function withoutUserGitConfig(fn) {
   const empty = join(tempDir('gitconfig-'), 'empty');
   writeFileSync(empty, '');
+  const before = Object.fromEntries(Object.entries(process.env).filter(([k]) => GIT_CONFIG_ENV.test(k)));
   Object.assign(process.env, { GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_NOSYSTEM: '1' });
   try {
     return fn();
   } finally {
-    clearGitConfigEnv(process.env);
+    Object.assign(clearGitConfigEnv(process.env), before);
   }
 }
 

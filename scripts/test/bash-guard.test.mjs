@@ -2626,6 +2626,21 @@ test('#305 end-to-end through the real hook: one bound ship', () => {
   assert.equal(hook('git push origin feat/x'), 2);
 });
 
+test('#305 #373: a GIT_CONFIG* var in the hook env makes a bound ship call non-canonical, and spends nothing', () => {
+  const h = tmpHome();
+  shipRepo('feat/x', join(h, 'repo'));
+  const t = transcriptOf(h, typed('lgtm push and pr'));
+  const input = JSON.stringify({ tool_input: { command: 'cd ~/repo && git push origin feat/x' }, cwd: h, transcript_path: t });
+  const hook = (env = {}) => spawnHarness(hookPath, [], { input, home: h, env });
+  assert.equal(hook().status, 0, 'a clean env binds the ship');
+  for (const [k, v] of [['GIT_CONFIG_COUNT', '0'], ['GIT_CONFIG_GLOBAL', join(h, 'none')]]) {
+    const r = hook({ [k]: v });
+    assert.equal(r.status, 2, k);
+    assert.ok(r.stderr.includes(`the hook's env sets ${k}`), `${k}: ${r.stderr}`);
+  }
+  assert.equal(hook().status, 0, 'the binding still holds');
+});
+
 // --- #305 review 4 -----------------------------------------------------------
 
 /** The refs `git push --dry-run --porcelain <args>` would update in `dir`, as `src:dst`. */
