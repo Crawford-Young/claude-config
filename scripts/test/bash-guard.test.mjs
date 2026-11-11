@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { execHarness, spawnHarness, tempDir } from './_spawn.mjs';
+import { execHarness, spawnHarness, tempDir, withoutUserGitConfig } from './_spawn.mjs';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -2672,8 +2672,9 @@ test('#305 review 4.1: push.default upstream/tracking with another upstream maps
 
 test('#305 review 4.2: a legacy .git/remotes or .git/branches remote is not canonical', () => {
   const dir = shipRepo();
-  mkdirSync(join(dir, '.git', 'remotes'));
-  mkdirSync(join(dir, '.git', 'branches'));
+  // recursive: an older git's default template (2.43's does) creates .git/branches on init (#373).
+  mkdirSync(join(dir, '.git', 'remotes'), { recursive: true });
+  mkdirSync(join(dir, '.git', 'branches'), { recursive: true });
   writeFileSync(join(dir, '.git', 'remotes', 'legacy'), 'URL: https://github.com/o/r.git\n');
   writeFileSync(join(dir, '.git', 'branches', 'old'), 'https://github.com/o/r.git\n');
   for (const r of ['legacy', 'old']) {
@@ -2701,7 +2702,9 @@ test('#305 review 4.4: an unreadable git config fails closed', () => {
   assert.equal(gitConfig(join(tempDir('nogit-'), 'missing')), null);
   const empty = tempDir('cfg-');
   execFileSync('git', ['init', '-q', empty]);
-  assert.deepEqual(gitConfig(empty), new Map(), 'no matching key is an empty read, not a failure');
+  // gitConfig reads every scope, so a url.*/push.* key in the machine's global or system config
+  // would make this read non-empty (#373); the empty-read path is pinned on the repo's own config.
+  assert.deepEqual(withoutUserGitConfig(() => gitConfig(empty)), new Map(), 'no matching key is an empty read, not a failure');
   const bad = shipRepo();
   writeFileSync(join(bad, '.git', 'config'), '[core\n[remote "origin"]\n\turl = https://github.com/o/r.git\n');
   assert.equal(gitConfig(bad), null);

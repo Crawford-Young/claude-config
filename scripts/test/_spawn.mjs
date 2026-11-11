@@ -2,10 +2,11 @@
 // Every child gets a temp HOME/USERPROFILE and every ~/.claude path override pointed
 // inside it, so a test can never write to (or read stale state from) the real ~/.claude.
 // _hooklib's claudeDir comes from homedir() at import time, so isolation has to be in
-// the child's env, not mutated in-process. scripts/test/source-hygiene.test.mjs fails a
+// the child's env, not mutated in-process. Git config injected through env is cleared in-process
+// too, at import (#373). scripts/test/source-hygiene.test.mjs fails a
 // test file that spawns node on a script without this helper.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { after } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -29,6 +30,20 @@ const PATH_OVERRIDES = {
 /** Live-session identity must not leak into a child; a test that needs it passes it in `env`. */
 const SCRUBBED = ['CLAUDE_PID'];
 
+/** Env vars that inject git config: GIT_CONFIG_GLOBAL / _SYSTEM / _NOSYSTEM / _PARAMETERS and the
+ *  GIT_CONFIG_COUNT / _KEY_n / _VALUE_n family a CI box or cloud sandbox sets (#373). */
+const GIT_CONFIG_ENV = /^GIT_CONFIG/i;
+
+/** Delete every git-config env var from `env`, in place; → `env`. */
+export function clearGitConfigEnv(env) {
+  for (const k of Object.keys(env)) if (GIT_CONFIG_ENV.test(k)) delete env[k];
+  return env;
+}
+
+// At import, so the test process's own git calls (bash-guard's gitConfig, canonicalShip's
+// GIT_CONFIG* refusal) and every child it spawns see none of the machine's injected config.
+clearGitConfigEnv(process.env);
+
 const made = new Set();
 /** Async rm with retries: Node 24's rmSync throws EPERM at once on a dir a live child still holds (#172). */
 const removeDir = (dir) => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -42,11 +57,28 @@ export function tempDir(prefix, parent = tmpdir()) {
   return dir;
 }
 
+/**
+ * Run `fn` with git's global and system config switched off in this process (an empty
+ * GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM), then clear them again, pass or throw. For an
+ * assertion about a repo's own config alone; code that refuses a GIT_CONFIG* env (canonicalShip)
+ * must not run inside it. → fn's result.
+ */
+export function withoutUserGitConfig(fn) {
+  const empty = join(tempDir('gitconfig-'), 'empty');
+  writeFileSync(empty, '');
+  Object.assign(process.env, { GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_NOSYSTEM: '1' });
+  try {
+    return fn();
+  } finally {
+    clearGitConfigEnv(process.env);
+  }
+}
+
 export const OVERRIDE_NAMES = Object.keys(PATH_OVERRIDES);
 
 /** Child env: process.env, then the isolated HOME and overrides, then the caller's `env`. */
 export function isolatedEnv(home, extra = {}) {
-  const env = { ...process.env };
+  const env = clearGitConfigEnv({ ...process.env });
   for (const k of SCRUBBED) delete env[k];
   env.HOME = home;
   env.USERPROFILE = home;
