@@ -33,9 +33,9 @@ Adds the Godot stack. Applies to every project under `~/code/games/`.
 - Reimport after every `.tscn`/asset edit before any headless run: `godot --headless --path . --import` (wrap as `just import`).
 - **On every GUT gate read, check the `Scripts N` count didn't drop AND grep for "could not find script"** — GUT 9.7.1 drops a test file that fails to PARSE and exits 0, so the suite shrinks instead of failing.
 - **Size a GUT window that must NOT elapse far beyond await drift (e.g. 100s)** — real frames tick during `await wait_for_signal`, so a tight window can pass by drift alone, and only an absurd one leaves the mechanism under test as the sole cause.
-- **Assert DRAW ORDER (`hud.get_index() > host.get_index()`), not just visibility, for any HUD element over an opaque-painting scene** — a correct node drawn behind an opaque sibling passes every assertion and the playtest gate.
+- **Assert DRAW ORDER (`hud.get_index() > host.get_index()`), not just visibility, for any HUD element over an opaque-painting scene** — sibling order is the whole mechanism, and a correct node drawn behind an opaque sibling passes every assertion and the playtest gate.
 - **Clamp an invariant structurally when it rests on two independently-tuned numbers** — tunables whose product must stay under a bound drift apart at the next feel retune; write the bound as a clamp (e.g. `clampf(v, top*0.05, top*0.95)` for a speed ratio that must stay bounded).
-- **Re-grep every doc for a feel lever's old value in the same batch that ships its new one** — player-facing prose should name the number, so the literal drifts every time the lever moves.
+- **Keep a feel lever's literal in player-facing docs, and re-grep every doc for the old value in the same batch that ships the new one** — prose should name the number, so the literal drifts every time the lever moves.
 
 ## Geometry & Docs Invariants
 
