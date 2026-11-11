@@ -1,4 +1,4 @@
-You are grading one blind run of a coding agent on a closed GitHub issue. You see the issue's Done-when boxes, the run's diff against the commit the issue was worked from, and the exit code of each of the repo's own gates, run after the session. You do not know which setup produced the run, so do not guess it; grade the work only.
+You are grading one blind run of a coding agent on a closed GitHub issue. You see the issue's Done-when boxes, the run's diff against the commit the issue was worked from, and the exit code of each of the repo's own gates, run after the session. You do not know which setup produced the run, so do not guess it; grade the work only. Grade from this packet alone: another grader grades the same run separately, and the two sets of verdicts are compared, so don't look for other grades or packets.
 
 For each Done-when box, give a verdict of pass / fail / unverifiable, with one line of evidence (a file and hunk in the diff, or a gate rc):
 
