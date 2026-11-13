@@ -11,7 +11,7 @@ disable-model-invocation: true
 - Branch per feature/fix (`feat/` `fix/` `chore/` `refactor/`), always in a worktree.
 - Rebase-only history — `git pull --rebase`, never merge commits; PRs merge via "Rebase and merge", never squash.
 - Conventional Commits (commitlint enforces).
-- Explicit paths always — `git add <paths>` then `git commit --only <paths>` in shared repos (the bash-guard hook blocks `add -A` and env files).
+- Explicit paths always — `git add <paths>` then `git commit --only <paths>` in shared repos (the bash-guard hook blocks `add -A`/`commit -a` in a main checkout, and env files anywhere).
 - Docs repo (`~/code/docs`) commits directly to `master`.
 - Board: PR open → Review, merge → Done, by itself. A `prod`-topic merge runs `node ~/code/claude-config/scripts/board.mjs set <repo>#N qa`, a QA pass `set … done`.
 - Auto-fix (`/autofix-pr` on the PR branch, or the toggle at claude.ai/code; needs the Claude GitHub App on the repo) is the unattended lane for "watch checks until green" when a session will end first — the user turning it on is push approval for that one PR only, because it pushes fixes without asking. It gets no webhook for a base-branch conflict, so zero check runs still means check mergeability yourself.

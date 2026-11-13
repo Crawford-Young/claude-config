@@ -2,17 +2,21 @@
 // bash-guard.mjs — consolidated PreToolUse guard for Bash/PowerShell commands.
 // Port + extension of pretooluse-guard.ps1. Wire with matcher "Bash|PowerShell".
 //
-// Blocks (exit 2):
-//   1. git add -A/--all/. and git commit -a/--all/-am, any flag order (sweeps
-//      concurrent sessions' files)
+// Blocks (exit 2). Rule numbers are stable; a gap is a cut rule (#291, #293, #368).
+//   1. git add -A/--all/. and git commit -a/--all/-am, any flag order, in a
+//      shared checkout: a main checkout under the workspace root, which carries
+//      concurrent sessions' files. A linked worktree and a repo outside the
+//      workspace (a temp repo) are one owner's; a dir the guard can't resolve or
+//      place in a repo counts as shared (#368). `git add -N` stages no content.
 //   2. git add/commit of real env files (.env, .env.local — secrets)
 //   3. gate commands (by command word: pnpm test, node --test, just check,
 //      cargo test/clippy…) piped onward — the pipe's exit code masks the gate's
 //   4. PowerShell Set-Content/Out-File/Add-Content (mojibake + BOM on UTF-8)
-//   5. git commit on main/master in a code repo (worktree-always; docs repo exempt)
-//   6. git checkout/switch off a branch, or a file restore (checkout -- <path>,
-//      checkout ., restore), on the claude-config MAIN checkout — it is the live
-//      junction surface and carries other sessions' uncommitted edits
+//   6. on the claude-config MAIN checkout — the live junction surface, which
+//      carries other sessions' uncommitted edits: a git checkout/switch off a
+//      branch, a file restore (checkout -- <path>, checkout ., restore), or a
+//      commit on main (it sweeps or strands live edits and breaks land.mjs
+//      sync's fast-forward; land.mjs commits from its own worktree)
 //   7. a shell-launched `claude` on a usage-billed model (--model fable|mythos,
 //      --model=…, or a *MODEL env var set anywhere in the command) without a
 //      live FABLE OK marker — the same single-use clearance the Agent and
@@ -50,16 +54,6 @@
 //      unless gh's error says a merge's branch cleanup failed after it (#317).
 //      A bound approval refunds an errored create or merge, and is released
 //      when every call under it errored.
-//   9. Commands that open a visible browser — playwright --headed/--ui/--debug,
-//      codegen, show-report, show-trace, open — need the user's browser consent
-//      (_hooklib.mjs browserGateReason; shared with browser-gate.mjs, granted
-//      once per session). Headless `playwright test` stays ungated.
-//  10. (removed, #293: the Bash tool collapses `\\` in every argument form, not
-//      only heredocs, so a heredoc-only block covered nothing; the agent defs
-//      carry the quirk instead)
-//  11. (removed, #291: a write into a transcript or a gate state file could
-//      forge an approval, but a model that would do that can edit this hook
-//      too, and no real session ever wrote one)
 //  12. A node/bun inline script (-e/--eval/-p/--print) or a deno eval script
 //      holding a substitution its shell runs before the runtime starts: in
 //      bash an unescaped backtick or `$(` outside single quotes, in PowerShell
@@ -70,17 +64,16 @@
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
-// line, and clauses split only on unquoted separators. Rules 1, 2, 4, 5 and 6
+// line, and clauses split only on unquoted separators. Rules 1, 2, 4 and 6
 // read commands, not words: a git call is a clause whose command word is git, its
 // subcommand the first non-option word, and its repo the payload cwd walked
-// through every cd/Set-Location/pushd/popd clause before THAT call (`git -C` on
-// top; pushd stacks, named ones included, are modelled) — so `cd a; git status;
-// cd docs && git commit` commits in docs, and `echo "git commit" >> notes` is
-// an echo. A cd target still holding a variable once $HOME/$PWD/~ and names a
-// literal assignment earlier in the command set (`W=…; cd "$W"`) expand
-// (`cd $d`, `Set-Location $_.FullName`) leaves the repo unknown until a cd
-// to an absolute, `~`/$HOME or bare (home) target, a popd back to a known dir,
-// or an absolute `git -C`: a commit there is blocked (#163). A quoted command handed to a
+// through every literal cd/Set-Location/pushd clause before THAT call, in text
+// order (`git -C` on top) — so `cd a; git status; cd docs && git commit`
+// commits in docs, and `echo "git commit" >> notes` is an echo. Only a literal
+// target is read (`~` expands): a variable, a substitution, `cd -`, a popd or
+// an option the guard doesn't know leaves the repo unknown until the next
+// literal cd or absolute `git -C` (#368). A bash ( … ) subshell, pipeline stage
+// or background job keeps its cd to itself. A quoted command handed to a
 // shell (`bash -c`, `sh -c`, `powershell -Command`, `eval`) is parsed as the command it is,
 // and so is every command substitution the shell would run — `…`, $(…), <(…),
 // bare or inside double quotes or an unquoted-delimiter heredoc (#92);
@@ -104,13 +97,12 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isMain } from '../scripts/lib.mjs';
 import {
   BILLED_MODEL,
   block,
-  browserGateReason,
   consumeClearance,
   denies,
   logBilled,
@@ -124,11 +116,11 @@ export { pushGateStateFile };
 
 const workspaceRoot = () => process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code');
 
-/** A dir the guard can't resolve: a cd target that still holds a variable or a
- *  command substitution (`cd $d`, `Set-Location $_.FullName`), a relative cd
- *  from one, `cd -`, or a rotated/lost pushd stack. Distinct from null, which
- *  means "no info, fail open": a commit in an unknown dir is blocked (#163). Not
- *  a string, so it can never reach spawnSync or path.resolve as a path. */
+/** A dir the guard can't resolve: a cd target that is not literal (a variable,
+ *  a substitution, `cd -`), a popd, or a relative cd from one. Distinct from
+ *  null, which means "no info". Rule 1 counts either as a shared checkout; rule
+ *  6 fails open on both. Not a string, so it can never reach spawnSync or
+ *  path.resolve as a path. */
 export const UNKNOWN_DIR = Object.freeze({ unknown: 'dir' });
 
 // ---- pure rules (exported for tests) ----------------------------------------
@@ -436,82 +428,6 @@ function gatePiped(cmds) {
   return cmds.some((g) => isGate(g) && masked(g));
 }
 
-/** Rule 3's runnable rewrite (#295): the one `gate [2>&1] | filter…` pipeline
- *  becomes `gate > LOG 2>&1; echo rc=$?; filter < LOG` (`tail -n N LOG` for a
- *  lone tail/head -N), the rest of the command kept as written; or null when it
- *  cannot be built faithfully. Declined: a PowerShell command; `||`, `&`,
- *  `<<`, groups, substitutions or backticks anywhere; more or fewer than one
- *  piped segment (split at `&&`, `;`, newline); a redirect on any gate-pipeline
- *  stage but the gate's `2>&1`; a first stage that is not itself the gate; a
- *  rewrite that rule 3 would still block. The log sits in `${TMPDIR:-/tmp}`
- *  (the payload does not expose the session scratchpad), `$$`-suffixed so
- *  concurrent calls do not share it. */
-function gateRewrite(raw, tool) {
-  if (tool && tool !== 'Bash') return null;
-  const segs = [{ raw: '', stages: [{ text: '', bad: false, at: -1 }] }];
-  const seg = () => segs[segs.length - 1];
-  const stage = () => seg().stages[seg().stages.length - 1];
-  const add = (ch) => { seg().raw += ch; stage().text += ch; };
-  let quote = null;
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i];
-    const next = raw[i + 1] ?? '';
-    if (quote) {
-      if (ch === '\\' && quote === '"') { add(ch + next); i++; continue; }
-      if (ch === quote) quote = null;
-      add(ch);
-    } else if (ch === '\\') { add(ch + next); i++; }
-    else if (ch === '"' || ch === "'") { quote = ch; add(ch); }
-    else if (ch === '(' || ch === ')' || ch === '`' || (ch === '$' && next === '(')) return null;
-    else if (ch === '#' && (i === 0 || /\s/.test(raw[i - 1]))) return null; // a comment would swallow `< LOG`
-    else if (ch === '|') {
-      if (next === '|') return null;
-      seg().raw += ch;
-      if (next === '&') { seg().raw += '&'; i++; if (seg().stages.length === 1) seg().err = true; }
-      seg().stages.push({ text: '', bad: false, at: -1 });
-    } else if (ch === '&' && next === '&') segs.push({ raw: '', stages: [{ text: '', bad: false, at: -1 }], sep: '&&' }), i++;
-    else if (ch === ';' || ch === '\n') segs.push({ raw: '', stages: [{ text: '', bad: false, at: -1 }], sep: ch });
-    else if (ch === '\r') add(ch);
-    else if (ch === '2' && raw.startsWith('2>&1', i) && /(?:^|\s)$/.test(stage().text) && /^(?:\s|$|\|)/.test(raw.slice(i + 4))) {
-      stage().at = stage().text.length;
-      add('2>&1');
-      i += 3;
-    } else if (ch === '&' || ch === '<' || ch === '>') {
-      if (ch === '<' && next === '<') return null;
-      if (ch === '&' && next !== '>' && raw[i - 1] !== '>') return null;
-      stage().bad = true;
-      add(ch);
-    } else add(ch);
-  }
-  if (quote) return null;
-  const piped = segs.filter((s) => s.stages.length > 1);
-  if (piped.length !== 1) return null;
-  const g = piped[0];
-  const [first, ...rest] = g.stages;
-  if (first.bad) return null;
-  const head = first.at >= 0 ? first.text.slice(0, first.at) + first.text.slice(first.at + 4) : first.text;
-  if (rest.some((s) => s.bad || !s.text.trim()) || !head.trim()) return null;
-  const lead = g.raw.match(/^\s*/)[0];
-  const gateCmd = head.trim();
-  if (gateCmd.startsWith('!')) return null; // `!` inverts the rc echoed
-  if (rest.some((s) => /^tail\s/.test(s.text.trim()) && /(?:\s|^)(?:-[^-\s]*[fF]|--follow)/.test(s.text.trim()))) return null; // would hang
-  const probe = commands(gateCmd, null, false, false, newScope(null, tool));
-  if (probe.length !== 1 || !isGate(probe[0])) return null;
-  const log = '"${TMPDIR:-/tmp}/gate-$$.log"';
-  const filters = rest.map((s) => s.text.trim());
-  const lone = filters.length === 1 && filters[0].match(/^(tail|head)\s+(?:-n\s*(\d+)|-(\d+))$/);
-  const filter = lone
-    ? `${lone[1]} -n ${lone[2] ?? lone[3]} ${log}`
-    : `${filters[0]} < ${log}${filters.slice(1).map((s) => ` | ${s}`).join('')}`;
-  const tail = g.raw.match(/\s*$/)[0];
-  const redirect = first.at >= 0 || g.err ? `> ${log} 2>&1` : `> ${log}`;
-  const body = `${gateCmd} ${redirect}; echo rc=$?; ${filter}`;
-  // after a list separator, group it: `a && g | t && b` must not run b once `a` failed
-  const swapped = `${lead}${g === segs[0] ? body : `{ ${body}; }`}${tail}`;
-  const out = segs.map((s) => (s.sep ?? '') + (s === g ? swapped : s.raw)).join('');
-  return gatePiped(commands(scrub(out), null, false, false, newScope(null, tool))) ? null : out;
-}
-
 /** The static rules (1-4, 12) on one command. `tool` is the payload's
  *  tool_name: only off Bash are `sc`/`ac` PowerShell's content-cmdlet aliases
  *  (in Git Bash, `sc` is Windows' sc.exe); null (no tool, as in a replay)
@@ -520,22 +436,21 @@ export function staticCheck(raw, cwd = null, tool = null) {
   if (!raw) return null;
   const cmd = scrub(raw);
 
-  // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination —
-  //    read off parsed git calls, so an `-A` on another command (grep -A 3,
-  //    tar -A) or inside quoted text is not a hit. The bare-`.` check wants
-  //    `.` (or `./`) as a whole argument: `.env`, `.github/…` and `./src/x.ts`
-  //    are specific paths, not the whole tree.
-  const calls = gitCalls(cmd, null, tool);
-  for (const { sub, args } of calls) {
-    if (sub === 'add' && args.some((a) => a === '--all' || /^-[a-zA-Z]*A[a-zA-Z]*$/.test(a))) {
-      return 'git add -A/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
-    }
-    if (sub === 'add' && args.some((a) => a === '.' || a === './')) {
-      return 'git add . is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths.';
-    }
-    if (sub === 'commit' && args.some((a) => a === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(a))) {
-      return 'git commit -a/--all is banned: shared repos carry concurrent sessions\' in-flight files. Stage explicit paths, then commit.';
-    }
+  // 1. git add -A/--all/. and git commit -a/--all, any flag order/combination,
+  //    in a shared checkout — read off parsed git calls, so an `-A` on another
+  //    command (grep -A 3, tar -A) or inside quoted text is not a hit. The
+  //    bare-`.` check wants `.` (or `./`) as a whole argument: `.env`,
+  //    `.github/…` and `./src/x.ts` are specific paths, not the whole tree.
+  //    `git add -N` (intent to add) stages no content.
+  const calls = gitCalls(cmd, cwd, tool);
+  const where = ' in a shared checkout: it carries concurrent sessions\' in-flight files. Stage explicit paths, or run it in a worktree named by a literal cd or git -C path.';
+  for (const { sub, args, repo } of calls) {
+    if (sub === 'add' && args.some((a) => a === '--intent-to-add' || /^-[a-zA-Z]*N[a-zA-Z]*$/.test(a))) continue;
+    let what = null;
+    if (sub === 'add' && args.some((a) => a === '--all' || /^-[a-zA-Z]*A[a-zA-Z]*$/.test(a))) what = 'git add -A/--all';
+    else if (sub === 'add' && args.some((a) => a === '.' || a === './')) what = 'git add .';
+    else if (sub === 'commit' && args.some((a) => a === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(a))) what = 'git commit -a/--all';
+    if (what && sharedCheckout(repo)) return `${what} is banned${where}`;
   }
 
   // 2. env files into git — an argument of a git add/commit call, not a mention
@@ -547,11 +462,9 @@ export function staticCheck(raw, cwd = null, tool = null) {
   // 3. gate output piped onward — a gate command, by command word, with any
   //    command after it in the same pipeline (tail, head, grep, tee… all mask
   //    it), or after the group or shell line it runs in (inStage)
-  const cmds = commands(cmd, null, false, false, newScope(null, tool));
+  const cmds = commands(cmd, newScope(null, tool));
   if (gatePiped(cmds)) {
-    const base = 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run gates unpiped: redirect to a file, echo the rc, then filter the file.';
-    const rewrite = gateRewrite(raw, tool);
-    return rewrite ? `${base} Same command, unpiped (rc kept):\n${rewrite}` : base;
+    return 'A pipe after a gate reports the pipe\'s exit code, not the gate\'s. Run the gate unpiped and read its exit code: redirect it to a log, echo the rc, then filter the log (`<gate> > "$TMPDIR/gate.log" 2>&1; echo rc=$?; tail -n 20 "$TMPDIR/gate.log"`).';
   }
 
   // 4. PowerShell content cmdlets mangle UTF-8 (mojibake / BOM) — as a command,
@@ -562,8 +475,29 @@ export function staticCheck(raw, cwd = null, tool = null) {
   }
 
   // 12. a node eval script the caller's shell substitutes into (#258)
-  //     (11, writes into a gate's records, went with #291.)
   return evalSubstitution(cmds);
+}
+
+/** Rule 1's test: can a whole-tree sweep in `repo` take another session's
+ *  files? Yes in a main checkout under the workspace root. No in a linked
+ *  worktree (its `.git` is a file) or a repo outside the workspace (a temp
+ *  repo). Failing closed, a dir the guard can't resolve (null, UNKNOWN_DIR)
+ *  or place in any repo counts as shared: a cheap literal path proves it. */
+function sharedCheckout(repo) {
+  if (typeof repo !== 'string') return true;
+  for (let d = resolve(repo); ; d = dirname(d)) {
+    let git = null;
+    try {
+      git = statSync(join(d, '.git'));
+    } catch {
+      // no .git here: look one level up
+    }
+    if (git) {
+      const rel = relative(workspaceRoot(), d);
+      return git.isDirectory() && !rel.startsWith('..') && !isAbsolute(rel);
+    }
+    if (dirname(d) === d) return true;
+  }
 }
 
 /** 7. The billed model a shell-launched `claude` would run on, or null. `claude`
@@ -742,7 +676,6 @@ function evalSubstitution(calls) {
  *  assignments, shell keywords); a prefix command is PREFIX's. */
 const WRAPPER = /^(?:[({!]+|\w+\+?=.*|\$env:\w+=.*|then|do|else|elif|if|while|until)$/i;
 const LOCATION = /^(?:cd|chdir|sl|set-location|pushd|push-location|popd|pop-location)$/i;
-const SET_LOCATION = /^(?:cd|chdir|sl|set-location)$/i;
 const POP_LOCATION = /^(?:popd|pop-location)$/i;
 const POSIX_SHELL = /^(?:bash|sh)$/i;
 const EVAL = /^(?:eval|iex|invoke-expression)$/i;
@@ -763,10 +696,6 @@ function shellLine(cmd, w) {
   return at === -1 || at + 1 === w.length ? null : w.slice(at + 1);
 }
 
-// An if/elseif condition that runs no command: a var, a literal, `-not` one, or
-// two compared (`if ($x -eq 'b')`).
-const TEST_OPERAND = String.raw`(?:\$[\w:]+|-?\d+|'[^']*'|"[^"$\x60]*")`;
-const PLAIN_TEST = new RegExp(String.raw`^(?:if|elseif)\s*\(\s*(?:(?:!|-not)\s*)?${TEST_OPERAND}(?:\s+-[a-z]+\s+${TEST_OPERAND})?\s*\)$`, 'i');
 // A PowerShell block head whose condition runs as a command (#214): the text in
 // its parens. Its calls are read from the head, not off the clause's words.
 const CONDITION_HEAD = /^(if|elseif|while)\s*\(([\s\S]*)\)$/i;
@@ -775,305 +704,54 @@ const PRINTED = /^(?:echo|printf|write|write-output|write-host)(?:\s[^()$@;&|<>`
 // A case arm's pattern word: `a)`, `(a)`, `a|b)`, `*)`, never fi)/done)/esac).
 const CASE_PATTERN = /^\(?(?!(?:esac|fi|done)\)+$)[^()]+\)$/;
 const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/;
-// Variables that still resolve: HOME and USERPROFILE, in every spelling ($X,
-// ${X}, $env:X, ${env:X}), are the home dir, PWD the dir itself. A leading one becomes `~`/`.` so the
-// path joins cleanly; elsewhere VAR_REF substitutes it.
-const HOME_VAR = /^\$(?:\{(?:env:)?(?:HOME|USERPROFILE)\}|(?:env:)?(?:HOME|USERPROFILE)(?!\w))/i;
-const PWD_VAR = /^\$(?:\{PWD\}|PWD(?!\w))/i;
-// A braced ref may carry an index or an operator (`${fs[0]}`, `${f:?}`,
-// `${f#*/}`): its name still counts, but its value doesn't (expandWord).
-const VAR_REF = /\$\{((?:env:)?\w+)(?:\[[^\]]*\]|[:#%/^,@][^}]*)?\}|\$((?:env:)?\w+)/gi;
-
-// Shell vars are a persistent chain, newest first: { key, value, up } or null.
-// An assignment prepends a link, so a snapshot or a body's copy is the
-// reference itself, never a copy (#163: copying a map per git call, body or
-// substitution was quadratic). Keys: `sh:NAME` for bash (case-sensitive),
-// `ps:name` for PowerShell (case-insensitive, like the shell).
-const varOf = (vars, key) => {
-  for (let v = vars; v; v = v.up) if (v.key === key) return v.value;
-  return undefined;
-};
-
-/** `p` with its variables expanded: HOME/USERPROFILE/PWD, and the names a
- *  literal assignment earlier in the command set (`vars`). A string, null when
- *  it needs the dir and the dir is null (no info), or UNKNOWN_DIR when a
- *  variable or substitution is left, or a var is read through a PowerShell
- *  member or index (`$W.FullName`, `$W[0]`). */
-function expandWord(p, dir, vars = null) {
-  let miss = 0; // 1: a part is null, 2: a part is unknown
-  const e = p.replace(HOME_VAR, '~').replace(VAR_REF, (m, braced, bare, at, s) => {
-    const name = braced ?? bare;
-    let v;
-    if (/^(?:\.[A-Za-z]|\[)/.test(s.slice(at + m.length, at + m.length + 2))) v = UNKNOWN_DIR;
-    else if (braced && m.length > braced.length + 3) v = UNKNOWN_DIR; // an index or operator
-    else if (/^(?:env:)?(?:home|userprofile)$/i.test(name)) v = homedir();
-    else if (/^pwd$/i.test(name)) v = dir;
-    else if ((v = varOf(vars, `sh:${name}`)) === undefined) v = varOf(vars, `ps:${name.toLowerCase()}`);
-    if (typeof v === 'string') return v;
-    miss = Math.max(miss, v === null ? 1 : 2);
-    return m;
-  });
-  if (miss === 2 || (!miss && /[$`]/.test(e))) return UNKNOWN_DIR;
-  return miss ? null : expandHome(e);
-}
-
-/** The dir a cd to `p` from `dir` lands in: a path, null (a relative target
- *  with no cwd to resolve it against: no info, callers fail open) or
- *  UNKNOWN_DIR (a target still holding a variable or substitution once
- *  expandWord ran, a relative target from an unknown dir, or `cd -`, whose
- *  previous dir isn't tracked). On Windows a Git Bash `/c/…` (or bare `/c`)
- *  is the drive path `C:/…`, which git -C can open. */
-const toDir = (dir, p, vars = null) => {
-  if (p === '-') return UNKNOWN_DIR;
-  let e = expandWord(p.replace(PWD_VAR, '.'), dir, vars);
-  if (typeof e !== 'string') return e;
+/** The dir a cd to `p` from `dir` lands in, read only from a literal target
+ *  (#368): a path, null (a relative target with no cwd: no info) or
+ *  UNKNOWN_DIR (`cd -`, a target holding a variable or a substitution, or a
+ *  relative target from an unknown dir). `~` expands. On Windows a Git Bash
+ *  `/c/…` (or bare `/c`) is the drive path `C:/…`, which git -C can open. */
+const toDir = (dir, p) => {
+  if (p === '-' || /[$`]/.test(p)) return UNKNOWN_DIR;
+  let e = expandHome(p);
   if (process.platform === 'win32') e = e.replace(/^\/([a-zA-Z])(?:\/|$)/, (_, d) => `${d.toUpperCase()}:/`);
   if (isAbsolute(e)) return e;
   return typeof dir === 'string' ? resolve(dir, e) : dir;
 };
 
-const isAssign = (a) => /^[A-Za-z_]\w*\+?=/.test(a);
-const DECLARE = /^(?:export|declare|typeset|local|readonly)$/;
-const READS_VAR = /^(?:unset|read|mapfile|readarray)$/;
-
-// A location switch takes no value: bash's cd/pushd flags, alone or combined
-// (-L, -P, -e, -@, -PL, -e@; PowerShell's -L/-P prefixes leave the dir the
-// next word either way), and PowerShell's -PassThru and common switches.
-// Every other -Flag takes the next word, or its own `-Flag:value`.
-const LOCATION_SWITCH = (a) => /^-(?:[LPe@]+|\w)$/.test(a) || /^-(?:pas\w*|verbose|vb|debug|db|whatif|wi|confirm|cf)$/i.test(a);
-
-/** A cd/pushd/popd clause's arguments as { path, stack, n, rotate }: `path`
- *  the target (a bare word, or -Path/-LiteralPath's value), `stack` the
- *  lowercased -StackName (PowerShell names are case-insensitive), `n` bash's
- *  -n, `rotate` a +N/-N. Other value flags' values (-ErrorAction Stop) are
- *  skipped, never read as the dir. */
-function locationArgs(args) {
-  const o = { path: undefined, stack: undefined, n: false, rotate: false };
-  for (let i = 0; i < args.length; i++) {
+/** Where a cd/Set-Location/pushd/popd clause with `args` leaves `dir`. A popd
+ *  lands where the guard doesn't track, and so does any option but bash's
+ *  -L/-P/-e/-@ and PowerShell's -Path/-LiteralPath (whose value is the
+ *  target). With no target, cd goes home, pushd swaps with a dir the guard
+ *  doesn't track, and Set-Location/Push-Location stay. */
+function moveTo(dir, cmd, args) {
+  if (POP_LOCATION.test(cmd)) return UNKNOWN_DIR;
+  let path;
+  for (let i = 0; i < args.length && path === undefined; i++) {
     const a = args[i];
-    if (/^[+-]\d+$/.test(a)) o.rotate = true;
-    else if (a === '-n') o.n = true;
-    else if (a === '--') {
-      o.path ??= args[i + 1];
-      break;
-    } else if (a === '-' || !a.startsWith('-')) o.path ??= a;
-    else if (!LOCATION_SWITCH(a)) {
-      const colon = a.indexOf(':');
-      const flag = (colon === -1 ? a : a.slice(0, colon)).toLowerCase();
-      const value = colon === -1 ? args[++i] : a.slice(colon + 1);
-      const prefix = (full, min) => flag.length >= min && full.startsWith(flag);
-      if (prefix('-stackname', 3)) o.stack = (value ?? '').toLowerCase();
-      else if (prefix('-path', 4) || prefix('-literalpath', 3) || flag === '-lp' || flag === '-pspath') o.path ??= value;
-    }
+    if (a === '--' || /^-(?:path|literalpath|lp)$/i.test(a)) path = args[++i];
+    else if (/^-[LPe@]+$/.test(a)) continue;
+    else if (a.startsWith('-') && a !== '-') return UNKNOWN_DIR;
+    else path = a;
   }
-  return o;
+  if (path !== undefined) return toDir(dir, path);
+  return /^cd$/i.test(cmd) ? homedir() : /^pushd$/i.test(cmd) ? UNKNOWN_DIR : dir;
 }
 
-/** Walk `scope` — { dir, stacks } — through one cd/Set-Location/pushd/popd
- *  clause. `stacks` maps a stack name ('' the default) to its dirs, top last.
- *  pushd pushes and cds; -n pushes without moving. A bare pushd swaps the dir
- *  with the top in bash but pushes and stays in PowerShell (its alias for
- *  Push-Location), so on a non-empty stack the dir and the top become unknown;
- *  on an empty one nothing moves (bash errors, PowerShell stays). A bare
- *  Push-Location pushes and stays. -StackName pushes or pops that named stack.
- *  A bare popd/Pop-Location pops the default stack; popd -n drops the top
- *  without moving. +N/-N rotates or drops an entry the model can't place, so
- *  the dir and every entry become unknown. Set-Location -StackName makes
- *  another stack the default, which this model gives up: the dir stays, and
- *  `stacks` turns null, so every later pop lands in UNKNOWN_DIR. */
-function moveLocation(scope, cmd, args) {
-  const o = locationArgs(args);
-  const path = o.path?.replace(/\)+$/, '');
-  if (SET_LOCATION.test(cmd)) {
-    if (o.stack !== undefined) scope.stacks = null;
-    else if (path !== undefined) scope.dir = toDir(scope.dir, path, scope.vars);
-    else if (/^cd$/i.test(cmd)) scope.dir = homedir();
-    return;
-  }
-  const pop = POP_LOCATION.test(cmd);
-  if (!scope.stacks) {
-    if (pop) scope.dir = UNKNOWN_DIR;
-    else if (path !== undefined && !o.n) scope.dir = toDir(scope.dir, path, scope.vars);
-    return;
-  }
-  const name = o.stack ?? '';
-  if (!scope.stacks.has(name)) scope.stacks.set(name, []);
-  const stack = scope.stacks.get(name);
-  if (o.rotate || (o.n && path === undefined && !pop)) {
-    if (pop) stack.pop();
-    stack.fill(UNKNOWN_DIR);
-    if (o.rotate) scope.dir = UNKNOWN_DIR;
-  } else if (pop) {
-    const top = stack.pop();
-    if (top !== undefined && !o.n) scope.dir = top;
-  } else if (path !== undefined) {
-    const to = toDir(scope.dir, path, scope.vars);
-    stack.push(o.n ? to : scope.dir);
-    if (!o.n) scope.dir = to;
-  } else if (/^pushd$/i.test(cmd)) {
-    if (stack.length) [scope.dir, stack[stack.length - 1]] = [UNKNOWN_DIR, UNKNOWN_DIR];
-  } else stack.push(scope.dir);
-}
+/** A copy of `scope` for a substitution, which runs in a subshell: its cd moves the copy only. */
+const scopeCopy = (scope) => ({ ...scope });
 
-const isCommitCall = (e) => /^git$/i.test(e.cmd) && e.words.includes('commit');
-
-/** A copy of `scope` for a body that runs elsewhere or later (or a
- *  substitution's subshell): it reads the dir, stacks, vars and functions, but
- *  its cd, pushd/popd and assignments move the copy, never the clauses after
- *  it. */
-const scopeCopy = ({ dir, stacks, vars, funcs, tool }) => ({ dir, stacks: stacks && new Map([...stacks].map(([k, v]) => [k, [...v]])), vars, funcs, tool });
-
-// The function-body characters one walk may read to judge calls (#171). Past
-// it a call fails closed: the dir is unknown after it.
-const FUNCTION_BUDGET = 100_000;
-
-/** A walk's starting scope. `tool` is the shell that runs the text: 'Bash',
- *  'PowerShell', or null when unknown (where the two disagree on whether a cd
- *  outlives a ( … ) group or a pipeline stage, it leaves the dir unknown).
- *  `funcs` holds the functions defined so far (`defs`, name → { body, own,
- *  walking }), a generation `gen` each new definition bumps, and the call
- *  effects memoized for it (`effects`, see callEffect). */
-const newScope = (cwd, tool = null) => ({
-  dir: cwd || null,
-  stacks: new Map(),
-  vars: null,
-  funcs: { defs: new Map(), gen: 0, effects: new Map(), budget: FUNCTION_BUDGET },
-  tool,
-});
+/** A walk's starting scope: the dir, and `tool`, the shell that runs the text:
+ *  'Bash', 'PowerShell', or null when unknown (where the two disagree on
+ *  whether a cd outlives a ( … ) group or a pipeline stage, it leaves the dir
+ *  unknown). */
+const newScope = (cwd, tool = null) => ({ dir: cwd || null, tool });
 
 /** The shell a nested command string runs in (see newScope). */
 const shellTool = (cmd) => (POSIX_SHELL.test(cmd) ? 'Bash' : /^(?:pwsh|powershell)$/i.test(cmd) ? 'PowerShell' : null);
 
-/** Record a function definition; one with the body it already has changes nothing. */
-const defineFunction = (funcs, name, body) => {
-  if (funcs.defs.get(name)?.body === body) return;
-  funcs.defs.set(name, { body, own: null, walking: false });
-  funcs.gen++;
-};
-
-// A called function's body is walked from this dir: a cd anywhere moves off it.
-const FUNCTION_START = '\0function-start';
-
-/** A function's own effect, which depends on its body alone: whether the
- *  body moves the location (walked from FUNCTION_START with empty stacks, so
- *  any cd, or any pushd/popd, counts), the var keys it assigns, and every
- *  command word it calls, recorded rather than followed. Walked once per
- *  definition; a re-entrant walk (a call in its own substitution) adds
- *  nothing, and past the budget it counts as moving. */
-function ownEffect(scope, fn) {
-  if (fn.own) return fn.own;
-  const none = { moves: false, keys: new Set(), calls: new Set() };
-  if (fn.walking) return none;
-  scope.funcs.budget -= fn.body.length;
-  if (scope.funcs.budget < 0) return { ...none, moves: true };
-  const probe = { ...scopeCopy(scope), dir: FUNCTION_START, stacks: new Map(), calls: new Set() };
-  fn.walking = true;
-  commands(fn.body, null, false, false, probe);
-  fn.walking = false;
-  const moves = probe.dir !== FUNCTION_START || !probe.stacks || probe.stacks.size > 0;
-  fn.own = { moves, keys: assignedSince(probe.vars, scope.vars), calls: probe.calls };
-  return fn.own;
-}
-
-/** What a call to `name` does to its caller: the union of the own effects of
- *  every defined function it reaches (so a cycle costs nothing), memoized
- *  per generation of the definitions. */
-function callEffect(scope, name) {
-  const { funcs } = scope;
-  const memo = funcs.effects.get(name);
-  if (memo?.gen === funcs.gen) return memo;
-  const effect = { gen: funcs.gen, moves: false, keys: new Set() };
-  const seen = new Set([name]);
-  for (const todo = [name]; todo.length; ) {
-    const own = ownEffect(scope, funcs.defs.get(todo.pop()));
-    effect.moves ||= own.moves;
-    for (const key of own.keys) effect.keys.add(key);
-    for (const c of own.calls) {
-      if (seen.has(c) || !funcs.defs.has(c)) continue;
-      seen.add(c);
-      todo.push(c);
-    }
-  }
-  funcs.effects.set(name, effect);
-  return effect;
-}
-
-/** The location (the dir and the non-empty pushd stacks) as a comparable key. */
-const locationKey = ({ dir, stacks }) => JSON.stringify([dir, stacks && [...stacks].filter(([, v]) => v.length).sort()]);
-
-/** A location the guard can't follow: the dir and every pushd stack entry
- *  become unknown. */
-const loseLocation = (scope) => {
-  scope.dir = UNKNOWN_DIR;
-  scope.stacks = null;
-};
-
-/** The var keys assigned on `vars` since `before` (a link further up its chain). */
-const assignedSince = (vars, before) => {
-  const set = new Set();
-  for (let v = vars; v !== before; v = v.up) set.add(v.key);
-  return set;
-};
-
-const setVar = (scope, key, value) => {
-  scope.vars = { key, value, up: scope.vars };
-};
-
-const PS_ASSIGN = /^\$(\w+)\s*([-+*/%]?)=(?!=)\s*(.*)$/s;
-const PS_SCOPED_ASSIGN = /^\$(?:global|script|local|private):(\w+)\s*[-+*/%]?=(?!=)/i;
-const PS_VARIABLE = /^(?:Set-Variable|sv|New-Variable|nv|Remove-Variable|rv|Clear-Variable|clv)$/i;
-// `function f`, `function f()`, PowerShell `function f($a)`/`filter f`, bash `f()`.
-const FUNCTION_HEAD = /^(?:function|filter)\s+([\w-]+)|^([\w-]+)\s*\(\s*\)$/i;
-
-/** The var keys a command sets to a value the guard can't read: printf -v,
- *  let, getopts, and PowerShell's Set-/New-/Remove-/Clear-Variable (by -Name
- *  or first positional, a comma list too). */
-function runtimeSets(cmd, args) {
-  if (cmd === 'printf') {
-    const i = args.findIndex((a) => a.startsWith('-v'));
-    const name = i === -1 ? undefined : args[i].slice(2) || args[i + 1];
-    return name ? [`sh:${name}`] : [];
-  }
-  if (cmd === 'let') return args.flatMap((a) => /^([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*[-+*/%&|^<>]*=/.exec(a)?.slice(1, 2) ?? []).map((n) => `sh:${n}`);
-  if (cmd === 'getopts') return args[1] ? [`sh:${args[1]}`] : [];
-  if (!PS_VARIABLE.test(cmd)) return [];
-  let name;
-  for (let i = 0; i < args.length && name === undefined; i++) {
-    const m = /^-(\w+)(?::(.*))?$/.exec(args[i]);
-    if (!m) name = args[i];
-    else if (/^n(?:a(?:me?)?)?$/i.test(m[1])) name = m[2] ?? args[i + 1];
-    else if (m[2] === undefined && !/^(?:force|passthru|whatif|confirm|verbose|debug)$/i.test(m[1])) i++;
-  }
-  return (name ?? '').split(',').filter(Boolean).map((n) => `ps:${n.replace(/^\$/, '').toLowerCase()}`);
-}
-
-/** Record a bare assignment clause's names in `scope.vars` (see expandWord):
- *  bash `NAME=value` words, or PowerShell `clause` text `$NAME = '…'`/`"…"`.
- *  Only a `certain` one with a value built from parts that expand keeps it;
- *  anything else — a substitution, an unresolved var, an unquoted PowerShell
- *  right side (a command's output), a `+=`, or an assignment that may not run —
- *  makes the name unknown. */
-function assignVars(scope, bashWords, clause, certain) {
-  const set = (key, value) => setVar(scope, key, certain ? value : UNKNOWN_DIR);
-  if (bashWords) {
-    for (const a of bashWords) {
-      const eq = a.indexOf('=');
-      if (a[eq - 1] === '+') set(`sh:${a.slice(0, eq - 1)}`, UNKNOWN_DIR);
-      else set(`sh:${a.slice(0, eq)}`, expandWord(a.slice(eq + 1), scope.dir, scope.vars));
-    }
-    return;
-  }
-  const m = PS_ASSIGN.exec(clause);
-  const lit = !m[2] && /^'([^']*)'$|^"([^"`]*)"$/.exec(m[3].trim());
-  set(`ps:${m[1].toLowerCase()}`, !lit ? UNKNOWN_DIR : lit[1] ?? expandWord(lit[2], scope.dir, scope.vars));
-}
-
-/** A pipeline's unquoted parens, outside quotes, substitutions and blocks, as
- *  { net, opened }: `net` how far it moves the subshell depth (`(` minus `)`),
- *  `opened` whether it holds a `(` at all (part of it runs in a subshell). */
+/** A pipeline's unquoted parens, outside quotes, substitutions and blocks: how
+ *  far it moves the subshell depth (`(` minus `)`). */
 function parens(p) {
   let net = 0;
-  let opened = false;
   let span;
   for (let i = 0; i < p.length; i++) {
     const ch = p[i];
@@ -1084,159 +762,77 @@ function parens(p) {
     } else if (ch === '"') {
       for (i++; i < p.length && p[i] !== '"'; i++) if (p[i] === '\\') i++;
     } else if ((span = substitutionAt(p, i, false) || blockAt(p, i))) i = span.end - 1;
-    else if (ch === '(') [net, opened] = [net + 1, true];
+    else if (ch === '(') net++;
     else if (ch === ')') net--;
   }
-  return { net, opened };
+  return net;
 }
 
-/** Every command a line runs, as { cmd, words, dir, tool, pipe, seg, viaOr, loop }:
+/** Every command a line runs, as { cmd, words, text, dir, tool, pipe, seg }:
  *  `cmd` is the command word's basename, `dir` the payload cwd walked through
- *  the cd/pushd/popd clauses before it (see moveLocation; UNKNOWN_DIR once a
- *  target can't be resolved, see toDir), `tool` the shell running it (see
- *  newScope), `pipe` an identity shared by the
- *  commands of one pipeline and `seg` the command's place in it. `viaOr` marks
- *  the first commit of an `||` alternative to a commit (it runs only if the
- *  pipeline right before the `||` failed, and that pipeline's exit status is a
- *  commit's: run directly, last in its pipeline, not under `!`): a commit in
- *  the alternative's first pipeline, or in the leading `&&` pipelines of a
- *  body it enters (`|| { …; }`, `|| bash -c "…"`), or, when that
- *  pipeline opens a `( … )` group, in any of the group's pipelines (#160,
- *  #167: the whole group is the alternative, so its `;` keeps the carry) — not
- *  in `a || cd x && git commit`, which bash reads as `(a || cd x) && …`.
- *  `loop` marks one inside a for/while/until loop (it may run several times).
- *  `arms` (when set) lists the arms of the PowerShell if/elseif/else chains
- *  (one clause each) it sits in, as { chain, n }: only one arm of a chain runs.
- *  Location clauses are consumed; a quoted command handed to a shell is
- *  expanded in place (eval/iex share this shell's location and vars), and so is
- *  every substitution body (`…`, $(…), <(…)), which runs before the clause
- *  holding it. A block body (`{ … }`) is walked after its clause's own
- *  substitutions. One that runs in place (a group, a branch, a
- *  foreach/while/do/ForEach-Object body) shares the cwd walk, so a cd inside it
- *  moves the commands in it; one that runs elsewhere or later (a function, a
- *  job, a -Parallel or stored block) gets a copy of the cwd and stacks, which
- *  it can't move back. A body is a `loop` unless it runs once — a bare group,
- *  an if/elseif/else/try/catch/finally branch — since a PowerShell loop has no
- *  `done` to count. In bash a ( … ) group's close, or the end of a stage of a
- *  pipeline of several, restores the location before it (closeSubshells,
- *  #171); a backgrounded pipeline's cd moves only its job. The location is
- *  unknown after a body that moved it but may not run exactly once (an
- *  if/case/loop, or a block that isn't a bare group, try or finally), and
- *  after a call to a function that, with what it calls, moves it (callEffect). Other
- *  quoted text is an argument, never a
- *  command. A bare assignment (`W=…`, `export W=…`, `$W = '…'`) sets a var a
- *  later cd target or `git -C` expands (assignVars); one in a loop, a
- *  subshell, a pipeline, a background job, an if/case, an in-place body or
- *  after an `||` makes it unknown, as do unset/read/mapfile, a `for`/`select`
- *  var, the names runtimeSets reads, a scoped `$global:W =`, and a call to a
- *  function that assigns it. `orFirst`/`inLoop` carry the enclosing clause's
- *  state into a body; `scope` is the cwd, pushd stacks, vars and defined
- *  functions a block shares with its clause. Past MAX_NESTING it throws a
- *  NestingError, which the hook turns into a block. */
-function commands(raw, cwd, orFirst = false, inLoop = false, scope = newScope(cwd)) {
+ *  the cd/pushd/popd clauses before it, in text order (moveTo; UNKNOWN_DIR
+ *  once a target can't be read), `tool` the shell running it (see newScope),
+ *  `pipe` an identity shared by the commands of one pipeline and `seg` the
+ *  command's place in it. Location clauses are consumed; a quoted command
+ *  handed to a shell is expanded in place (eval/iex share this shell's
+ *  location), and so is every substitution body (`…`, $(…), <(…)), which runs
+ *  before the clause holding it, in a copy of the location. A block body
+ *  (`{ … }`) is walked after its clause's own substitutions and shares the
+ *  location, whether it runs once, many times or never. In bash a ( … )
+ *  group's close, or the end of a stage of a pipeline of several, restores the
+ *  dir before it (#171), and a backgrounded pipeline's cd moves only its job;
+ *  PowerShell runs a group and a stage in place; with no tool, a close that
+ *  moved the dir leaves it unknown. Other quoted text is an argument, never a
+ *  command. Past MAX_NESTING it throws a NestingError, which the hook turns
+ *  into a block. */
+function commands(raw, scope) {
   // The top-level text is level 0: up to MAX_NESTING bodies below it are read.
   // The count is back to 0 after every outermost call, thrown or not.
   if (nesting > MAX_NESTING) throw new NestingError();
   nesting++;
   try {
-    return walkCommands(raw, cwd, orFirst, inLoop, scope);
+    return walkCommands(raw, scope);
   } finally {
     nesting--;
   }
 }
 
 /** One level of commands(): the walk itself. */
-function walkCommands(raw, cwd, orFirst, inLoop, scope) {
+function walkCommands(raw, scope) {
   const out = [];
-  let loops = 0; // loops opened in this text and not yet closed by `done`
-  let ifs = 0; // bash if/case blocks opened in this text and not yet closed by fi/esac
   const caseDepths = []; // per open case block, the subshell depth inside it
-  // The location when the outermost open if/case/loop began: a body that may
-  // run zero or many times leaves the location unknown once it closes, if it
-  // moved it.
-  let region = null;
-  const settle = () => {
-    if (ifs + loops === 0) {
-      if (region !== null && locationKey(scope) !== region) loseLocation(scope);
-      region = null;
-    } else region ??= locationKey(scope);
-  };
-  // The location before each open bash subshell (a ( … ) group, or a stage of
-  // a pipeline of several), innermost last: its close restores it, since a
-  // subshell's cd doesn't outlive it. PowerShell runs both in place; with no
-  // tool, a close that changed the location leaves it unknown.
+  // The dir before each open bash subshell (a ( … ) group, or a stage of a
+  // pipeline of several), innermost last: its close restores it.
   const subshells = [];
   let closing = 0; // subshells the last clause closed
   const closeSubshells = () => {
     let outer;
     for (; closing > 0 && subshells.length; closing--) outer = subshells.pop();
     closing = 0;
-    if (!outer) return;
-    if (scope.tool === 'Bash') [scope.dir, scope.stacks] = [outer.dir, outer.stacks];
-    else if (locationKey(scope) !== locationKey(outer)) loseLocation(scope);
+    if (outer === undefined) return;
+    if (scope.tool === 'Bash') scope.dir = outer;
+    else if (scope.dir !== outer) scope.dir = UNKNOWN_DIR;
   };
-  // What `run` assigns in `scope` stands only when `certain`; otherwise each
-  // name it assigned is unknown after it.
-  const unlessCertain = (certain, run) => {
-    const before = scope.vars;
-    run();
-    if (certain) return;
-    const set = assignedSince(scope.vars, before);
-    scope.vars = before;
-    for (const key of set) setVar(scope, key, UNKNOWN_DIR);
-  };
-  let depth = 0; // the ( … ) subshell depth before this pipeline
-  let orGroup = -1; // the depth just outside an `|| ( … )` group that still carries viaOr
-  let orList = false; // an `||` since the last `;`/newline/`&`: what runs now may not
   const pipeSeps = [];
-  let committed = false; // the pipeline before this one emitted a git commit
   for (const [pi, p] of pipelines(raw, pipeSeps).entries()) {
-    // An `||` makes an alternative only to a commit that could have failed: the
-    // pipeline right before it must hold one (`a; false || git commit` is no
-    // fallback — its commit spends like any other).
-    const orCommit = pipeSeps[pi] === '||' && committed;
-    committed = false;
-    // The whole group runs only as the alternative, so any separator inside
-    // it keeps the carry; past its close the carry ends (below).
-    if (orCommit && p.startsWith('(')) orGroup = depth;
-    // A body entered as an alternative (`|| { …; }`, `|| bash -c "…"`) carries
-    // it across its leading && pipelines, like an `|| ( … )` group.
-    if (pi > 0 && pipeSeps[pi] !== '&&') orFirst = false;
-    if (pipeSeps[pi] === '||') orList = true;
-    else if (pipeSeps[pi] !== '&&') orList = false;
-    const par = parens(p);
-    // An assignment here may not set the var for what follows: in a subshell,
-    // after an `||`, or backgrounded by the `&` after the pipeline.
-    const unsure = depth > 0 || par.opened || orList || pipeSeps[pi + 1] === '&';
-    // Only the alternative's first commit is sure to run before the rest of
-    // it: viaOr clears once one is emitted. A substitution ahead of it
-    // (`-m "$(cat …)"`, `FOO=$(date) git …`) leaves it set.
-    let viaOr = orCommit || orFirst || orGroup !== -1;
     // A backgrounded pipeline (`cd x &`) runs as a job: its cd moves only the job.
-    const job = pipeSeps[pi + 1] === '&' && scopeCopy(scope);
-    const emit = (...cs) => {
-      out.push(...cs);
-      if (cs.some(isCommitCall)) [viaOr, orGroup, orFirst] = [false, -1, false];
-    };
+    const job = pipeSeps[pi + 1] === '&';
+    const before = scope.dir;
     const pipe = {};
     const blocks = [];
     const segs = clauses(p, false, null, blocks);
     for (const [seg, c] of segs.entries()) {
-      settle();
       closeSubshells();
       const w = words(c);
       // A case arm's pattern (`a)`, `(a)`, `a|b)`) heads the command it runs, on
       // the `case … in` line or its own. On its own line it is told from a
       // group's `)` by depth: no subshell may have opened since the case began.
       let pattern = caseDepths.length && subshells.length === caseDepths[caseDepths.length - 1] && CASE_PATTERN.test(w[0] ?? '') ? w.shift() : null;
-      // A bash loop keyword; a PowerShell for (…)/while (…) block has no `done`
-      // to close it. A lone `(` after the keyword is PowerShell when a `{` body
-      // follows it or the `(` runs on past this clause (`for ($i=0; …`); a bash
-      // subshell condition (`while (true); do`) closes with no `{`.
+      // A lone `(` after if/while/until is a PowerShell condition when a `{`
+      // body follows it or the `(` runs on past this clause (`for ($i=0; …`); a
+      // bash subshell condition (`while (true); do`) closes with no `{`.
       const psBlock = () => /^\((?!\()/.test(w[0] ?? '') && (/\)\s*\{/.test(c) || !c.includes(')'));
-      const opensLoop = (kw) => /^(?:for|while|until)$/i.test(kw) && !psBlock();
       const wrappers = [];
-      let negated = false; // a `!` wrapper inverts the clause's exit status
       let opens = 0; // ( … ) subshells opened at command position
       // A `(` after if/while/until opens a PowerShell condition, not a subshell.
       const countOpens = (lead) => {
@@ -1245,7 +841,6 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
       for (;;) {
         if (w.length && /^[({!]+./.test(w[0])) {
           const lead = w[0].match(/^[({!]+/)[0];
-          negated ||= lead.includes('!');
           countOpens(lead);
           w[0] = w[0].slice(lead.length);
         }
@@ -1258,27 +853,21 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
           continue;
         }
         if (!WRAPPER.test(w[0])) break;
-        negated ||= /^[({!]+$/.test(w[0]) && w[0].includes('!');
         if (/^[({!]+$/.test(w[0])) countOpens(w[0]);
-        const kw = w.shift();
-        wrappers.push(kw);
-        if (opensLoop(kw)) loops++; // a while/until condition repeats too
-        if (/^if$/i.test(kw) && !psBlock()) ifs++;
+        wrappers.push(w.shift());
       }
       const opensCase = w[0] === 'case' && w[2] === 'in';
       if (opensCase) {
         w.splice(0, 3);
-        ifs++;
         if (CASE_PATTERN.test(w[0] ?? '')) pattern = w.shift();
       }
-      settle();
       // A `|` in a pattern splits no pipeline stage.
       if (segs.length > 1 && !opens && pattern === null) opens = 1; // a bash stage is a subshell of its own
       if (scope.tool === 'PowerShell') opens = 0;
-      for (let i = 0; i < opens; i++) subshells.push(scopeCopy(scope));
+      for (let i = 0; i < opens; i++) subshells.push(scope.dir);
       if (opensCase) caseDepths.push(subshells.length);
       // A pattern's parens open or close no subshell.
-      closing = opens - parens(c).net + (pattern === null ? 0 : parens(pattern).net);
+      closing = opens - parens(c) + (pattern === null ? 0 : parens(pattern));
       // A group's closing `)` sticks to its last word (`(git push)`), unless the
       // word opens a `(` of its own for it to close.
       if (w.length) {
@@ -1293,7 +882,6 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
       const conditions = (blocks[seg] || []).filter(({ head }) => CONDITION_HEAD.test(head.trim()));
       if (conditions.length && conditions[0] === blocks[seg][0]) w.length = 0;
       const cmd = w.length ? commandName(w[0]) : '';
-      const loop = inLoop || loops > 0;
       const shellRun = shellLine(cmd, w); // the line this call runs as a shell
       // What runs as this pipeline stage: a body or shell line here is inside it (inStage).
       const stage = { pipe, seg };
@@ -1301,8 +889,7 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
       // substitutions here too would count each gated verb twice.
       // A condition's own substitutions are read with it, below.
       const own = conditions.reduce((t, { head }) => t.replace(head.trim(), ''), c);
-      if (!shellRun) for (const body of substitutions(own)) emit(...commands(body, null, viaOr, loop, scopeCopy(scope)));
-      let chain = null; // the PowerShell if/elseif/else chain this clause's blocks are arms of
+      if (!shellRun) for (const body of substitutions(own)) out.push(...commands(body, scopeCopy(scope)));
       for (const { head, body } of blocks[seg] || []) {
         const h = head.trim();
         // echo prints a `{ … }` it owns (bash: words, PowerShell: a script block)
@@ -1312,124 +899,40 @@ function walkCommands(raw, cwd, orFirst, inLoop, scope) {
         // condition, a call or a method argument (`if (echo x) {`, `echo (icm {`,
         // `.ForEach({`) is no echo arg.
         if (PRINTED.test(cmd) && PRINTED.test(h) && !/[;&|\n<>$`()]/.test(body)) continue;
-        // Only one arm of a chain runs: each tags the calls in its body (see
-        // exclusive). A condition the guard can't read (a command) may itself
-        // commit, so it voids the chain's exemption.
-        if (/^if\s*\(/i.test(h)) chain = { arms: 0, read: true };
-        else if (!/^(?:elseif|else)\b/i.test(h)) chain = null;
-        if (chain && /^(?:if|elseif)\b/i.test(h) && !PLAIN_TEST.test(h)) chain.read = false;
-        const arm = chain && { chain, n: chain.arms++ };
-        const inArm = (cs) => {
-          if (arm) for (const call of cs) (call.arms ??= []).push(arm);
-          return cs;
-        };
-        // The condition runs in place, in no arm: an elseif's runs whenever an
-        // earlier arm's condition fails, a while's at least once and maybe more.
+        // The condition runs first, in place.
         const condition = CONDITION_HEAD.exec(h);
-        if (condition) {
-          const repeats = /^while$/i.test(condition[1]);
-          const at = locationKey(scope);
-          unlessCertain(false, () => emit(...inStage(commands(condition[2], null, viaOr, loop || repeats, scope), stage)));
-          if (locationKey(scope) !== at && !/^if$/i.test(condition[1])) loseLocation(scope);
-        }
-        const once = /^(?:[&.]\s*)?$|^(?:if|elseif|else|try|catch|finally|then)\b/i.test(h);
-        // In place too: a PowerShell switch arm (`'a' { … }`, `default { … }`)
-        // and the body after a condition split at its `;` (`for (…; …; $i++) {`).
-        const inPlace = once || /^(?:foreach|for|while|do|until|switch)(?![\w-])|^(?:ForEach-Object|%|foreach|Where-Object|\?)$|^(?:'[^']*'|"[^"]*"|default|-?\d+|[^()]*\))$/i.test(h);
-        if (!inPlace) {
-          emit(...inStage(commands(body, null, viaOr, loop || !once, scopeCopy(scope)), stage));
-          // A function's call runs its body in the caller's shell (see below).
-          const fn = FUNCTION_HEAD.exec(h);
-          if (fn) defineFunction(scope.funcs, (fn[1] ?? fn[2]).toLowerCase(), body);
-          continue;
-        }
-        // An in-place body moves the shared dir, but it may run zero or many
-        // times: a name it assigns is unknown after it, and so is the location
-        // it moved, unless it surely runs once (a bare group, try, finally).
-        const at = locationKey(scope);
-        unlessCertain(false, () => emit(...inStage(inArm(commands(body, null, viaOr, loop || !once, scope)), stage)));
-        if (locationKey(scope) !== at && !/^(?:[&.]\s*)?$|^(?:try|finally)\b/i.test(h)) loseLocation(scope);
+        if (condition) out.push(...inStage(commands(condition[2], scope), stage));
+        out.push(...inStage(commands(body, scope), stage));
       }
-      // A bare assignment sets a shell var for the clauses after it; a prefix one
-      // (`W=x git -C $W …`) only the command's env, after $W already expanded.
-      // export/declare/typeset/local/readonly NAME=… counts the same (with no
-      // flag beside it); a bare NAME there only marks the var, so its value
-      // stays — except `local NAME`, which empties it. Any other form, and
-      // unset/read/mapfile, leaves the name unknown.
-      const certain = !loop && !unsure && !ifs && segs.length === 1 && wrappers.every(isAssign);
-      const declared = DECLARE.test(cmd) && w.slice(1);
-      const flagged = declared && declared.some((a) => /^[-+]/.test(a));
-      const sets = declared && declared.filter((a) => a.includes('=') || (cmd === 'local' && !/^[-+]/.test(a)));
-      if (!w.length && wrappers.some(isAssign)) assignVars(scope, wrappers.filter(isAssign), c, certain);
-      else if (sets && sets.length && !flagged && sets.every(isAssign)) assignVars(scope, sets, c, certain);
-      else if (sets || READS_VAR.test(cmd)) {
-        for (const a of sets || w.slice(1)) if (/^[A-Za-z_]\w*(?:\+?=|$)/.test(a)) setVar(scope, `sh:${a.match(/^\w+/)[0]}`, UNKNOWN_DIR);
-      } else if (!wrappers.length && PS_SCOPED_ASSIGN.test(c)) setVar(scope, `ps:${c.match(PS_SCOPED_ASSIGN)[1].toLowerCase()}`, UNKNOWN_DIR);
-      else if (!wrappers.length && PS_ASSIGN.test(c)) assignVars(scope, null, c, certain);
-      else if (/^foreach$/i.test(cmd) && /\(\s*\$(\w+)\s+in\b/i.test(c)) setVar(scope, `ps:${c.match(/\(\s*\$(\w+)\s+in\b/i)[1].toLowerCase()}`, UNKNOWN_DIR);
-      else if (w.length && /^(?:fi|esac)\)*$/.test(cmd)) {
-        ifs = Math.max(0, ifs - 1);
-        if (cmd.startsWith('esac')) caseDepths.pop();
-      }
-      for (const key of runtimeSets(cmd, w.slice(1))) setVar(scope, key, UNKNOWN_DIR);
+      if (w.length && /^esac\)*$/.test(cmd)) caseDepths.pop();
       if (!w.length) continue;
-      // bash `select W in …` loops like `for` (PowerShell's select is Select-Object).
-      const select = cmd === 'select' && w[2] === 'in';
-      if (/^for$/i.test(cmd) || select) {
-        w.shift();
-        if (/^[A-Za-z_]\w*$/.test(w[0] ?? '')) setVar(scope, `sh:${w[0]}`, UNKNOWN_DIR); // the loop var
-        if (select || opensLoop(cmd)) loops++; // its word list runs once; the body after `do` repeats
-        continue;
-      }
-      if (/^done\)*$/.test(cmd)) {
-        loops = Math.max(0, loops - 1);
-        continue;
-      }
+      // A for/select word list and a `done` run nothing (bash `select W in …`;
+      // PowerShell's select is Select-Object).
+      if (/^for$/i.test(cmd) || (cmd === 'select' && w[2] === 'in') || /^done\)*$/.test(cmd)) continue;
       if (LOCATION.test(cmd)) {
-        moveLocation(scope, cmd, w.slice(1));
+        scope.dir = moveTo(scope.dir, cmd, w.slice(1));
         continue;
       }
-      // eval/iex run in this shell: they share the location and vars.
+      // eval/iex run in this shell: they share its location.
       if (EVAL.test(cmd)) {
-        if (shellRun) unlessCertain(certain, () => emit(...inStage(commands(shellRun.join(' '), null, viaOr, loop, scope), stage)));
+        if (shellRun) out.push(...inStage(commands(shellRun.join(' '), scope), stage));
         continue;
       }
       if (shellTool(cmd)) {
-        if (shellRun) emit(...inStage(commands(shellRun.join(' '), scope.dir, viaOr, loop, newScope(scope.dir, shellTool(cmd))), stage));
+        if (shellRun) out.push(...inStage(commands(shellRun.join(' '), newScope(scope.dir, shellTool(cmd))), stage));
         continue;
       }
-      // A function call runs its body here, as the definitions stand now (a
-      // function it calls may be defined after it): if what it reaches moves
-      // the location or assigns a name, that is unknown after the call
-      // (callEffect). Inside an own-effect walk every command word is only
-      // recorded, since the function it names may be defined later.
-      const name = cmd.toLowerCase();
-      if (scope.calls) scope.calls.add(name);
-      else if (scope.funcs.defs.has(name)) {
-        const effect = callEffect(scope, name);
-        if (effect.moves) loseLocation(scope);
-        for (const key of effect.keys) setVar(scope, key, UNKNOWN_DIR);
-      }
-      // `vars` as they stand here, for a git call's -C (gitCalls).
-      const call = { cmd, words: w, text: c, dir: scope.dir, vars: scope.vars, tool: scope.tool, pipe, seg, viaOr, loop };
-      // Only a commit that decides the pipeline's exit status — run directly (not
-      // in a substitution or block body), in its last segment, not under `!` —
-      // makes a following `||` its fallback.
-      if (isCommitCall(call) && seg === segs.length - 1 && !negated) committed = true;
-      emit(call);
+      out.push({ cmd, words: w, text: c, dir: scope.dir, tool: scope.tool, pipe, seg });
     }
     if (job) {
       closeSubshells();
-      [scope.dir, scope.stacks] = [job.dir, job.stacks];
+      scope.dir = before;
     }
-    // A `case` pattern's `a)` would take the depth below 0.
-    depth = Math.max(0, depth + par.net);
-    if (depth <= orGroup) orGroup = -1;
   }
-  settle();
   closeSubshells();
   return out;
 }
+
 
 const PKG_RUNNER = /^(?:pnpm|npm|yarn|bun|npx|pnpx|bunx)(?:\.cmd)?$/i;
 const PKG_FLAG_WITH_ARG = /^(?:--filter|-F|-C|--dir|--prefix|--workspace|-w)$/;
@@ -1467,19 +970,19 @@ function isGate({ cmd, words: w }) {
 /** Every git call in a command, each with its subcommand, args, and the repo it
  *  runs in: the command's dir, then any `-C` on the call (an absolute one
  *  resolves an unknown dir; a relative one keeps it unknown). A null repo means
- *  no info — callers fail open; UNKNOWN_DIR means a cd the guard couldn't
- *  follow — callRule blocks a commit there. `tool` is the shell (newScope). */
+ *  no info and UNKNOWN_DIR a cd the guard couldn't read: rule 1 counts both
+ *  as shared, rule 6 fails open. `tool` is the shell (newScope). */
 export function gitCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w, dir, vars, viaOr, loop, arms = [] } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
+  for (const { cmd, words: w, dir } of commands(raw, newScope(cwd, tool))) {
     if (!/^git$/i.test(cmd)) continue;
     let repo = dir;
     let i = 1;
     for (; i < w.length && w[i].startsWith('-'); i++) {
-      if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i], vars);
+      if (w[i] === '-C' && w[i + 1] !== undefined) repo = toDir(repo, w[++i]);
       else if (GIT_OPT_WITH_ARG.test(w[i])) i++;
     }
-    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo, viaOr, loop, arms });
+    out.push({ sub: w[i] || null, args: w.slice(i + 1), repo });
   }
   return out;
 }
@@ -1489,7 +992,7 @@ export function gitCalls(raw, cwd, tool = null) {
  *  — never by substring, so quoted text and commit messages never trigger it. */
 export function ghCalls(raw, cwd, tool = null) {
   const out = [];
-  for (const { cmd, words: w } of commands(raw, cwd, false, false, newScope(cwd, tool))) {
+  for (const { cmd, words: w } of commands(raw, newScope(cwd, tool))) {
     if (!/^gh$/i.test(cmd)) continue;
     // `-R x` / `--repo x` take a value, before the subcommand or after it.
     const nonFlag = w.slice(1).filter((a, i, all) => !a.startsWith('-') && !/^(?:-R|--repo)$/.test(all[i - 1]));
@@ -2245,36 +1748,6 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
   return null;
 }
 
-const PW_LAUNCHER = /^(?:npx|pnpx|bunx|pnpm|yarn|npm|bun)(?:\.cmd)?$/i;
-const PW_VISIBLE_SUB = /^(?:codegen|show-report|show-trace|open)$/;
-const PW_VISIBLE_FLAG = /^--(?:headed|ui|debug)(?:=.*)?$/;
-
-/** 9. A description of the visible-browser launch a command makes, or null.
- *  Parsed by command word: `playwright` itself, or behind a package runner
- *  (`npx`, `pnpm exec`, `yarn dlx` …). `--headed` on any other command (a
- *  package script forwarding it) counts too. Headless `playwright test` is a
- *  QA gate and stays ungated. */
-export function browserCommand(raw, cwd, tool = null) {
-  for (const { cmd, words: w } of commands(scrub(raw), cwd, false, false, newScope(cwd, tool))) {
-    let p = -1;
-    if (/^playwright(?:\.cmd)?$/i.test(cmd)) p = 0;
-    else if (PW_LAUNCHER.test(cmd)) {
-      const i = w.findIndex((a, j) => j > 0 && !/^(?:-.*|exec|dlx|x|run)$/.test(a));
-      if (i !== -1 && /^(?:@playwright\/test|playwright)$/.test(w[i])) p = i;
-    }
-    const args = w.slice(p === -1 ? 1 : p + 1);
-    if (p === -1) {
-      if (args.includes('--headed')) return `${cmd} --headed`;
-      continue;
-    }
-    const sub = args.find((a) => !a.startsWith('-'));
-    if (sub && PW_VISIBLE_SUB.test(sub)) return `playwright ${sub}`;
-    const flag = args.find((a) => PW_VISIBLE_FLAG.test(a));
-    if (flag) return `playwright ${flag}`;
-  }
-  return null;
-}
-
 // ---- stateful rules ---------------------------------------------------------
 
 function currentBranch(repo) {
@@ -2282,37 +1755,17 @@ function currentBranch(repo) {
   return r.status === 0 ? (r.stdout || '').trim() : null;
 }
 
-/** True only for a repo with no commits at all: HEAD does not resolve AND no
- *  local branch or remote-tracking ref exists. Any other rev-parse failure stays "not unborn". */
-function isUnborn(repo) {
-  const opts = { encoding: 'utf8', timeout: 4000 };
-  const head = spawnSync('git', ['-C', repo, 'rev-parse', '--verify', '-q', 'HEAD'], opts);
-  if (head.status === null || head.status === 0) return false;
-  const refs = spawnSync('git', ['-C', repo, 'for-each-ref', '--count=1', 'refs/heads', 'refs/remotes'], opts);
-  return refs.status === 0 && (refs.stdout || '').trim() === '';
-}
-
-function repoKey(repo) {
-  const r = spawnSync('git', ['-C', repo, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 4000 });
-  const top = resolve(r.status === 0 && (r.stdout || '').trim() ? r.stdout.trim() : repo);
-  return process.platform === 'win32' ? top.toLowerCase() : top;
-}
-
+/** 6. The first git call that would switch, restore or commit on the
+ *  claude-config main checkout, as its block reason, or null. */
 export function branchRules(raw, cwd, tool = null) {
-  const rooted = new Map(); // unborn repo → the arms of each commit that spent its root-commit exemption
   for (const g of gitCalls(scrub(raw), cwd, tool)) {
-    const reason = callRule(g, rooted);
+    const reason = callRule(g);
     if (reason) return reason;
   }
   return null;
 }
 
-/** Do two calls' arm lists (see commands) put them in different arms of one
- *  if/elseif/else chain whose conditions run no command, so at most one of
- *  them runs and nothing between them commits? */
-const exclusive = (a, b) => a.some((x) => b.some((y) => x.chain === y.chain && x.n !== y.n && x.chain.read));
-
-function callRule({ sub, args, repo, viaOr, loop, arms = [] }, rooted = new Map()) {
+function callRule({ sub, args, repo }) {
   const isCommit = sub === 'commit';
   // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
   // worktree) — `restore --staged` alone only unstages and is left alone.
@@ -2322,54 +1775,22 @@ function callRule({ sub, args, repo, viaOr, loop, arms = [] }, rooted = new Map(
     (sub === 'restore' && !(has('--staged', '-S') && !has('--worktree', '-W')));
   const isSwitch = (sub === 'checkout' || sub === 'switch') && !isRestore;
   if (!isCommit && !isSwitch && !isRestore) return null;
-  if (!repo) return null;
-  // A cd the guard couldn't follow: a commit's branch can't be checked, so it is
-  // blocked (viaOr or not); a switch or restore keeps the fail-open (#163).
-  if (repo === UNKNOWN_DIR) {
-    if (!isCommit) return null;
-    return `This git commit runs in a directory the guard can't resolve — a cd/Set-Location/pushd target holding a variable or a command substitution, \`cd -\`, a popd/Pop-Location with no known dir on the stack, or a relative git -C from one of those — so its branch can't be checked. cd to a literal path first, or run git -C <literal path> commit.`;
-  }
-
+  // No info, or a cd the guard couldn't read: fail open.
+  if (typeof repo !== 'string') return null;
+  const cfgMain = process.env.CLAUDE_CONFIG_REPO || join(workspaceRoot(), 'claude-config');
+  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (!same(resolve(repo), resolve(cfgMain)) || /[/\\]\.worktrees[/\\]/.test(resolve(repo))) return null;
   const branch = currentBranch(repo);
   if (branch === null) return null; // not a repo / git unavailable — fail open
-
-  const name = basename(repo);
-  const cfgMain = process.env.CLAUDE_CONFIG_REPO || join(workspaceRoot(), 'claude-config');
-
-  // 6. claude-config main checkout never switches branches
-  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
-  const onCfgMain = same(resolve(repo), resolve(cfgMain)) && !/[/\\]\.worktrees[/\\]/.test(resolve(repo));
-  if (isRestore && onCfgMain) {
+  if (isRestore) {
     return `No file restores on the claude-config main checkout: it holds other sessions' uncommitted live edits, and a restore discards theirs along with yours. Undo your own change with the Edit tool; after a merge, scripts/land.mjs sync does the restore safely.`;
   }
-  if (isSwitch && onCfgMain) {
+  if (isSwitch) {
     return `The claude-config main checkout is the live junction surface — it never leaves main. Use scripts/land.mjs (ephemeral worktree) to commit, or work in a worktree.`;
   }
-
-  // 5. no commits on main/master in code repos (docs repo keeps its direct lane)
-  if (isCommit && (branch === 'main' || branch === 'master')) {
-    if (name === 'docs') return null;
-    if (/[/\\]\.worktrees[/\\]/.test(resolve(repo))) return null;
-    // Root commit: no origin/main yet, so no worktree to cut. Only the first commit of a
-    // chain gets it; after it the repo is born, so a later one gets the normal verdict.
-    // Keyed by toplevel so cd/-C into a subdir or a case variant can't claim a second.
-    // A commit after `||` only runs if the first failed (still unborn): it neither spends
-    // nor is denied the exemption. A commit in a loop body may be several commits, and a
-    // hook can only block the whole command, so a loop commit gets no exemption at all.
-    // A commit in another arm of an if/elseif/else chain than every commit that spent
-    // it runs instead of them, so it gets the exemption as well (#167).
-    if (!loop && isUnborn(repo)) {
-      const key = repoKey(repo);
-      const spent = rooted.get(key) ?? [];
-      // A viaOr commit spends the exemption too: if it runs, the repo is born.
-      if (viaOr || spent.every((s) => exclusive(s, arms))) {
-        rooted.set(key, [...spent, arms]);
-        return null;
-      }
-    }
-    return `"${repo}" is on ${branch} — never commit to the default branch. Cut a branch in a worktree (scripts/worktree.mjs new) first.`;
+  if (branch === 'main') {
+    return `No commits in the claude-config main checkout: it holds other sessions' uncommitted live edits, which a commit there sweeps in or strands, and a local commit on main breaks land.mjs sync's fast-forward. Commit in a worktree, or land the change with scripts/land.mjs start.`;
   }
-
   return null;
 }
 
@@ -2380,12 +1801,10 @@ function guard(payload) {
   const cmd = payload?.tool_input?.command || '';
   const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
   const tool = payload?.tool_name;
-  const browser = browserCommand(cmd, cwd, tool);
-  // Browser before push: a blocked command never spends a push approval.
+  // Push last: a blocked command never spends a push approval.
   const reason =
     staticCheck(cmd, cwd, tool) ||
     branchRules(cmd, cwd, tool) ||
-    (browser && browserGateReason(browser, payload?.session_id, payload?.transcript_path)) ||
     pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool);
   if (reason) block(reason);
   // Last, so a command another rule blocks never spends the clearance.

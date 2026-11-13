@@ -15,7 +15,7 @@ can't parse (malformed JSON) fails closed too, since nothing was checked.
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all` in any flag order; staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward (the block message carries a runnable rewrite when the command holds one plain `gate [2>&1] | filter` pipeline: `gate > $TMPDIR/gate-$$.log 2>&1; echo rc=$?; filter < log`, the rest kept as written, #295); PS `Set-Content`/`Out-File`/`Add-Content` and the `sc`/`ac` aliases (mojibake); `git commit` on main/master in code repos (docs repo, worktrees, and a repo with no commits yet exempt); branch switches on the claude-config main checkout; `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent; an approval whose first gated call is a lone canonical `git push <remote> <branch>`, `gh pr create` or `gh pr merge` covers that branch's whole ship, #305); headed Playwright (`--headed`/`--ui`/`--debug`, `codegen`, `show-report`, `show-trace`, `open`) without browser consent (same rule as `browser-gate.mjs`). A PowerShell `if`/`elseif`/`while` condition is read as a command, so a gated verb inside one is gated (#214). Every rule matches a command by name, its basename less `.exe` in any case (`C:/…/git.exe`, `GIT`), read through `env`/`timeout`/`nohup`/`time` and their options, so `timeout 60 git push` is gated (#239); a shell's line is parsed as commands past `bash -c`/`sh -c` (`-c` alone or in a flag cluster: `bash -lc`), `powershell`/`pwsh` `-Command`/`-c`, and `eval`/`iex`. These are the shapes real sessions use: #291 cut the readers for every other prefix (`sudo`, `nice`, `strace`, `watch`…), runner (`xargs`, `find -exec`, `parallel`) and shell (`cmd /c`, `zsh`, busybox, `-EncodedCommand`), which only guard development ever ran, along with rule 11's transcript and gate-state write check (#190): a model that would forge its own approval can edit this hook too. Static, so best-effort — a script file is out of sight. Also blocks a `node`/`bun` `-e`/`--eval`/`-p`/`--print` script or a `deno eval` script holding a substitution its shell runs before the runtime starts — in bash an unescaped backtick or `$(` outside single quotes, in PowerShell a `$(` (a backtick is its escape char) — as a JS template literal in a double-quoted `node -e` did during #249: single-quote the script or Write it to a file (#258; read through prefixes, groups and a shell's `-c` line). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all/.` and `git commit -a` in any flag order, in a shared checkout (a main checkout under the workspace root; a linked worktree, a repo outside the workspace and `git add -N` pass, and a dir the guard can't resolve or place in a repo counts as shared, #368); staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward (one fixed message: run the gate unpiped, redirect it to a log and `echo rc=$?`, #368); PS `Set-Content`/`Out-File`/`Add-Content` and the `sc`/`ac` aliases (mojibake); branch switches, file restores and commits on main in the claude-config main checkout (`land.mjs` commits from its own worktree); `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent; an approval whose first gated call is a lone canonical `git push <remote> <branch>`, `gh pr create` or `gh pr merge` covers that branch's whole ship, #305). A PowerShell `if`/`elseif`/`while` condition is read as a command, so a gated verb inside one is gated (#214). Every rule matches a command by name, its basename less `.exe` in any case (`C:/…/git.exe`, `GIT`), read through `env`/`timeout`/`nohup`/`time` and their options, so `timeout 60 git push` is gated (#239); a shell's line is parsed as commands past `bash -c`/`sh -c` (`-c` alone or in a flag cluster: `bash -lc`), `powershell`/`pwsh` `-Command`/`-c`, and `eval`/`iex`. These are the shapes real sessions use: #291 cut the readers for every other prefix (`sudo`, `nice`, `strace`, `watch`…), runner (`xargs`, `find -exec`, `parallel`) and shell (`cmd /c`, `zsh`, busybox, `-EncodedCommand`), which only guard development ever ran. Static, so best-effort — a script file is out of sight. Also blocks a `node`/`bun` `-e`/`--eval`/`-p`/`--print` script or a `deno eval` script holding a substitution its shell runs before the runtime starts — in bash an unescaped backtick or `$(` outside single quotes, in PowerShell a `$(` (a backtick is its escape char) — as a JS template literal in a double-quoted `node -e` did during #249: single-quote the script or Write it to a file (#258; read through prefixes, groups and a shell's `-c` line). |
 | `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`. Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | A model-omitted dispatch on a frontmatter-less type gets `model: sonnet` via `updatedInput` (with `permissionDecision: allow`, which is the only documented pairing; ledger line `FILL`) when the session model is known and not billed. Otherwise it blocks (#74). Also blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `agent-name-guard.mjs` | PreToolUse (`Agent`) | In company context only (main session: a `custom-title.json` title in the new grammar, role + charge, or a legacy `director-*`; subagent caller: its `meta.json` name, else description, is a new-grammar name, a legacy tree name, or a legacy typed name with a role; elsewhere every spawn passes, named or not), a spawn's name (`name`, else `description`) must be lowercase in the new grammar `<role>_<kind>_<target>` (lib's `parseAgentName`, built by `session-name.mjs <role> <kind> <target…>`) or a legacy tree name with a worker, for in-flight batches. Blocks a missing or off-grammar name; no subtree, scope or leaf rules (#360). A block holds beside agent-model-guard's allow + `updatedInput` (deny wins, as the Agent SDK hooks page documents; unverified live for the CLI). Fails open: naming isn't a safety boundary (#272). |
@@ -30,7 +30,7 @@ can't parse (malformed JSON) fails closed too, since nothing was checked.
 
 ## bash-guard details
 
-**Commands, not text** — the git rules (1, 2, 5, 6), the gate-pipe rule (3),
+**Commands, not text** — the git rules (1, 2, 6), the gate-pipe rule (3),
 the cmdlet rule (4) and the push gate (8) read parsed commands, so quoted text
 never trips them: `grep -rn "git add -A"`, `grep -n "Set-Content"` and
 `npm view vitest | tail` pass, while `bash -c "git add -A"` still blocks. Rule 3
@@ -60,34 +60,23 @@ fixed false verdict; change them only with a test:
   `git commit -m "handle .env loading"` stages nothing and must not block.
 - Flag rules are scanned **per clause**, so `git add -p a.ts && grep -A 3 x a.ts`
   is not a `git add -A`.
-- The branch rules judge each **git call** — a clause whose command word is
+- The git rules judge each **git call** — a clause whose command word is
   `git` (quoted text and `echo "git commit"` are not calls; `bash -c "…"` is
   parsed) — in the repo it runs in: the payload cwd walked through every
-  `cd`/`Set-Location`/`pushd`/`popd` clause **before that call**, then `-C`. The
-  workspace root is not itself a repo, so `cd <repo> && git commit` is the shape
-  they must see, and `cd a; git status; cd docs && git commit` commits in docs.
-  pushd stacks are modelled (`-n` pushes without moving; a bare `pushd` on a
-  non-empty stack makes the dir unknown, since bash swaps but PowerShell's
-  alias pushes and stays; `+N`/`-N` makes the dir unknown;
-  `Push-Location`/`Pop-Location -StackName s` use stack `s`). On Windows a Git
-  Bash `/c/…` target is read as `C:/…`. A target that still holds a variable
-  after `$HOME`/`${HOME}`/`$env:HOME`/`$env:USERPROFILE`/`$PWD`/`~` expand
-  (`cd $d`, `Set-Location $_.FullName`, `cd "$(…)"`), `cd -`, a pop with no
-  known dir, or a relative `-C` from an unknown dir makes the repo unknown until
-  a `cd` to an absolute, `~`/`$HOME` or bare (home) target, a popd back to a
-  known dir, or an absolute `git -C`. A commit there is blocked, so commit with
-  a literal path or `git -C <literal path>` (#163). A bare literal assignment
-  earlier in the command resolves its name (`W=…; cd "$W"`, `export`/`declare`/
-  `local`/`readonly W=…`, `$W = '…'`; bash names case-sensitive, PowerShell's
-  not; an `&&` chain keeps it; a bare `export W`/`readonly W`/`declare -x W`
-  keeps its value). A prefix one (`W=x git -C $W …`) doesn't, and these leave
-  the name unknown: a substitution or unresolved value, `+=`, a flag beside a
-  `W=` (`declare -r W=…`), a bare `local W`, `unset`/`read`/`mapfile`, a
-  `for` loop var, `$W.Member`/`$W[0]`, and an
-  assignment in a loop, subshell, pipeline, background job, if/case, block
-  body or after `||`. A switch or restore in an unknown dir is not judged.
+  literal `cd`/`Set-Location`/`pushd` clause **before that call**, in text
+  order, then `-C`. The workspace root is not itself a repo, so
+  `cd <repo> && git commit` is the shape they must see, and
+  `cd a; git status; cd docs && git commit` commits in docs. Only a literal
+  target is read (#368): `~` expands, and on Windows a Git Bash `/c/…` target
+  is `C:/…`, but a variable or substitution (`cd $d`, `cd "$(…)"`,
+  `cd $HOME/x`), `cd -`, a `popd`, an option the guard doesn't know, or a
+  relative `-C` from one of those makes the repo unknown until the next
+  literal `cd` or absolute `git -C`. A bash `( … )` subshell, pipeline stage or
+  background job keeps its cd to itself; PowerShell runs a group and a stage
+  in place. Rule 1 counts an unknown dir as a shared checkout (use a literal
+  path); rule 6 does not judge a call there.
 - **Push/PR approval (rule 8)** — `git push` (`-C` composes the same as the
-  branch rules; `--dry-run` and remote branch deletes are exempt), `gh pr create` and `gh pr merge` are
+  git rules; `--dry-run` and remote branch deletes are exempt), `gh pr create` and `gh pr merge` are
   parsed by command word, same as `git`. Approval comes from the transcript:
   the hook walks `transcript_path`'s JSONL backward for two candidates — the
   latest record carrying `toolUseResult.answers` (an AskUserQuestion answer)
