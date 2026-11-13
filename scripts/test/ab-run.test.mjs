@@ -7,7 +7,7 @@ import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isolatedEnv, spawnHarness, tempDir } from './_spawn.mjs';
@@ -61,6 +61,7 @@ writeFileSync(e.AB_FAKE_REPORT, JSON.stringify({
   harnessCheckout: existsSync(join(e.HOME, 'code', 'claude-config')),
   skills: existsSync(join(cfg, 'skills')) ? readdirSync(join(cfg, 'skills')) : [],
   agents: existsSync(join(cfg, 'agents')) ? readdirSync(join(cfg, 'agents')) : [],
+  agentDefs: Object.fromEntries(['unit.md', 'tester.md'].filter((f) => existsSync(join(cfg, 'agents', f))).map((f) => [f, readFileSync(join(cfg, 'agents', f), 'utf8')])),
   rules: existsSync(join(cfg, 'rules')) ? readdirSync(join(cfg, 'rules')) : [],
   settings: JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')),
   claudeJson: JSON.parse(readFileSync(join(cfg, '.claude.json'), 'utf8')),
@@ -132,7 +133,11 @@ const LEAKS = {
 /** The live hook path hooks/README.md spells, as the real one does. */
 const README_PATH = `${code.replace(/\\/g, '/')}/claude-config/hooks/bash-guard.mjs`;
 /** The arms a full round runs in; the wreck and locked rounds run current and bare only. */
-const ARMS3 = ['current', 'bare', 'solo'];
+const ARMS3 = ['current', 'bare', 'solo', 'unit'];
+/** #385: the unit definitions in the live harness's working tree (today's, not the ticket parent's). */
+const UNIT_DEFS = { 'unit.md': '---\nname: unit\ntools: Read, Agent\n---\n\nUNIT-DEF-MARK\n', 'tester.md': '---\nname: tester\n---\n\nTESTER-DEF-MARK\n' };
+/** The temp and results dirs of the unit round whose overlay source is missing. */
+const missing = { temp: join(home, 'tm'), out: join(home, 'out-missing') };
 /** Every file under `dir`, recursively. */
 const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map((f) => join(dir, String(f))).filter((f) => statSync(f).isFile()) : []);
 
@@ -165,6 +170,8 @@ before(() => {
   put(join(cc, 'a.txt'), 'SECRET-FIX\n');
   git(cc, 'commit', '--quiet', '-am', 'fix: the answer (#1)');
   fx.merge = git(cc, 'rev-parse', 'HEAD');
+  // Uncommitted, as a definition being written in the live checkout would be: the unit arm takes today's file.
+  for (const [f, text] of Object.entries(UNIT_DEFS)) put(join(cc, 'agents', f), text);
   // The user's real config, as the runner finds it.
   const live = cc.replace(/\\/g, '/');
   put(join(home, '.claude', 'settings.json'), JSON.stringify({
@@ -192,8 +199,8 @@ before(() => {
   put(join(home, 'fake-claude.mjs'), FAKE);
   // current keeps its round (--keep); bare and solo take the default, which removes it after capture.
   // Only current spawns a subagent (AB_FAKE_SPAWN).
-  const runArm = (arm, { temp, out, wrecks, locks }) => {
-    const report = join(home, `report-${arm}${wrecks ? '-wreck' : ''}${locks ? '-locked' : ''}.json`);
+  const runArm = (arm, { temp, out, wrecks, locks, tag = '' }) => {
+    const report = join(home, `report-${arm}${tag}${wrecks ? '-wreck' : ''}${locks ? '-locked' : ''}.json`);
     const r = spawnHarness(RUN, ['--manifest', join(home, 'm', 'manifest.json'), '--only', 'claude-config-1', '--arm', arm, '--run', '1', '--out', out, ...(arm === 'current' ? ['--keep'] : [])], {
       home,
       env: {
@@ -214,6 +221,36 @@ before(() => {
   for (const arm of ['current', 'bare']) fx.wreck[arm] = runArm(arm, { temp: wreck.temp, out: wreck.out, wrecks: true });
   fx.locked = {};
   if (!asRoot) for (const arm of ['current', 'bare']) fx.locked[arm] = runArm(arm, { temp: locked.temp, out: locked.out, locks: true });
+  // #385: a unit round whose overlay source is gone fails before claude starts.
+  fx.blobs = Object.fromEntries(Object.keys(UNIT_DEFS).map((f) => [f, git(cc, 'hash-object', '--', `agents/${f}`)]));
+  rmSync(join(cc, 'agents', 'tester.md'));
+  fx.missing = runArm('unit', { temp: missing.temp, out: missing.out, tag: '-missing' });
+});
+
+test('#385: unit runs the current harness with the live unit and tester definitions overlaid, as the unit agent', () => {
+  const cur = fx.current.report;
+  const unit = fx.unit.report;
+  assert.deepEqual(unit.argv, [...cur.argv, '--agent', 'unit']);
+  assert.equal(unit.prompt, cur.prompt, 'the prompt is byte-identical across arms');
+  assert.deepEqual(unit.agents.sort(), [...cur.agents, 'tester.md', 'unit.md'].sort());
+  assert.deepEqual(unit.agentDefs, UNIT_DEFS, 'the overlay copies the live files byte for byte');
+  assert.deepEqual(cur.agentDefs, {}, 'current runs the ticket-era agents only');
+  for (const k of ['skills', 'rules', 'claudeJson', 'harnessCheckout']) assert.deepEqual(unit[k], cur[k], k);
+  assert.deepEqual(unit.ancestors, [join(fx.unit.result.roundRoot, 'code', 'CLAUDE.md')]);
+  // Each overlaid file's git blob, so a run names the definitions it used.
+  assert.deepEqual(fx.unit.result.agentOverlay, [{ file: 'agents/unit.md', blob: fx.blobs['unit.md'] }, { file: 'agents/tester.md', blob: fx.blobs['tester.md'] }]);
+  for (const arm of ['current', 'bare', 'solo']) assert.equal(fx[arm].result.agentOverlay, null, arm);
+  assert.match(fx.unit.r.stdout, /subagents: none spawned/);
+  assert.deepEqual(fx.unit.result.subagents.notes, ['none spawned: this unit run measures the unit agent working alone, not a unit spawning workers']);
+});
+
+test('#385: a unit round whose overlay source is missing fails before claude starts, naming the file', () => {
+  const { r, report, result } = fx.missing;
+  assert.notEqual(r.status, 0);
+  assert.ok(r.stderr.includes(`the unit arm overlays ${join(code, 'claude-config', 'agents/tester.md')}, which does not exist`), r.stderr);
+  assert.equal(report, null, 'claude never ran');
+  assert.equal(result, null);
+  assert.deepEqual(existsSync(join(missing.temp, 'ab')) ? readdirSync(join(missing.temp, 'ab')) : [], [], 'no round is left behind');
 });
 
 test('a live round runs to a result in every arm', () => {
@@ -458,7 +495,7 @@ test('grade.mjs excludes a contaminated run, holds a packet that still names its
   appendFileSync(join(runs, 'current-r2', 'diff.patch'), 'diff --git a/tmpl.md b/tmpl.md\n+**What:** <mechanism>\n');
   const r = spawnHarness(GRADE, ['--out', out, '--manifest', join(home, 'm', 'manifest.json')], { home });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /1 packet\(s\) in .*; excluded as contaminated: bare 1, current 0, solo 0; held as still identifying their arm: bare 0, current 1, solo 0/);
+  assert.match(r.stdout, /1 packet\(s\) in .*; excluded as contaminated: bare 1, current 0, solo 0, unit 0; held as still identifying their arm: bare 0, current 1, solo 0, unit 0/);
   assert.equal(readdirSync(join(out, 'packets')).length, 1);
   const key = JSON.parse(readFileSync(join(out, 'blind-key.json'), 'utf8'));
   assert.deepEqual(Object.values(key.packets), [{ ticket: 'claude-config-1', arm: 'current', run: 1 }]);

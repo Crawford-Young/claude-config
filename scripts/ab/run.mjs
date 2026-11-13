@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // run.mjs: the #271 A/B runner, bare Claude Code vs the harness at the ticket's parent, with and without
-// subagents (#374), on replayed claude-config tickets.
+// subagents (#374) and as the unit agent (#385), on replayed claude-config tickets.
 //
-//   node scripts/ab/run.mjs --dry-run [--only <ticket>] [--arm bare|current|solo] [--run <n>] [--out <dir>] [--manifest <file>]
-//   node scripts/ab/run.mjs --only <ticket> --arm <bare|current|solo> --run <n> [--keep] [--out <dir>] [--manifest <file>] [--timeout-min 120]
+//   node scripts/ab/run.mjs --dry-run [--only <ticket>] [--arm bare|current|solo|unit] [--run <n>] [--out <dir>] [--manifest <file>]
+//   node scripts/ab/run.mjs --only <ticket> --arm <bare|current|solo|unit> --run <n> [--keep] [--out <dir>] [--manifest <file>] [--timeout-min 120]
 //
 // Auth: a live run refuses to start without CLAUDE_CODE_OAUTH_TOKEN, and never copies your login.
 // Create a token once with `claude setup-token`, then run each cleared round from your own PowerShell
@@ -13,9 +13,10 @@
 //
 // A round is one (ticket, arm, run), built by round.mjs under <tmp>/ab/<round id>: the ticket repo at
 // its parent with no route to the fix, a home and temp (HOME, USERPROFILE, HOMEDRIVE+HOMEPATH, APPDATA,
-// LOCALAPPDATA, TEMP, TMP, TMPDIR), Claude config, gh and git of its own, and for the current and solo
-// arms the harness checked out at the ticket's harness commit. The issue body goes to `claude -p` on
-// stdin; bare adds --safe-mode, solo denies the Agent and Workflow tools, nothing else differs. Then
+// LOCALAPPDATA, TEMP, TMP, TMPDIR), Claude config, gh and git of its own, and for every arm but bare
+// the harness checked out at the ticket's harness commit. The issue body goes to `claude -p` on
+// stdin; bare adds --safe-mode, solo denies the Agent and Workflow tools, unit overlays today's
+// agents/unit.md and agents/tester.md and runs the session as the unit agent, nothing else differs. Then
 // the session's diff (committed, staged, unstaged, untracked, against the tree it started from), the
 // repo's own gates, claude's cost, turns and wall time, the round's transcripts with the subagents they
 // show (count, models, share of tokens and $), and a scan of transcripts, the diff's added lines and
@@ -66,6 +67,7 @@ function printPlan(p, cmd) {
   if (usesHarness(p.arm)) log(`  harness: claude-config at ${p.ticket.harness} -> ${l.harness}; skills, agents and hooks from it, its workspace/ as the ancestor CLAUDE.md chain`);
   else log('  harness: none (--safe-mode, no CLAUDE.md above the checkout, no hooks in settings)');
   if (p.arm === 'solo') log('  harness: as current, with the Agent and Workflow tools removed (--disallowedTools): no subagents');
+  if (p.arm === 'unit') log(`  harness: as current, plus ${p.overlay.map((o) => o.file).join(' and ')} overlaid from ${p.harnessSource} (today's definitions, not the ticket's) into ${join(l.config, 'agents')}, and the session run as the unit agent (--agent unit)`);
   log('  barrier: no remote, no gh login, no git credential helper or network transport (file stays, for the repo\'s tests); deny rules on the real workspace and config');
   log(`  $ ${show([...cmd, ...p.claude.args])} < ${join(p.resultsDir, 'prompt.md')}    (in the checkout)`);
   log('  $ git add -A into a scratch index, then git diff --cached --binary <baseline tree>    (diff.patch; the baseline is written before claude)');
@@ -140,7 +142,7 @@ async function runRound(p, cmd, { workspace, keep, timeoutMs }) {
 /** Build the round, run the session, capture it and write result.json. */
 async function playRound(p, cmd, { workspace, timeoutMs, token }) {
   const l = p.layout;
-  const { env, prompt } = prepareRound(p, { workspace });
+  const { env, prompt, overlay } = prepareRound(p, { workspace });
   writeFileSync(join(p.resultsDir, 'prompt.md'), prompt);
 
   // The tree the session starts from: the parent, plus whatever a fresh checkout re-cleans (line
@@ -171,6 +173,7 @@ async function playRound(p, cmd, { workspace, timeoutMs, token }) {
     checkout: l.checkout,
     parent: p.ticket.parent,
     harness: usesHarness(p.arm) ? p.ticket.harness : null,
+    agentOverlay: overlay,
     command: [...cmd, ...p.claude.args],
     startedAt: started.toISOString(),
     wallMs,

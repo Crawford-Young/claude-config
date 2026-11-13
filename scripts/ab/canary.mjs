@@ -98,6 +98,12 @@ export function deferralGap(a, { version, current }) {
   return `the offer has a deferred-tool loader (ToolSearch), so a missing Agent may only be deferred: run --arm current with the same --out first, on this claude (${version ?? 'unknown version'}), and it must pass with Agent in its list`;
 }
 
+/** The first non-blank line of an agent definition's body, below its frontmatter; null when there is none. */
+export function agentMarker(text) {
+  const body = text.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '');
+  return body.split(/\r?\n/).find((x) => x.trim())?.trim() ?? null;
+}
+
 /** The canary's verdict from what the requests show (`a`, from analyzeRequests). INCONCLUSIVE when no
  *  request reached the stub; else PASS only with `loggedIn` and, by arm: bare, nothing loaded; current
  *  and solo, the harness root CLAUDE.md and no memory file, and current offers the Agent tool while
@@ -111,7 +117,7 @@ export function canaryVerdict(arm, { plant, loggedIn, version = null, current = 
   if (plant) ok = usesHarness(arm) ? m.planted : !m.planted && a.memoryFiles.length === 0;
   else if (arm === 'bare') ok = a.claudeMdFiles.length === 0 && noMemory && !m.project && !m.root;
   else if (arm === 'solo') ok = m.root && noMemory && SOLO_DENIED_TOOLS.every((t) => !a.tools.includes(t)) && !deferralGap(a, { version, current });
-  else ok = m.root && noMemory && a.tools.includes('Agent');
+  else ok = m.root && noMemory && a.tools.includes('Agent') && (arm !== 'unit' || m.unit);
   return ok && loggedIn ? 'PASS' : 'FAIL';
 }
 
@@ -208,6 +214,8 @@ async function probe(plan, { arm, plant, out, base, workspace }) {
   // current and solo: the harness root CLAUDE.md in the round; bare: the user's real one, which must not load.
   const root = usesHarness(arm) ? join(l.code, 'CLAUDE.md') : join(workspace, 'CLAUDE.md');
   if (existsSync(root)) markers.root = readFileSync(root, 'utf8').split(/\r?\n/).find((x) => x.trim());
+  // unit: the session runs as the unit agent, so its definition body must reach the request.
+  if (arm === 'unit') markers.unit = agentMarker(readFileSync(join(l.config, 'agents', 'unit.md'), 'utf8'));
   const realMemory = realMemoryLine(workspace);
   if (realMemory) markers.realMemory = realMemory;
   if (plant) {

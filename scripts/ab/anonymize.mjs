@@ -14,6 +14,8 @@ const ARM_LABEL = new RegExp(`-(?:${ARMS.join('|')})-r(\\d+)\\b`, 'gi');
 const TEMP_PATH = /AppData[\\/]+Local[\\/]+Temp/i;
 // An added commit-body line, plain, bold or bulleted: `+What:`, `+**What:**`, `+- Verified:`, `+  * **Next:**`.
 const COMMIT_VOCAB = /^\+[ \t]*(?:[-*][ \t]+)?(?:\*\*)?(?:What|Verified|Next|Ruled out):/m;
+// #385: the unit arm's argv flag and its overlaid definitions name the arm.
+const UNIT_TELL = /--agent[= ]unit\b|agents[\\/]+(?:unit|tester)\.md/gi;
 const REDACTED = '<redacted>';
 
 /** A path in each spelling a log can carry it: JSON-escaped, backslash, forward slash, git-bash,
@@ -40,7 +42,7 @@ export function anonymize(text, { roots = [], tmp }) {
   let out = text;
   const variants = roots.flatMap(({ path, label }) => pathVariants(path, tmp).map((v) => ({ v, label })));
   for (const { v, label } of variants.sort((a, b) => b.v.length - a.v.length)) out = out.replace(new RegExp(ESC(v), 'gi'), label);
-  return out.replace(SAFE_MODE, REDACTED).replace(ARM_LABEL, '-<arm>-r$1');
+  return out.replace(SAFE_MODE, REDACTED).replace(UNIT_TELL, REDACTED).replace(ARM_LABEL, '-<arm>-r$1');
 }
 
 /** Identifying patterns still present in `text`: [{pattern, sample}]. Empty means it is safe to show a grader. */
@@ -55,6 +57,7 @@ export function leaks(text, { roots = [], tmp }) {
   }
   hit('temp path', TEMP_PATH);
   hit('safe-mode', new RegExp(SAFE_MODE.source, 'i'));
+  hit('unit agent', new RegExp(UNIT_TELL.source, 'i'));
   hit('arm label', new RegExp(ARM_LABEL.source, 'i'));
   hit('commit-body vocabulary', COMMIT_VOCAB);
   return found;

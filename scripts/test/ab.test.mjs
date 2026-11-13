@@ -37,9 +37,11 @@ import {
   transformSettings,
   usesHarness,
 } from '../ab/ab-lib.mjs';
+import * as abLib from '../ab/ab-lib.mjs';
 import { anonymize, dropFiles, leaks, pathVariants } from '../ab/anonymize.mjs';
 import { blindId, buildPacket, exclusionReason, gradeTemplate } from '../ab/grade.mjs';
 import { TOKEN_PLACEHOLDER, redactSecret, treeHasLine } from '../ab/round.mjs';
+import * as canaryMod from '../ab/canary.mjs';
 import { analyzeRequests, canaryVerdict, deferralGap, startStub } from '../ab/canary.mjs';
 import { transcriptTokens } from '../ab/results-lib.mjs';
 
@@ -136,7 +138,7 @@ test('#369: the manifest holds the seven project tickets as pending, apps 3, web
   assert.doesNotMatch(m.pending.find((t) => t.id === 'component-library-106').body, /!== undefined|passes `undefined`|wrapper/, 'symptom only, no fix');
   assert.match(m.pending.find((t) => t.id === 'dog-eat-dog-12').why, /test_lab_smoke\.gd/, 'the as-filed body\'s wrong file item is noted');
   // Pending tickets never run: the runner has no setup, LFS or per-repo harness step for them yet.
-  assert.equal(selectRounds(m, {}).length, 60);
+  assert.equal(selectRounds(m, {}).length, 80);
 });
 
 test('parseManifest checks each pending ticket like a ticket, except that its path is a project repo', () => {
@@ -279,8 +281,8 @@ test('transformSettings: current runs the harness checkout hooks, bare runs none
   assert.ok(settings.hooks.Stop, 'the input is not mutated');
 });
 
-test('usesHarness: current and solo run the harness, bare does not', () => {
-  assert.deepEqual(ARMS.filter(usesHarness), ['current', 'solo']);
+test('usesHarness: current, solo and unit run the harness, bare does not', () => {
+  assert.deepEqual(ARMS.filter(usesHarness), ['current', 'solo', 'unit']);
 });
 
 test('pruneClaudeJson keeps the account and drops per-project history and usage', () => {
@@ -304,7 +306,15 @@ test('the arms run the same command except that bare adds --safe-mode and solo d
     assert.equal(current[current.indexOf(flag) + 1], value, flag);
   }
   assert.ok(current.includes('-p'));
-  assert.throws(() => claudeArgs('other', opts), /arm must be one of bare, current, solo/);
+  assert.throws(() => claudeArgs('other', opts), /arm must be one of bare, current, solo, unit/);
+});
+
+test('#385: unit runs the current command with the main session run as the unit agent', () => {
+  const opts = { model: 'claude-opus-5-5', effort: 'high', permissionMode: 'auto', budgetUsd: 20 };
+  // claude --help (2.1.323): "--agent <agent> Agent for the current session. Overrides the 'agent' setting."
+  assert.deepEqual(claudeArgs('unit', opts), [...claudeArgs('current', opts), '--agent', 'unit']);
+  assert.equal(abLib.UNIT_AGENT, 'unit');
+  assert.deepEqual(abLib.UNIT_AGENT_FILES, ['agents/unit.md', 'agents/tester.md']);
 });
 
 test('childEnv drops the launching session identity, the OAuth token and every GitHub token, and keeps config dir and PATH', () => {
@@ -441,6 +451,9 @@ test('subagentNotes reports a current run that spawned none as measuring what so
   assert.deepEqual(subagentNotes('solo', two, null), ['solo spawned 2 subagent(s): spawning was not off']);
   assert.deepEqual(subagentNotes('bare', none, null), []);
   assert.deepEqual(subagentNotes('current', two, 3), ['claude reports 3 spawned, the transcripts show 2']);
+  // #385: a unit agent that spawned no worker measures the unit agent alone, not a unit tier.
+  assert.deepEqual(subagentNotes('unit', none, 0), ['none spawned: this unit run measures the unit agent working alone, not a unit spawning workers']);
+  assert.deepEqual(subagentNotes('unit', two, 2), []);
 });
 
 test('gateVerdict fails a green exit whose output trips failIf or lacks requireMatch, as CI does', () => {
@@ -711,13 +724,14 @@ test('addedLines keeps the lines a diff adds, read hunk by hunk, so context is s
 
 test('selectRounds narrows by --only, --arm and --run, and names a bad value', () => {
   const m = parseManifest(manifestText([ticket(), ticket({ id: 'demo-2' })]));
-  assert.equal(selectRounds(m, {}).length, 12);
+  assert.equal(selectRounds(m, {}).length, 16);
   assert.deepEqual(selectRounds(m, { only: 'demo-2', arm: 'bare', run: '2' }).map((r) => [r.ticket.id, r.arm, r.run]), [['demo-2', 'bare', 2]]);
-  assert.deepEqual(selectRounds(m, { only: 'demo-1', run: '1' }).map((r) => r.arm), ['bare', 'current', 'solo']);
+  assert.deepEqual(selectRounds(m, { only: 'demo-1', run: '1' }).map((r) => r.arm), ['bare', 'current', 'solo', 'unit']);
+  assert.deepEqual(selectRounds(m, { only: 'demo-1', arm: 'unit', run: '2' }).map((r) => [r.ticket.id, r.arm, r.run]), [['demo-1', 'unit', 2]]);
   assert.throws(() => selectRounds(m, { only: 'nope' }), /unknown ticket nope/);
-  assert.throws(() => selectRounds(m, { arm: 'x' }), /arm must be one of bare, current, solo/);
+  assert.throws(() => selectRounds(m, { arm: 'x' }), /arm must be one of bare, current, solo, unit/);
   assert.throws(() => selectRounds(m, { run: '3' }), /run must be 1\.\.2/);
-  assert.deepEqual(ARMS, ['bare', 'current', 'solo']);
+  assert.deepEqual(ARMS, ['bare', 'current', 'solo', 'unit']);
 });
 
 test('estimateRound scales the prior by size, then prefers measured runs of the ticket, then other measured runs', () => {
@@ -760,6 +774,23 @@ test('planRound fetches only the parent into a fresh repo, and both arms share e
   assert.deepEqual(solo.layout, p.layout);
   assert.deepEqual(solo.estimate, cur.estimate, 'solo gets the same estimate and cap');
   assert.equal(solo.resultsDir, join('C:\\O', 'runs', 'demo-1', 'solo-r1'));
+  for (const q of [p, cur, solo]) assert.deepEqual(q.overlay, [], `${q.arm} overlays nothing`);
+});
+
+test('#385: planRound gives unit the current plan, plus the unit definitions from the live harness overlaid into the round agents dir', () => {
+  const m = parseManifest(manifestText([ticket()]));
+  const cur = planRound(m, m.tickets[0], 'current', 1, WHERE, []);
+  const unit = planRound(m, m.tickets[0], 'unit', 1, WHERE, []);
+  assert.deepEqual(unit.claude.args, [...cur.claude.args, '--agent', 'unit']);
+  assert.deepEqual(unit.layout, cur.layout);
+  assert.deepEqual(unit.fetch, cur.fetch);
+  assert.deepEqual(unit.estimate, cur.estimate, 'unit gets the same estimate and cap');
+  assert.equal(unit.resultsDir, join('C:\\O', 'runs', 'demo-1', 'unit-r1'));
+  const live = join(WHERE.workspace, 'claude-config');
+  assert.deepEqual(unit.overlay, [
+    { file: 'agents/unit.md', from: join(live, 'agents/unit.md'), to: join(cur.layout.config, 'agents/unit.md') },
+    { file: 'agents/tester.md', from: join(live, 'agents/tester.md'), to: join(cur.layout.config, 'agents/tester.md') },
+  ]);
 });
 
 test('planRound caps both arms of a ticket the same, from the prior, whatever a measured run spent (#288)', () => {
@@ -788,13 +819,18 @@ test('run.mjs --dry-run prints each round with its commands and estimate, and to
   assert.match(r.stdout, /harness: claude-config at 8a7f289c6ee314eea26541ec41de4d326608fdfd/);
   assert.match(r.stdout, /harness: as current, with the Agent and Workflow tools removed \(--disallowedTools\): no subagents/);
   assert.match(r.stdout, /node --test "scripts\/test\/\*\.test\.mjs"/);
-  // Three arms, two runs each, each with its own estimate.
-  const total = /total: 6 round\(s\), est\. \$([\d.]+), ~(\d+) turns; bare 2 \$([\d.]+), current 2 \$([\d.]+), solo 2 \$([\d.]+)/.exec(r.stdout);
+  // #385: the unit arm, its overlay and its --agent flag.
+  assert.match(r.stdout, /claude-config-220 unit r2/);
+  assert.match(r.stdout, /--max-budget-usd \d+ --agent unit < /);
+  assert.ok(r.stdout.includes(`harness: as current, plus agents/unit.md and agents/tester.md overlaid from ${join(home, 'code', 'claude-config')} (today's definitions, not the ticket's) into `), r.stdout);
+  assert.match(r.stdout, /and the session run as the unit agent \(--agent unit\)/);
+  // Four arms, two runs each, each with its own estimate.
+  const total = /total: 8 round\(s\), est\. \$([\d.]+), ~(\d+) turns; bare 2 \$([\d.]+), current 2 \$([\d.]+), solo 2 \$([\d.]+), unit 2 \$([\d.]+)/.exec(r.stdout);
   assert.ok(total, r.stdout);
   const [usd, , ...perArm] = total.slice(1).map(Number);
   assert.equal(Math.round(perArm.reduce((s, x) => s + x, 0) * 100) / 100, usd);
   assert.match(r.stdout, /CLAUDE_CODE_OAUTH_TOKEN is not set: a live round will refuse to start\./);
-  assert.match(r.stdout, /\$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts\/ab\/run\.mjs --only <ticket> --arm <bare\|current\|solo> --run <n>/);
+  assert.match(r.stdout, /\$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts\/ab\/run\.mjs --only <ticket> --arm <bare\|current\|solo\|unit> --run <n>/);
   assert.match(r.stdout, /not as a persistent user env var/);
   assert.match(r.stdout, /HOMEDRIVE\+HOMEPATH, APPDATA, LOCALAPPDATA, TEMP, TMP and TMPDIR/);
   assert.match(r.stdout, /the round dir is removed after capture \(--keep retains it\)/);
@@ -811,7 +847,7 @@ test('run.mjs --dry-run prints each round with its commands and estimate, and to
 test('run.mjs refuses a live run that is not narrowed to exactly one round', () => {
   const r = spawnHarness(join(AB, 'run.mjs'), ['--only', 'claude-config-220']);
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /a live run takes exactly one round: --only <ticket> --arm <bare\|current\|solo> --run <n>/);
+  assert.match(r.stderr, /a live run takes exactly one round: --only <ticket> --arm <bare\|current\|solo\|unit> --run <n>/);
 });
 
 test('run.mjs and canary.mjs refuse to start without CLAUDE_CODE_OAUTH_TOKEN, and never fall back to copying the login', () => {
@@ -821,7 +857,7 @@ test('run.mjs and canary.mjs refuse to start without CLAUDE_CODE_OAUTH_TOKEN, an
   const env = { CLAUDE_CODE_OAUTH_TOKEN: '', TEMP: join(home, 't'), TMP: join(home, 't'), TMPDIR: join(home, 't') };
   const run = spawnHarness(join(AB, 'run.mjs'), ['--only', 'claude-config-220', '--arm', 'bare', '--run', '1', '--out', join(home, 'out')], { home, env });
   const canary = spawnHarness(join(AB, 'canary.mjs'), ['--arm', 'bare', '--out', join(home, 'out')], { home, env });
-  for (const [name, r, cmd] of [['run', run, 'run\\.mjs --only <ticket> --arm <bare\\|current\\|solo>'], ['canary', canary, 'canary\\.mjs --arm <bare\\|current\\|solo>']]) {
+  for (const [name, r, cmd] of [['run', run, 'run\\.mjs --only <ticket> --arm <bare\\|current\\|solo\\|unit>'], ['canary', canary, 'canary\\.mjs --arm <bare\\|current\\|solo\\|unit>']]) {
     assert.notEqual(r.status, 0, name);
     assert.match(r.stderr, /needs CLAUDE_CODE_OAUTH_TOKEN\. Create one once with `claude setup-token`/, name);
     assert.match(r.stderr, new RegExp(`\\$env:CLAUDE_CODE_OAUTH_TOKEN = Read-Host; node scripts/ab/${cmd}`), name);
@@ -902,6 +938,15 @@ test('anonymize redacts every arm label, solo included, and leaks names one left
     assert.deepEqual(leaks(`ran in x-${arm}-r1`, CTX).map((l) => l.pattern), ['arm label'], arm);
   }
   assert.deepEqual(leaks('a solo-run of x-solos-r1', CTX), [], 'a word that only contains an arm name is no label');
+});
+
+test('#385: anonymize redacts the unit tells (--agent unit, the overlaid unit and tester definitions), and leaks names one left in', () => {
+  const raw = 'claude -p --agent unit; --agent=unit\nread <home>/.claude/agents/unit.md and .claude\\agents\\tester.md\nper agents/implementer.md';
+  const out = anonymize(raw, CTX);
+  assert.equal(out, 'claude -p <redacted>; <redacted>\nread <home>/.claude/<redacted> and .claude\\<redacted>\nper agents/implementer.md');
+  assert.deepEqual(leaks(out, CTX), []);
+  for (const tell of ['--agent unit', 'agents/unit.md', 'agents\\tester.md']) assert.deepEqual(leaks(`x ${tell} y`, CTX).map((l) => l.pattern), ['unit agent'], tell);
+  assert.deepEqual(leaks('a unit test and the tester; --agent units', CTX), [], 'the words alone are no tell');
 });
 
 test('dropFiles removes harness-workflow files such as COMMIT_MSG_<n>.txt from a diff', () => {
@@ -1031,6 +1076,27 @@ test('canaryVerdict (#374): current needs the Agent tool offered, solo needs Age
   assert.equal(v('current', planted(false), { plant: true }), 'FAIL');
   assert.equal(v('bare', planted(false), { plant: true }), 'PASS');
   assert.equal(v('bare', planted(true), { plant: true }), 'FAIL');
+});
+
+test('canaryVerdict (#385): unit passes as current does, and only when the unit definition reached the request', () => {
+  const loaded = (tools, over = {}) => ({ requests: 1, claudeMdFiles: ['C:\\r\\code\\CLAUDE.md'], memoryFiles: [], markers: { project: true, root: true, realMemory: false, unit: true }, tools, ...over });
+  const v = (arm, a, opts = {}) => canaryVerdict(arm, { plant: false, loggedIn: true, ...opts }, a);
+  const offered = ['Agent', 'Bash', 'Read'];
+  assert.equal(v('unit', loaded(offered)), 'PASS');
+  assert.equal(v('unit', loaded(offered, { markers: { project: true, root: true, unit: false } })), 'FAIL', 'the session did not run as the unit agent');
+  assert.equal(v('unit', loaded(['Bash', 'Read'])), 'FAIL', 'a unit agent spawns its workers through Agent');
+  assert.equal(v('unit', loaded(offered, { markers: { project: true, root: false, unit: true } })), 'FAIL', 'unit runs the harness');
+  assert.equal(v('unit', loaded(offered, { memoryFiles: ['C:\\m\\MEMORY.md'] })), 'FAIL');
+  assert.equal(v('unit', loaded(offered), { loggedIn: false }), 'FAIL');
+  assert.equal(v('unit', loaded(offered, { requests: 0 })), 'INCONCLUSIVE');
+});
+
+test('agentMarker (#385) is the first line of an agent definition body, below its frontmatter', () => {
+  const { agentMarker } = canaryMod;
+  assert.equal(agentMarker('---\nname: unit\ntools: Read\n---\n\nYou are a unit agent. You own one issue.\n\nMore.\n'), 'You are a unit agent. You own one issue.');
+  assert.equal(agentMarker('---\r\nname: unit\r\n---\r\n\r\nBody line\r\n'), 'Body line');
+  assert.equal(agentMarker('No frontmatter here\n'), 'No frontmatter here');
+  assert.equal(agentMarker('---\nname: x\n---\n'), null);
 });
 
 test('the canary stub captures each Messages request and answers it as a stream and as JSON', async () => {
