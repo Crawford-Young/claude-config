@@ -207,13 +207,13 @@ const SWEEP = /\bxargs\b[^|;&\n]*\bgit\s+add\b|\bgit\s+add\s+(?:-[a-zA-Z]*u\b|--
 
 /** The check, as the report states it. classify() implements it, in this order. */
 const CHECK = [
-  'Each live block is judged from the transcript it sits in: the block, then the next tool calls (at most 10, ending at the next user prompt). A *like call* is the next allowed shell call doing the same act: a git add/commit (rules 1, 2), the same gate (3), a git commit (5), a git checkout/switch/restore (6), else at least half the same words.',
+  'Each live block is judged from the transcript it sits in: the block, then the next tool calls (at most 10, ending at the next user prompt). A *like call* is the next allowed shell call doing the same act: a git add/commit (rules 1, 2), the same gate, or qa.mjs run for its gates (not --help) in the same directory (3), a git commit (5), a git checkout/switch/restore (6), else at least half the same words.',
   "1. **false, since fixed** — the checkout's rules no longer block that command: always replayed for the static rules (1–4, 12); rules 5 and 6 read the repo's branch, so they are replayed only while it is still the branch the block names (rule 6: the claude-config main checkout on main), and a rule-5 unresolved dir always. A checkout without rule 5 or 9 (cut by #368) blocks none of theirs.",
   "2. **false, no harm** — the harm the rule names was absent: rule 1/2 staged in a worktree, the temp dir or a scratchpad (no other session's files; a `tmp/` segment inside a repo path is none of these), or `git add -N`; rule 4 wrote ASCII-only text with Set-Content/Add-Content (Out-File always counts: UTF-16 or a BOM on Windows PowerShell 5.1, the only PowerShell here); rule 5's repo was a temp repo or under the docs repo.",
   '3. **true, asked** — an AskUserQuestion came before any like call, and it is the next call or names the blocked act (rule 3: a pipe, gate or rc; rule 6: a checkout, restore, switch or branch; and so on).',
   '4. **true, dropped** — no like call followed (rule 3: **undecided**, there is no rerun to read the rc from).',
   '5. **false, bypass** — the like call did the same thing by another route: rule 1 `xargs git add`, `git add -u`, `git add $(git status…)`; rule 5 a `git branch -m … main`.',
-  "6. **false / true by the like call** — rule 3: a rerun meant to fail (its description or command says red, expect…fail, mutation or probe, or it feeds bash-guard.mjs a payload) is false; otherwise the rc echoed right after the gate decides (a qa.mjs run: its worst EXIT: line; no echo: Claude Code's exit code, only when the gate ran last): 0 is false (the pipe masked nothing), nonzero true; rule 5 with an unresolved dir: the like commit ran in a worktree or temp repo is false.",
+  "6. **false / true by the like call** — rule 3: a rerun meant to fail (its description or its own gate segment says red, expect…fail, mutation, or a run against a base or pre-change copy, or that segment feeds bash-guard.mjs a payload; other clauses of the command do not count) is false; otherwise the rc echoed right after the gate decides (a qa.mjs run: its worst EXIT: line; no echo: Claude Code's exit code, only when the gate ran last): 0 is false (the pipe masked nothing), nonzero true; rule 5 with an unresolved dir: the like commit ran in a worktree or temp repo is false.",
   '7. **true, remedy** — the harm was live (rule 1/2 a shared checkout, rule 4 as above, rule 5 a code repo on main, rules 7/9/12/nesting/crash by construction) and the like call took the rule\'s way.',
   '8. **undecided** — anything else; listed below with its command.',
   'Rule 8 (out of scope, #305) and the removed rules 10 and 11 are counted, not sorted. *Replay* counts the unique commands the current rules block (7: needs clearance; 8 and 9: a gated call, which blocks only without approval or consent); rules 5 and 6 depend on the branch at the time, so they are not replayed.',
@@ -287,6 +287,10 @@ function gateText(b, g) {
   return null;
 }
 
+const runsQa = (cmd) => /\bqa\.mjs\b/.test(cmd) && !/\s(?:--help|-h)(?=\s|$)/.test(cmd);
+const dirKey = (d) => String(d ?? '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+const sameDir = (a, c) => dirKey(a) === dirKey(c);
+
 /** Does allowed call `e` do the act block `b` was about? */
 function like(b, e, g) {
   if (b.rule === '1' || b.rule === '2') return SWEEP.test(e.cmd) || gitOf(g, e).some((c) => c.sub === 'add' || c.sub === 'commit');
@@ -294,7 +298,7 @@ function like(b, e, g) {
     // every word of the gate, in any order (a rerun adds flags), or qa.mjs, which runs every gate
     const gate = gateText(b, g);
     const words = wordSet(e.cmd);
-    return gate !== null && ([...wordSet(gate)].every((w) => words.has(w)) || /\bqa\.mjs\b/.test(e.cmd));
+    return gate !== null && ([...wordSet(gate)].every((w) => words.has(w)) || (runsQa(e.cmd) && sameDir(b.cwd, e.cwd)));
   }
   if (b.rule === '5') return gitOf(g, e).some((c) => c.sub === 'commit');
   if (b.rule === '6') return gitOf(g, e).some((c) => ['checkout', 'switch', 'restore'].includes(c.sub));
@@ -334,16 +338,24 @@ function rcOf(b, e, g) {
   return code ? Number(code[1]) : null;
 }
 
-/** A rerun meant to fail: a TDD red step (it says red, expect…fail, or runs tests against the
- *  base/main/pre-change copy) or a mutation run, by its description or command; or a guard probe
- *  (a payload fed to bash-guard.mjs, or a call that says probe). */
-const MEANT_TO_FAIL = /\b(?:red|mutation|mutant|probe)\b|\bexpect(?:s|ed|ing)?\b[^.;\n]{0,24}\bfail|\bagainst (?:the )?(?:base|main|old|original|pre-[\w-]+)\b/i;
-const meantToFail = (e) => MEANT_TO_FAIL.test(e.description ?? '') || MEANT_TO_FAIL.test(e.cmd) || /\bbash-guard\.mjs\b/.test(e.cmd);
+/** A rerun meant to fail: a TDD red step (it says red, expect…fail, or runs tests against a
+ *  base/main/pre-change copy of the code) or a mutation run, by the call's description or the
+ *  rerun's own gate segment; or a guard probe (that segment feeds a payload to bash-guard.mjs).
+ *  Other clauses of the command do not count. */
+const MEANT_TO_FAIL = /\b(?:red|mutation|mutant)\b|\bexpect(?:s|ed|ing)?\b[^.;\n]{0,24}\bfail|\bagainst (?:the )?(?:base|main|old|original|pre-[\w-]+)\b[^.;\n]{0,24}\b(?:copy|version|code|checkout)\b/i;
+function meantToFail(b, e, g) {
+  const gate = gateText(b, g);
+  const parts = g.clauses(g.scrub(e.cmd)).map((c) => c.replace(/^[({\s]+/, ''));
+  let k = gate === null ? -1 : parts.findIndex((c) => [...wordSet(gate)].every((w) => wordSet(c).has(w)));
+  if (k === -1) k = parts.findIndex((c) => runsQa(c));
+  const segment = k === -1 ? e.cmd : parts[k];
+  return MEANT_TO_FAIL.test(e.description ?? '') || MEANT_TO_FAIL.test(segment) || /\bbash-guard\.mjs\b/.test(segment);
+}
 
 /** The harm, decided by the like call where the block alone could not decide it (rules 3 and 5). */
 function after(b, e, g, h) {
   if (b.rule === '3') {
-    if (meantToFail(e)) return fact(false, 'the rerun was meant to fail (a TDD red step, a mutation run or a guard probe), so its rc hid nothing');
+    if (meantToFail(b, e, g)) return fact(false, 'the rerun was meant to fail (a TDD red step, a mutation run or a guard probe), so its rc hid nothing');
     const rc = rcOf(b, e, g);
     if (rc === null) return fact(null, 'the rerun shows no rc');
     return rc === 0 ? fact(false, 'the unpiped rerun passed, so the pipe masked nothing') : fact(true, `the unpiped rerun failed (rc ${rc}), which the pipe would have masked`);
@@ -394,13 +406,19 @@ function stillBlocked(b, g) {
 const ACT = {
   1: /\b(?:git add|stag(?:e|es|ed|ing)|sweep\w*|commit\w*)\b/i,
   2: /\.env\b|\bsecrets?\b/i,
-  3: /\b(?:pipe\w*|unpiped|gates?|rc|exit code)\b/i,
+  3: /\b(?:pipe\w*|unpiped|rc|exit code)\b/i,
   4: /\b(?:Set-Content|Out-File|Add-Content|encoding|BOM)\b/i,
   5: /\bcommit\w*/i,
   6: /\b(?:checkout|restore\w*|switch\w*|branch\w*|discard\w*)\b/i,
   7: /\b(?:fable|mythos|billed|FABLE OK)\b/i,
   12: /\b(?:eval|node -e|template literal|substitut\w+)\b/i,
 };
+
+/** Rule 3: does the question's text name the blocked gate command (every word of it)? */
+function namesGate(b, text, g) {
+  const gate = b.rule === '3' ? gateText(b, g) : null;
+  return gate !== null && typeof text === 'string' && [...wordSet(gate)].every((w) => wordSet(text).has(w));
+}
 
 /** One live block's verdict by CHECK: { verdict: 'true' | 'false' | 'undecided' | null (unsorted), why }. */
 export function classify(b, g) {
@@ -412,7 +430,7 @@ export function classify(b, g) {
   let next = null;
   for (const [i, e] of b.follow.entries()) {
     // Only an ask about the block: the next call, or one naming its act.
-    if (e.kind === 'ask' && (i === 0 || ACT[b.rule]?.test(e.text ?? ''))) return v('true', 'asked the user');
+    if (e.kind === 'ask' && (i === 0 || ACT[b.rule]?.test(e.text ?? '') || namesGate(b, e.text, g))) return v('true', 'asked the user');
     if (e.kind === 'shell' && !e.blocked && like(b, e, g)) {
       next = e;
       break;

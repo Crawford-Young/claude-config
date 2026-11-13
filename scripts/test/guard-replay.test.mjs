@@ -386,12 +386,37 @@ test('rule 3: a rerun that was meant to fail — a TDD red step, a mutation run,
   ]) {
     assert.deepEqual(classify(block('3', gate, [follow(rerun, { result: 'rc=1', description })]), guard), expected, description);
   }
-  assert.deepEqual(classify(block('3', gate, [follow(`${rerun} # mutation: isGate returns false`, { result: 'rc=1' })]), guard), expected, 'the command says so');
+  assert.deepEqual(classify(block('3', gate, [follow(rerun.replace('--test', '--test --test-name-pattern=mutation'), { result: 'rc=1' })]), guard), expected, 'the gate segment says so');
   const probe = 'echo \'{"tool_input":{"command":"node --test scripts/test/a.test.mjs | tail"}}\' | node hooks/bash-guard.mjs; echo rc=$?';
   assert.deepEqual(classify(block('3', gate, [follow(probe, { result: 'rc=2' })]), guard), expected, 'a guard probe');
   // An ordinary failing rerun is still true, and a red step that passed is plain false.
   assert.equal(verdictOf(block('3', gate, [follow(rerun, { result: 'rc=1', description: 'Rerun the tests unpiped' })])), 'true');
   assert.equal(verdictOf(block('3', gate, [follow(rerun, { result: 'rc=0', description: 'Confirm red' })])), 'false');
+});
+
+test('rule 3: meant-to-fail is read off the rerun\'s own gate segment and a description that says the failure is expected', () => {
+  const gate = 'node --test scripts/test/a.test.mjs 2>&1 | tail -8';
+  const t = 'node --test scripts/test/a.test.mjs';
+  const real = (cmd, o = {}) => verdictOf(block('3', gate, [follow(cmd, { result: 'rc=1', ...o })]));
+  assert.equal(real(`${t} > "$T/l" 2>&1; echo rc=$?; git diff --stat hooks/bash-guard.mjs`), 'true', 'another clause names bash-guard.mjs');
+  assert.equal(real(`${t} > "$T/l" 2>&1; echo rc=$?`, { description: 'Rerun the suite against main' }), 'true', 'against main alone is no red step');
+  assert.equal(real(`node probe.mjs; ${t} > "$T/l" 2>&1; echo rc=$?`), 'true', 'another clause runs a probe');
+  assert.equal(real(`${t} > "$T/l" 2>&1; echo rc=$?`, { description: 'Confirm red' }), 'false', 'a red step');
+});
+
+test('rule 3: a like call runs the same gate, or qa.mjs run for its gates, in the block\'s directory', () => {
+  const gate = 'node --test scripts/test/a.test.mjs 2>&1 | tail -8';
+  assert.equal(verdictOf(block('3', gate, [follow('node scripts/qa.mjs --help', { result: 'EXIT:1' })])), 'undecided', '--help runs no gate');
+  assert.equal(verdictOf(block('3', gate, [follow('node scripts/qa.mjs .', { result: 'EXIT:1', cwd: WT })])), 'undecided', 'another directory');
+  assert.equal(verdictOf(block('3', gate, [follow('node scripts/qa.mjs .', { result: 'EXIT:1' })])), 'true');
+});
+
+test('rule 3: a question about an unrelated gate is not asked about the block', () => {
+  const gate = 'cd /r && pnpm test 2>&1 | tail -5';
+  const rerun = 'cd /r && pnpm test > "$T/log" 2>&1; echo rc=$?';
+  const ask = (text) => ({ kind: 'ask', text });
+  assert.equal(verdictOf(block('3', gate, [follow('ls'), ask('Approve the push gate?'), follow(rerun, { result: 'rc=0' })])), 'false');
+  assert.equal(verdictOf(block('3', gate, [follow('ls'), ask('Run cd /r && pnpm test myself?'), follow(rerun, { result: 'rc=0' })])), 'true', 'names the gate command');
 });
 
 test('rule 3: the rc is the marker echoed right after the gate, never the worst of unrelated ones', () => {
