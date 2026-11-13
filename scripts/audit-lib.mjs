@@ -596,6 +596,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     for (const g of names.values()) g.windows = g.windows.size;
     for (const [type, ids] of Object.entries(agentRuns)) agents[type].runs = ids.size;
     const agentMix = agentMixOf(runSettings, redone, steered);
+    const runModel = new Map([...runSettings].map(([id, run]) => [id, run.main.model])); // the model of the run's most-used model x effort setting
 
     // cost-state is per transcript file: Claude Code's total beside the sum of the file's
     // windows. It counts more than the transcripts hold (see the header), so it is shown
@@ -655,7 +656,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       unusedSkills: installedSkills.filter((s) => !used.has(s)).sort(),
       docs,
       hooks: { blocks: hookBlocks, timed, fires: hookFires },
-      time: timeReport({ sessions, days, agents, runUsd, runPeak, runTokens, names }),
+      time: timeReport({ sessions, days, agents, runUsd, runPeak, runTokens, runModel, names }),
       inline: inlineReport(),
     };
   }
@@ -792,7 +793,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     for (const [key, tl] of lines) {
       if (!tl.agent || !tl.ts.length || timeOnly.has(key)) continue;
       const first = tl.ts.reduce((a, b) => Math.min(a, b)), wallMs = tl.ts.reduce((a, b) => Math.max(a, b)) - first;
-      agentRuns.push({ id: tl.agent.id, name: tl.agent.name ?? tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0, peak: cost.runPeak.get(tl.agent.id) || 0, tokens: cost.runTokens.get(tl.agent.id) || 0 });
+      agentRuns.push({ id: tl.agent.id, name: tl.agent.name ?? tl.agent.id, charge: nameKeyOf({ agent: tl.agent, window: tl.win }), sessionId: tl.win, type: tl.agent.type, model: cost.runModel.get(tl.agent.id), first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0, peak: cost.runPeak.get(tl.agent.id) || 0, tokens: cost.runTokens.get(tl.agent.id) || 0 });
       (wallsOf[tl.agent.type] ||= []).push(wallMs);
     }
     const agents = {};
@@ -1238,7 +1239,7 @@ function fitLines({ minRuns, gap, flags }) {
   return lines;
 }
 
-export function renderMarkdown(r, { top = 15 } = {}) {
+export function renderMarkdown(r, { top = 15, session = false } = {}) {
   const { totals: t, costState } = r;
   const delta = costState.reportedUsd ? ((costState.computedUsd - costState.reportedUsd) / costState.reportedUsd) * 100 : null;
   const out = [];
@@ -1287,7 +1288,7 @@ export function renderMarkdown(r, { top = 15 } = {}) {
       .map(([h, b]) => [h, b.count, byCount(b.reasons).slice(0, 3).map(([m, c]) => `${c}× ${m.replace(/\|/g, '/')}`).join('<br>')])));
   out.push('', '**Stop-hook runtime**', table(['hook', 'fires', 'p50 ms', 'p95 ms'], Object.entries(r.hooks.timed).map(([h, x]) => [h, x.fires, x.p50, x.p95])));
   out.push('', '**Other hook fires**', table(['hook event', 'fires'], byCount(r.hooks.fires)));
-  if (r.time) out.push('', renderTime(r.time, top));
+  if (r.time) out.push('', renderTime(r.time, top, session));
   if (r.inline) {
     out.push('', `## Inline edits vs dispatches (top ${top} main sessions by edits)`);
     out.push(table(['title', 'edits', 'files', 'dispatches', 'most files between dispatches'],
@@ -1318,7 +1319,7 @@ function overLineText(o) {
     table(['run', 'type', 'day', 'peak ctx', 'tokens', '$'], o.runs.map((x) => [cell(x.name), x.type, x.first, kt(x.peak), kt(x.tokens), usd(x.usd)]))].join('\n');
 }
 
-function renderTime(t, top) {
+function renderTime(t, top, session) {
   const x = t.totals, out = ['## Time'];
   out.push(`wall ${dur(x.wallMs)} · **active ${dur(x.activeMs)}** (idle gaps over ${t.idleGapMin} min removed) · of active: model ${share(x.modelMs, x.activeMs)} · tools ${share(x.toolsMs, x.activeMs)} · user ${share(x.userMs, x.activeMs)} · other ${share(x.otherMs, x.activeMs)}`);
   out.push('', '**Per day** (UTC; parallel sessions add)', table(['day', ...SPLIT_HEAD, '$'], t.days.map((d) => [d.day, ...splitCells(d), usd(d.usd)])));
@@ -1330,6 +1331,11 @@ function renderTime(t, top) {
   out.push('', '**Runs over the hard line**', overLineText(t.overLine));
   out.push('', `**Slowest agent runs** (top ${top})`, table(['type', 'session', 'day', 'wall', 'peak ctx', 'tokens', '$'],
     t.agentRuns.slice(0, top).map((a) => [a.type, a.sessionId.slice(0, 8), a.first, dur(a.wallMs), kt(a.peak), kt(a.tokens), usd(a.usd)])));
+  if (session) {
+    const rows = t.agentRuns.map((a) => ({ ...a, charge: a.charge ?? 'unnamed' }))
+      .sort((a, b) => a.charge.localeCompare(b.charge) || b.peak - a.peak);
+    out.push('', '**Agents per charge**', table(['charge', 'name', 'type', 'model', 'peak ctx', '$'], rows.map((a) => [cell(a.charge), cell(a.name), a.type, a.model ?? '', kt(a.peak), usd(a.usd)])));
+  }
   const lat = (o) => Object.entries(o).sort((a, b) => b[1].p95 - a[1].p95).slice(0, top).map(([k, l]) => [cell(k), l.calls, dur(l.p50), dur(l.p95), dur(l.totalMs)]);
   out.push('', `**Tool latency** (top ${top} by p95)`, table(['tool', 'calls', 'p50', 'p95', 'total'], lat(t.tools)));
   out.push('', `**Slowest commands** (top ${top} by p95)`, table(['command', 'calls', 'p50', 'p95', 'total'], lat(t.commands)));

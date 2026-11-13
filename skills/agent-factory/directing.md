@@ -33,7 +33,7 @@ An issue with several Done-when boxes goes to one `unit` agent (`agents/unit.md`
 - **Ask** the user everything the unit raised as `NEEDS_CONTEXT`, once, with AskUserQuestion.
 - **Ship**: you commit from the unit's commit-message file and run the ship question below. The unit never commits, pushes or opens a PR.
 
-Read each unit's and worker's peak context from `node scripts/audit.mjs --session <name> --with-agents` (`peak ctx` column; "Runs over the hard line") and post it on the issue, so the tier's cost is on record. A one-box, one-file issue still goes straight to an implementer: a unit there only adds a hop.
+Read each unit's and worker's peak context from `node scripts/audit.mjs --session <name> --with-agents` (the `**Agents per charge**` section, `peak ctx` column; "Runs over the hard line") and post it on the issue, so the tier's cost is on record. A one-box, one-file issue still goes straight to an implementer: a unit there only adds a hop.
 
 ## Ship
 
