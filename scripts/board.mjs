@@ -15,6 +15,8 @@
 // `drift <ref> <current> -> <derived>` for every Issue item, any repo:
 //   closed → Done (skipped in `prod`-topic repos: the QA pass is human)
 //   open with an open closing PR → Review;  `in-progress` label → In Progress;  else Todo
+// Also drift: a closed issue still labelled `in-progress` (prod repos too; board item or not, found by
+// repo query in every live repo); --apply removes the label.
 // Items added in the same run are not drift-checked (no status until Item-added fires).
 // --apply sets and reads back each drifted item. Exit nonzero only when gh fails.
 //
@@ -105,27 +107,37 @@ function repoTopics() {
   return { live: withTopic('board'), prod: new Set(withTopic('prod')) };
 }
 
-/** Open issues of `repos` with no item on the board: one aliased query per page round. */
-function missingOpenIssues(repos) {
-  const missing = [];
+/** Issues of `repos` matching `filter` (GraphQL issues() args), paged: one aliased query per page round. */
+function pagedIssues(repos, filter, nodeFields) {
+  const found = [];
   let pending = repos.map((repo) => ({ repo, after: null }));
   while (pending.length) {
     const parts = pending.map(
       ({ repo, after }, i) =>
-        `r${i}: repository(owner:${JSON.stringify(OWNER)}, name:${JSON.stringify(repo)}){issues(states:OPEN, first:100${after ? `, after:${JSON.stringify(after)}` : ''}){pageInfo{hasNextPage endCursor} nodes{number projectItems(first:50){nodes{project{id}}}}}}`,
+        `r${i}: repository(owner:${JSON.stringify(OWNER)}, name:${JSON.stringify(repo)}){issues(${filter}, first:100${after ? `, after:${JSON.stringify(after)}` : ''}){pageInfo{hasNextPage endCursor} nodes{number ${nodeFields}}}}`,
     );
     const data = graphql(`query{${parts.join(' ')}}`);
     const next = [];
     pending.forEach(({ repo }, i) => {
       const { pageInfo, nodes } = data[`r${i}`].issues;
-      for (const n of nodes) {
-        if (!n.projectItems.nodes.some((p) => p.project?.id === PROJECT_ID)) missing.push({ owner: OWNER, repo, number: n.number });
-      }
+      for (const n of nodes) found.push({ repo, node: n });
       if (pageInfo.hasNextPage) next.push({ repo, after: pageInfo.endCursor });
     });
     pending = next;
   }
-  return missing;
+  return found;
+}
+
+/** Open issues of `repos` with no item on the board. */
+function missingOpenIssues(repos) {
+  return pagedIssues(repos, 'states:OPEN', 'projectItems(first:50){nodes{project{id}}}')
+    .filter(({ node }) => !node.projectItems.nodes.some((p) => p.project?.id === PROJECT_ID))
+    .map(({ repo, node }) => ({ owner: OWNER, repo, number: node.number }));
+}
+
+/** Closed issues of `repos` still labelled `in-progress`, board item or not. */
+function closedInProgress(repos) {
+  return pagedIssues(repos, 'states:CLOSED, labels:["in-progress"]', '').map(({ repo, node }) => ({ owner: OWNER, repo, number: node.number }));
 }
 
 const ITEMS_QUERY = `query($cursor:String){user(login:${JSON.stringify(OWNER)}){projectV2(number:${PROJECT_NUMBER}){items(first:100, after:$cursor){pageInfo{hasNextPage endCursor} nodes{id fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}} content{__typename ... on Issue{number state repository{name owner{login}} labels(first:30){nodes{name}} closedByPullRequestsReferences(first:10, includeClosedPrs:false){nodes{state}}}}}}}}}`;
@@ -165,14 +177,28 @@ function cmdSweep(apply) {
     log(`added ${show(ref)}`);
   }
   let drift = 0;
+  const unlabel = (ref) => {
+    drift++;
+    log(`drift ${show(ref)} closed issue carries in-progress -> remove label`);
+    if (apply) gh(['issue', 'edit', String(ref.number), '--repo', `${ref.owner}/${ref.repo}`, '--remove-label', 'in-progress']);
+  };
+  const unlabeled = new Set(); // one edit per issue, whichever pass sees it first
   for (const it of boardIssues()) {
     if (added.has(it.itemId)) continue;
     const want = deriveStatus(it, prod);
-    if (want === null || want === it.current) continue;
-    drift++;
-    log(`drift ${show(it)} ${it.current ?? 'none'} -> ${want}`);
-    if (apply) setItemStatus(it.itemId, KEY_BY_NAME[want]);
+    if (want !== null && want !== it.current) {
+      drift++;
+      log(`drift ${show(it)} ${it.current ?? 'none'} -> ${want}`);
+      if (apply) setItemStatus(it.itemId, KEY_BY_NAME[want]);
+    }
+    // The label means active work: a closed issue (prod repos included) must not keep it.
+    if (it.state === 'CLOSED' && it.labels.includes('in-progress')) {
+      unlabeled.add(issueUrl(it));
+      unlabel(it);
+    }
   }
+  // Closed issues that were never on the board are invisible to the board query.
+  for (const ref of closedInProgress(live)) if (!unlabeled.has(issueUrl(ref))) unlabel(ref);
   log(`board sweep: ${missing.length} added, ${drift} drift${drift && !apply ? ' (fix: node ~/code/claude-config/scripts/board.mjs sweep --apply)' : ''}`);
 }
 
