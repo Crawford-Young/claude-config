@@ -225,6 +225,8 @@ resume block, comment blockers on the issue, then run the continuation skill),
 **250k** block (UserPromptSubmit exit 2). Per-band overrides: `CLAUDE_CTX_NUDGE`
 / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`.
 
+Measured 2026-11-13 (`node scripts/budget-replay.mjs`, 253 main-session windows): 193 passed 150k, 106 passed 200k, 33 passed 250k; clearing at each cap would have saved $14.48 / $14.08 / $22.70 of the $700.33 / $365.50 / $177.23 paid above them, before the cost of a continuation (#381).
+
 Why: cost and quality. The user works at a ~200k max per session, and
 $/request rises from $0.083 (100-200k) to $0.105-0.144 above 200k. The old
 fractions of a 1M window (400k / 700k / 940k) sat far above that, so the gauge
