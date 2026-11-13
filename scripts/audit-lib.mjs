@@ -302,7 +302,9 @@ function refusal(text) {
 export function createCollector({ prices, since, until, installedSkills = [], docPrefixes = [], idleGapMin = IDLE_GAP_MIN, tolerance = PRICE_TOLERANCE }) {
   const requests = new Map(); // requestId -> { u, model, day, ctx }
   const lines = new Map(); // sessionId or sessionId/agent -> timeline (#97), per file as windows share idle detection
-  const timeOnly = new Set(); // windows fed only so their file's time is whole (--session)
+  // fed only so their file's time is whole (--session): a main window by its window key, a subagent run
+  // by its own timeline key (lineKey), so a run charged elsewhere never hides the window it ran in (#389)
+  const timeOnly = new Set();
   const timedUuid = new Set();
   const seenUuid = new Set();
   const seenTool = new Set();
@@ -349,10 +351,12 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
   }
 
+  const lineKey = (ctx) => (ctx.agent ? `${ctx.sessionId}/${ctx.agent.id}` : ctx.sessionId);
+
   /** The context's timeline: a main file's carries its windows' starts, a
    *  subagent's the window it joined. */
   function timelineOf(ctx) {
-    const key = ctx.agent ? `${ctx.sessionId}/${ctx.agent.id}` : ctx.sessionId;
+    const key = lineKey(ctx);
     let tl = lines.get(key);
     if (!tl) {
       tl = { sessionId: ctx.sessionId, agent: ctx.agent, ts: [], reqs: new Map(), uses: [], byId: new Map(), prompts: [], lastInput: null, lastEnd: null };
@@ -449,7 +453,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     }
     fileOf.set(win, sid);
     if (ctx.timeOnly) {
-      timeOnly.add(win);
+      timeOnly.add(ctx.agent ? lineKey(ctx) : win);
       if (inRange(rec.timestamp)) {
         timeRecord(rec, ctx);
         trackSend(rec);
@@ -763,9 +767,9 @@ export function createCollector({ prices, since, until, installedSkills = [], do
    *  window is already inside the window's span. */
   function namedRunTimes() {
     const idleGapMs = idleGapMin * 60e3, runs = [];
-    for (const tl of lines.values()) {
+    for (const [key, tl] of lines) {
       const name = chargeKey(tl.agent?.name);
-      if (!name || !tl.ts.length || timeOnly.has(tl.win) || name === chargeKey(custom.get(tl.win))) continue;
+      if (!name || !tl.ts.length || timeOnly.has(key) || name === chargeKey(custom.get(tl.win))) continue;
       const ts = [...tl.ts].sort((a, b) => a - b);
       const run = { name, win: tl.win, wallMs: ts.at(-1) - ts[0], ...zeroSplit() };
       for (const [, split] of sweep(intervalsOf(tl, idleGaps(ts, idleGapMs)), ts[0], ts.at(-1))) for (const k of SPLIT) run[k] += split[k];
@@ -778,8 +782,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   /** Wall time per subagent run, first record to last, and per agent type. */
   function agentTimes(cost) {
     const agentRuns = [], wallsOf = {};
-    for (const tl of lines.values()) {
-      if (!tl.agent || !tl.ts.length || timeOnly.has(tl.win)) continue;
+    for (const [key, tl] of lines) {
+      if (!tl.agent || !tl.ts.length || timeOnly.has(key)) continue;
       const first = tl.ts.reduce((a, b) => Math.min(a, b)), wallMs = tl.ts.reduce((a, b) => Math.max(a, b)) - first;
       agentRuns.push({ id: tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0 });
       (wallsOf[tl.agent.type] ||= []).push(wallMs);
@@ -796,12 +800,13 @@ export function createCollector({ prices, since, until, installedSkills = [], do
    *  --session row matches its whole-root row, but its own failures aren't counted. */
   function toolTimes(idleOf) {
     const toolMs = {}, cmdMs = {}, blocks = {}, errors = {};
-    for (const tl of lines.values()) {
+    for (const [lineId, tl] of lines) {
       const idle = idleOf.get(tl.sessionId) || [];
+      const only = (u) => timeOnly.has(tl.agent ? lineId : u.win);
       const byName = new Map();
       for (const u of tl.uses) {
         (byName.get(u.name) || byName.set(u.name, []).get(u.name)).push(u);
-        if (timeOnly.has(u.win) || u.end === null || USER_TOOLS.has(u.name)) continue;
+        if (only(u) || u.end === null || USER_TOOLS.has(u.name)) continue;
         (toolMs[u.name] ||= []).push(u.end - u.t);
         if (u.cmd) (cmdMs[u.cmd] ||= []).push(u.end - u.t);
       }
@@ -814,7 +819,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         const okAfter = [];
         for (let i = list.length - 1; i >= 0; i--) { okAfter[i] = laterOk; if (list[i].end !== null && !list[i].err) laterOk = true; }
         list.forEach((u, i) => {
-          if (u.end === null || !u.err || timeOnly.has(u.win)) return;
+          if (u.end === null || !u.err || only(u)) return;
           const no = refusal(u.text);
           const [table, key, reason] = no ? [blocks, no.gate, no.reason] : [errors, u.name, errorReason(u.text)];
           const row = (table[key] ||= { count: 0, retried: 0, unresolved: 0, ms: 0, reasons: {} });
