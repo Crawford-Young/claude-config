@@ -490,7 +490,7 @@
    "kind": "script",
    "label": "qa.mjs",
    "file": "scripts/qa.mjs",
-   "summary": "Runs repo gates foreground and unpiped."
+   "summary": "Runs repo gates foreground and unpiped, one full run per machine behind a mkdir lock at ~/.claude/qa-lock (#384)."
   },
   {
    "id": "script:land",
@@ -623,6 +623,17 @@
    "rules": [
     "Run before a guard or approval-parser PR",
     "Report only, exit 0; local transcripts, never CI"
+   ]
+  },
+  {
+   "id": "script:budget-replay",
+   "kind": "script",
+   "label": "budget-replay.mjs",
+   "file": "scripts/budget-replay.mjs",
+   "summary": "Replays every subagent transcript: per run, peak context, idle wakes past 5 minutes with their cache-rewrite cost, and repeated full hand-backs, plus runs past 150k/200k/250k/300k by agent type (#381).",
+   "rules": [
+    "Report only; local transcripts, never CI",
+    "Main sessions are not runs"
    ]
   },
   {
@@ -1277,6 +1288,22 @@
   },
   {
    "from": "script:guard-replay",
+   "to": "store:transcripts",
+   "kind": "reads"
+  },
+  {
+   "from": "script:budget-replay",
+   "to": "script:audit-lib",
+   "kind": "reads",
+   "label": "walkTranscripts, readJsonl, priceUsage"
+  },
+  {
+   "from": "script:budget-replay",
+   "to": "script:lib",
+   "kind": "reads"
+  },
+  {
+   "from": "script:budget-replay",
    "to": "store:transcripts",
    "kind": "reads"
   },
