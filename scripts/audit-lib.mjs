@@ -163,7 +163,9 @@ function checkModelUsage(u, model, prices, share1h, tolerance) {
   return { status: 'drift', miss, band, longPrompt };
 }
 
-const depthOf = (u) => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+/** Context of one request: input + cache read + cache write. A run's peak is the largest of
+ *  these over its requests (one per requestId), never a sum; budget-replay shares this. */
+export const depthOf = (u) => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
 
 /** "PreToolUse:Bash hook error: [node "…/bash-guard.mjs"]: reason" → parts. */
 export function parseHookBlock(text) {
@@ -526,6 +528,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     const writeTiers = new Map(); // file + model -> cache-write tokens its transcript records, by tier
     const totals = { requests: 0, usd: 0, tokens: zero() };
     const days = new Map(), sessions = new Map(), agents = {}, agentRuns = {}, unpriced = {}, runUsd = new Map();
+    const runPeak = new Map(), runTokens = new Map(); // agent id -> largest single request's context / tokens over all requests
     const runSettings = new Map(); // agent id -> { type, name, first (ms), settings: model\neffort -> { model, effort, requests, usd } }
     const names = new Map(); // session key -> one row over every window and named subagent it holds
     for (const { u, model, effort, day, t, ctx } of requests.values()) {
@@ -563,6 +566,8 @@ export function createCollector({ prices, since, until, installedSkills = [], do
         bump(a.models, model);
         (agentRuns[ctx.agent.type] ||= new Set()).add(ctx.agent.id);
         runUsd.set(ctx.agent.id, (runUsd.get(ctx.agent.id) || 0) + cost);
+        runPeak.set(ctx.agent.id, Math.max(runPeak.get(ctx.agent.id) || 0, depthOf(u)));
+        runTokens.set(ctx.agent.id, (runTokens.get(ctx.agent.id) || 0) + Object.values(tk).reduce((a, b) => a + b, 0));
         const run = runSettings.get(ctx.agent.id) || runSettings.set(ctx.agent.id, { type: ctx.agent.type, name: ctx.agent.name, first: t, settings: new Map() }).get(ctx.agent.id);
         run.first = Math.min(run.first, t);
         const sk = `${model}\n${effort}`;
@@ -649,7 +654,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       unusedSkills: installedSkills.filter((s) => !used.has(s)).sort(),
       docs,
       hooks: { blocks: hookBlocks, timed, fires: hookFires },
-      time: timeReport({ sessions, days, agents, runUsd, names }),
+      time: timeReport({ sessions, days, agents, runUsd, runPeak, runTokens, names }),
       inline: inlineReport(),
     };
   }
@@ -785,7 +790,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     for (const [key, tl] of lines) {
       if (!tl.agent || !tl.ts.length || timeOnly.has(key)) continue;
       const first = tl.ts.reduce((a, b) => Math.min(a, b)), wallMs = tl.ts.reduce((a, b) => Math.max(a, b)) - first;
-      agentRuns.push({ id: tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0 });
+      agentRuns.push({ id: tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0, peak: cost.runPeak.get(tl.agent.id) || 0, tokens: cost.runTokens.get(tl.agent.id) || 0 });
       (wallsOf[tl.agent.type] ||= []).push(wallMs);
     }
     const agents = {};
@@ -1304,8 +1309,8 @@ function renderTime(t, top) {
     t.sessions.slice(0, top).map((s) => [s.first, cell(s.title || s.sessionId.slice(0, 8)).slice(0, 50), ...splitCells(s), usd(s.usd)])));
   out.push('', '**Agent time**', table(['type', 'runs', 'wall', 'p50 run', 'p95 run', '$'],
     Object.entries(t.agents).sort((a, b) => b[1].wallMs - a[1].wallMs).map(([k, a]) => [k, a.runs, dur(a.wallMs), dur(a.p50), dur(a.p95), usd(a.usd)])));
-  out.push('', `**Slowest agent runs** (top ${top})`, table(['type', 'session', 'day', 'wall', '$'],
-    t.agentRuns.slice(0, top).map((a) => [a.type, a.sessionId.slice(0, 8), a.first, dur(a.wallMs), usd(a.usd)])));
+  out.push('', `**Slowest agent runs** (top ${top})`, table(['type', 'session', 'day', 'wall', 'peak ctx', 'tokens', '$'],
+    t.agentRuns.slice(0, top).map((a) => [a.type, a.sessionId.slice(0, 8), a.first, dur(a.wallMs), kt(a.peak), kt(a.tokens), usd(a.usd)])));
   const lat = (o) => Object.entries(o).sort((a, b) => b[1].p95 - a[1].p95).slice(0, top).map(([k, l]) => [cell(k), l.calls, dur(l.p50), dur(l.p95), dur(l.totalMs)]);
   out.push('', `**Tool latency** (top ${top} by p95)`, table(['tool', 'calls', 'p50', 'p95', 'total'], lat(t.tools)));
   out.push('', `**Slowest commands** (top ${top} by p95)`, table(['command', 'calls', 'p50', 'p95', 'total'], lat(t.commands)));

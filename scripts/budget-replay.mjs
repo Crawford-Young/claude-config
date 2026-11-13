@@ -28,7 +28,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { priceUsage, readJsonl, walkTranscripts } from './audit-lib.mjs';
+import { depthOf, priceUsage, readJsonl, walkTranscripts } from './audit-lib.mjs';
 import { isMain, parseArgs } from './lib.mjs';
 
 export const IDLE_MS = 5 * 60e3; // the subagent prompt cache lives 5 minutes
@@ -39,7 +39,6 @@ export const SHINGLE = 5;
 export const REPEAT_SHARE = 0.5;
 export const REPEAT_MIN_WORDS = 50;
 
-const depthOf = (u) => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
 const stampOf = (rec) => Date.parse(rec?.timestamp || '') || null;
 const writesOf = (u) => {
   const cc = u.cache_creation;

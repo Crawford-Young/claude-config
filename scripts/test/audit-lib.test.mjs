@@ -666,6 +666,23 @@ test('time: a gap over the idle threshold is removed from active time, never fro
   assert.equal(s.modelMs + s.toolsMs + s.userMs + s.otherMs, s.activeMs);
 });
 
+test('a resumed subagent run has one peak context (largest single request), beside its cumulative tokens', () => {
+  const c = createCollector({ prices: PRICES });
+  const sub = { sessionId: 's1', agent: { id: 'p1', type: 'recon' } };
+  const req = (id, ts, u) => c.add(asst(id, usage({ ...u, cache_creation: { ephemeral_5m_input_tokens: u.cache_creation_input_tokens, ephemeral_1h_input_tokens: 0 } }), { ts }), sub);
+  // burst one, then a resume hours later; request r2 streams in two records (counts once)
+  req('r1', '2026-10-01T12:00:00Z', { input_tokens: 10e3, cache_read_input_tokens: 80e3, cache_creation_input_tokens: 10e3, output_tokens: 5 });
+  req('r2', '2026-10-01T12:01:00Z', { input_tokens: 20e3, cache_read_input_tokens: 100e3, cache_creation_input_tokens: 30e3, output_tokens: 1 });
+  req('r2', '2026-10-01T12:01:00Z', { input_tokens: 20e3, cache_read_input_tokens: 100e3, cache_creation_input_tokens: 30e3, output_tokens: 9 });
+  req('r3', '2026-10-01T18:00:00Z', { input_tokens: 5e3, cache_read_input_tokens: 110e3, cache_creation_input_tokens: 5e3, output_tokens: 2 });
+  req('r4', '2026-10-01T18:01:00Z', { input_tokens: 5e3, cache_read_input_tokens: 80e3, cache_creation_input_tokens: 5e3, output_tokens: 3 });
+  const [run] = c.report().time.agentRuns;
+  assert.equal(run.peak, 150e3, 'the largest one request (20k + 100k + 30k), not a sum across resumes');
+  assert.equal(run.tokens, 100e3 + 5 + 150e3 + 9 + 120e3 + 2 + 90e3 + 3, 'cumulative: every request once, inputs and outputs');
+  assert.notEqual(run.peak, run.tokens);
+  assert.match(renderMarkdown(c.report(), { top: 5 }), /\| recon \|[^\n]*\| 150k \| 460k \|/, 'the slowest-runs table shows the peak');
+});
+
 test('time: parallel subagents count once toward session time, each toward its own run', () => {
   const c = createCollector({ prices: PRICES, idleGapMin: 0.5 }); // 30 s: main alone would idle out
   feed(c, MAIN,
