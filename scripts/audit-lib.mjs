@@ -1302,10 +1302,13 @@ const splitCells = (x) => [dur(x.wallMs), dur(x.activeMs), share(x.modelMs, x.ac
 const SPLIT_HEAD = ['wall', 'active', 'model', 'tools', 'user', 'other'];
 const cell = (s) => String(s).replace(/\|/g, '/');
 
-/** Every run whose peak context passed the subagent budget's hard line (hooks/subagent-budget.mjs, #381), peak descending, with run counts. */
+/** Every agent that reached the subagent budget's hard line (hooks/subagent-budget.mjs, #381; >= like the hook), peak descending, with counts.
+ *  One row per agent id: a run resumed under a second main session has a timeline row per session, both carrying the id's combined figures. */
 export function overLine(agentRuns, { soft, hard } = BUDGET_LINES) {
-  const runs = agentRuns.filter((a) => a.peak > hard).sort((a, b) => b.peak - a.peak || a.id.localeCompare(b.id));
-  return { soft, hard, total: agentRuns.length, over: runs.length, overSoft: agentRuns.filter((a) => a.peak > soft).length, runs };
+  const byId = new Map(agentRuns.map((a) => [a.id, a]));
+  const uniq = [...byId.values()];
+  const runs = uniq.filter((a) => a.peak >= hard).sort((a, b) => b.peak - a.peak || a.id.localeCompare(b.id));
+  return { soft, hard, total: uniq.length, over: runs.length, overSoft: uniq.filter((a) => a.peak >= soft).length, runs };
 }
 
 function overLineText(o) {
