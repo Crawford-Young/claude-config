@@ -130,11 +130,13 @@ export function contextWindow({ dir = claudeDir, env = process.env, sessionId, s
  * The live context is the last MAIN-CHAIN assistant message's
  * input + cache_read + cache_creation. Sidechain (subagent) lines carry their
  * own, much smaller, usage — counting one of those reads a subagent's context
- * as the session's and under-reports, so they are skipped.
+ * as the session's and under-reports, so they are skipped. A subagent's own
+ * transcript (`subagents/agent-<id>.jsonl`) is all sidechain lines: read it with
+ * `{ sidechain: true }` (subagent-budget.mjs does).
  *
  * Returns null when the transcript carries no usable usage line.
  */
-export function contextTokens(text) {
+export function contextTokens(text, { sidechain = false } = {}) {
   const lines = (text || '').split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const l = lines[i];
@@ -145,7 +147,7 @@ export function contextTokens(text) {
     } catch {
       continue;
     }
-    if (o.isSidechain) continue;
+    if (o.isSidechain && !sidechain) continue;
     const u = o?.message?.usage;
     if (!u) continue;
     const n =

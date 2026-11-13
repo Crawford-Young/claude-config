@@ -23,6 +23,7 @@ can't parse (malformed JSON) fails closed too, since nothing was checked.
 | `pre-model-switch.mjs` | PreModelSwitch | Blocks a `/model` switch **to** fable/mythos without a live `FABLE OK` marker (exit 2), consuming the same single-use 30-minute marker as the Agent guard. Switching away is never gated and never spends clearance. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `post-model-switch.mjs` | PostModelSwitch | Records which model each session is on to `~/.claude/current-model.json`, keyed by `session_id`, newest 50 kept. Not a gate — it is the data `agent-model-guard.mjs` reads to catch a fork on a live fable session. Fires on Claude Code's own switches too (e.g. session resume), which is why records are never expired by age. |
 | `context-gauge.mjs` | UserPromptSubmit, PostToolUse | Reads the live context size from the transcript and forces a deliberate checkpoint before the session gets costly. Bands are **absolute tokens** — note at 150k (stop at the next green commit), louder at 200k (checkpoint, then the continuation skill), **blocks at 250k** on UserPromptSubmit; a known window only floors the block (`min(250k, 0.94 × window)`). PostToolUse emits the same notes as `additionalContext` (a block is announced once, never enforced there; subagent calls skipped); both triggers share one state file so each band fires once per session, decided under a `withClaim` lease so parallel calls crossing a band together announce it once. Escapes: any `/`-prefixed prompt, or `CONTEXT OK`. Bands re-arm when context drops back under the nudge line. Each state write sweeps week-old files (dead sessions and their claim/temp sidecars) from the state dir. Tune per band with `CLAUDE_CTX_NUDGE` / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`, or the floor with `CLAUDE_CTX_WINDOW`. |
+| `subagent-budget.mjs` | PreToolUse (no matcher) | The hand-back budget stop **inside subagents** (#381): acts only when the payload carries `agent_id`, on that subagent's own context (input + cache read + cache write of its latest request, read from `<session>/subagents/agent-<agent_id>.jsonl`). **150k** soft: one note per agent as `additionalContext` (finish the current step, write the commit-message file, hand back with what is left). **200k** hard: every tool but `Read`, `Write`, `Edit`, `MultiEdit`, `SubagentHandback` and `ToolSearch` is blocked (exit 2) with that instruction. Main sessions are untouched (context-gauge's). Tune with `CLAUDE_CTX_AGENT_SOFT` / `CLAUDE_CTX_AGENT_HARD`. Fails open. |
 | `session-start.mjs` | SessionStart | Emits the skill index (`skills/INDEX.md`) on every source, then open `in-progress` issues across owner Crawford-Young (one `gh search issues` call, at most 10, 3 s cap, silent on failure; `SESSION_START_GH` stubs it in tests); adds one line when `~/.claude/hook-errors.log` gained entries from the live `hooks/` directory since the last session start (count + newest hook; worktree/scratch/copy stacks ignored; marker `~/.claude/hook-errors.seen`, silent on first run); on startup/resume/clear adds one `/rename <role>_<kind>_<target>` line when the session's `session_title` is absent or not a grammar name (auto `code-51`, free text; #282), silent for a named session and for a window the hook titles itself; after a compaction adds the re-orientation reminder (domain CLAUDE.md reload). On startup/resume of an untitled session in a ticket worktree (branch `feat/<N>-…` etc.) it outputs JSON instead, the same text as `additionalContext` plus `sessionTitle: issue_<repo>-<N>` (#344, #360); an existing `session_title` is never overwritten. |
 | `active-repo.mjs` | PostToolUse (`Write\|Edit\|MultiEdit\|NotebookEdit`) | Records the git checkout of the edited file as `{ top, ts }` in `~/.claude/active-repo/<session_id>.json` (`CLAUDE_ACTIVE_REPO_DIR` overrides), so the statusline names the repo actually being edited, worktrees included, rather than the launch dir. Toplevel only — the statusline reads branch and worktree from `.git` at render. Prunes records older than a week. Never blocks (#77). |
 | `notification-toast.ps1` | Notification | Windows WinRT toast (WezTerm has no native notifications). Stays PowerShell — Windows-only integration. |
@@ -169,7 +170,8 @@ plain forward-slash absolute paths. Adjust the repo path per machine:
       { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/agent-model-guard.mjs"] },
       { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/agent-name-guard.mjs"] }
     ] },
-    { "matcher": "mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/browser-gate.mjs"] }] }
+    { "matcher": "mcp__claude-in-chrome__.*", "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/browser-gate.mjs"] }] },
+    { "hooks": [{ "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/subagent-budget.mjs"] }] }
   ],
   "UserPromptSubmit": [ { "hooks": [
     { "type": "command", "command": "node", "args": ["C:/Users/young/code/claude-config/hooks/fable-clearance-grant.mjs"] },
@@ -225,7 +227,7 @@ resume block, comment blockers on the issue, then run the continuation skill),
 **250k** block (UserPromptSubmit exit 2). Per-band overrides: `CLAUDE_CTX_NUDGE`
 / `CLAUDE_CTX_WARN` / `CLAUDE_CTX_BLOCK`.
 
-Measured 2026-11-13 (`node scripts/budget-replay.mjs`, 253 main-session windows): 193 passed 150k, 106 passed 200k, 33 passed 250k; clearing at each cap would have saved $14.48 / $14.08 / $22.70 of the $700.33 / $365.50 / $177.23 paid above them, before the cost of a continuation (#381).
+Measured 2026-11-13 (`node scripts/budget-replay.mjs`, 253 main-session windows): 193 passed 150k, 106 passed 200k, 33 passed 250k; clearing at each cap would have saved $14.48 / $14.08 / $22.70 of the $700.33 / $365.50 / $177.23 paid above them, before the cost of a continuation, so the bands were kept as a quality guard, not a cost one (user decision 2026-11-13, #381).
 
 Why: cost and quality. The user works at a ~200k max per session, and
 $/request rises from $0.083 (100-200k) to $0.105-0.144 above 200k. The old
@@ -254,3 +256,33 @@ repeated by the other; UserPromptSubmit still blocks at 250k even if
 PostToolUse already announced it. Overhead per PostToolUse call, p50 of 40
 spawns on a 300 KB transcript tail: 32.5 ms below the nudge line, 33.0 ms above
 it, versus 26.3 ms for a bare `node -e ""` (measured 2026-10-08, #122).
+
+## Subagent budget
+
+A director cannot see a running agent's size: in batch #368-#376 one ran to 431k before
+anyone looked. `subagent-budget.mjs` makes each subagent stop itself. Lines are the user's
+choice of 2026-11-13 from `node scripts/budget-replay.mjs`: 136 of 884 past runs (15%)
+passed the 200k hard line (#381).
+
+**Which agent, which transcript.** The hooks docs (common input fields) give PreToolUse
+and PostToolUse inside a subagent `agent_id` and `agent_type`; a main session has no
+`agent_id`, so it returns at once. Only SubagentStop names the subagent's own transcript
+(`agent_transcript_path`, `<session>/subagents/agent-<agent_id>.jsonl`), so the hook
+derives that path from `transcript_path`, `session_id` and `agent_id`, from a main or a
+subagent `transcript_path` alike (agent-name-guard finds `meta.json` the same way). Every
+record in that file is a sidechain record, read with context-gauge's
+`contextTokens(text, { sidechain: true })`. No file there: the call passes.
+
+**Soft line (150k).** Once per agent, the next tool call carries a PreToolUse
+`additionalContext` note: finish the current step, write the commit-message file, hand back
+with what is left. Once is kept in `~/.claude/subagent-budget/<session>__<agent>.json`,
+claimed under `withClaim`; each write sweeps week-old files.
+
+**Hard line (200k).** Every call is checked (no state): a tool outside the allow set exits
+2 with the instruction. The allow set is what writing the commit-message file and handing
+back take: `Read` (Edit, and a Write over an existing file, need the file read first),
+`Write`, `Edit`, `MultiEdit`, `SubagentHandback`, and `ToolSearch` for a deferred hand-back
+tool. An agent with no hand-back tool ends with its final message, which needs no call.
+
+Overrides: `CLAUDE_CTX_AGENT_SOFT` / `CLAUDE_CTX_AGENT_HARD`. It fails open: a budget, not a
+safety boundary.
