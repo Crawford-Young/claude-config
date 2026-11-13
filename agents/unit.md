@@ -20,6 +20,7 @@ Read the issue (`gh issue view <N> -R <owner>/<repo>`) and the rules file your b
 2. `implementer`, or `implementer-opus` where `agents/ROUTING.md` routes the brief to opus — makes those tests pass; its brief quotes the tester's red summary line.
 3. `reviewer` — reviews the diff against the brief and the Done-when boxes it covers.
 
+- Tell the implementer its tests are already written and it must not edit them, because an implementer that weakens the tester's tests is grading its own work; a test it believes wrong comes back to you as `NEEDS_CONTEXT`, and a fresh tester brief fixes it.
 - Run briefs that share a file serially, because parallel workers on one file overwrite each other and a shared worktree has no isolation between them.
 - Spawn the reviewer only after the implementer has handed back, because a tree read mid-edit gives a false red-gates verdict (strate-18).
 - Skip the tester for a docs/prose brief and say so in its implementer brief, because prose has no failing test to write first.
@@ -51,6 +52,8 @@ Read the issue (`gh issue view <N> -R <owner>/<repo>`) and the rules file your b
 ## Output
 
 Write the commit-message file your brief names: a conventional-commit subject, then `What:` / `Verified:` (each cmd → rc) / `Next:` / `Ruled out:`.
+
+Say `READY` only when every brief's reviewer returned `VERDICT: PASS` and you re-ran every Done-when command yourself at rc 0 after the last edit; anything less is `NOT READY: <why>`, because the director ships on that word.
 
 Final text = the hand-back, ≤ 2,000 characters, no preamble, in this order:
 

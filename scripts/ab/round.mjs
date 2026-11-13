@@ -89,8 +89,8 @@ export function prepareRound(plan, { workspace }) {
   if (arm === 'bare' && above.length) throw new Error(`a CLAUDE.md above the bare checkout would load: ${above.join(', ')}`);
   if (usesHarness(arm) && !above.includes(join(l.code, 'CLAUDE.md'))) throw new Error(`the ${arm} checkout has no harness CLAUDE.md above it (found: ${above.join(', ') || 'none'})`);
 
-  // The git blob of each overlaid file ties the run to the commit that holds those bytes.
-  const overlay = plan.overlay.length ? plan.overlay.map((o) => ({ file: o.file, blob: must(['git', '-C', plan.harnessSource, 'hash-object', '--', o.file]).trim() })) : null;
+  // The git blob of the bytes copied (the round's own file, unfiltered) ties the run to the commit that holds them.
+  const overlay = plan.overlay.length ? plan.overlay.map((o) => ({ file: o.file, blob: must(['git', 'hash-object', '--no-filters', '--', o.to]).trim() })) : null;
   return { env: childEnv(process.env, barrierEnv(l)), prompt: promptFrom(ticket.body), overlay };
 }
 

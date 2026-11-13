@@ -135,7 +135,8 @@ const README_PATH = `${code.replace(/\\/g, '/')}/claude-config/hooks/bash-guard.
 /** The arms a full round runs in; the wreck and locked rounds run current and bare only. */
 const ARMS3 = ['current', 'bare', 'solo', 'unit'];
 /** #385: the unit definitions in the live harness's working tree (today's, not the ticket parent's). */
-const UNIT_DEFS = { 'unit.md': '---\nname: unit\ntools: Read, Agent\n---\n\nUNIT-DEF-MARK\n', 'tester.md': '---\nname: tester\n---\n\nTESTER-DEF-MARK\n' };
+// unit.md carries CRLF, which a checkout with core.autocrlf=true would normalise when hashed with filters.
+const UNIT_DEFS = { 'unit.md': '---\r\nname: unit\r\ntools: Read, Agent\r\n---\r\n\r\nUNIT-DEF-MARK\r\n', 'tester.md': '---\nname: tester\n---\n\nTESTER-DEF-MARK\n' };
 /** The temp and results dirs of the unit round whose overlay source is missing. */
 const missing = { temp: join(home, 'tm'), out: join(home, 'out-missing') };
 /** Every file under `dir`, recursively. */
@@ -153,6 +154,8 @@ before(() => {
     'rules/r.md': 'rule\n',
     'skills/qa/SKILL.md': '---\nname: qa\n---\n',
     'agents/implementer.md': 'agent\n',
+    // The ticket-era unit definition, which the live one must replace in the unit arm.
+    'agents/unit.md': 'TICKET-ERA-UNIT\n',
     // The gate reports the env model-written code runs under, and reads the real workspace when told to.
     'gate.mjs': [
       "console.log('tests 1');",
@@ -164,6 +167,8 @@ before(() => {
   };
   for (const [f, text] of Object.entries(files)) put(join(cc, f), text);
   git(cc, 'init', '--quiet', '-b', 'main');
+  // As the live checkout is: a filtered hash of unit.md differs from the hash of its bytes.
+  git(cc, 'config', 'core.autocrlf', 'true');
   git(cc, 'add', '-A');
   git(cc, 'commit', '--quiet', '-m', 'base');
   fx.parent = git(cc, 'rev-parse', 'HEAD');
@@ -222,7 +227,7 @@ before(() => {
   fx.locked = {};
   if (!asRoot) for (const arm of ['current', 'bare']) fx.locked[arm] = runArm(arm, { temp: locked.temp, out: locked.out, locks: true });
   // #385: a unit round whose overlay source is gone fails before claude starts.
-  fx.blobs = Object.fromEntries(Object.keys(UNIT_DEFS).map((f) => [f, git(cc, 'hash-object', '--', `agents/${f}`)]));
+  fx.blobs = Object.fromEntries(Object.keys(UNIT_DEFS).map((f) => [f, git(cc, 'hash-object', '--no-filters', '--', `agents/${f}`)]));
   rmSync(join(cc, 'agents', 'tester.md'));
   fx.missing = runArm('unit', { temp: missing.temp, out: missing.out, tag: '-missing' });
 });
@@ -232,9 +237,10 @@ test('#385: unit runs the current harness with the live unit and tester definiti
   const unit = fx.unit.report;
   assert.deepEqual(unit.argv, [...cur.argv, '--agent', 'unit']);
   assert.equal(unit.prompt, cur.prompt, 'the prompt is byte-identical across arms');
-  assert.deepEqual(unit.agents.sort(), [...cur.agents, 'tester.md', 'unit.md'].sort());
-  assert.deepEqual(unit.agentDefs, UNIT_DEFS, 'the overlay copies the live files byte for byte');
-  assert.deepEqual(cur.agentDefs, {}, 'current runs the ticket-era agents only');
+  assert.deepEqual(unit.agents.sort(), [...cur.agents, 'tester.md'].sort());
+  assert.deepEqual(unit.agentDefs, UNIT_DEFS, 'the overlay copies the live files byte for byte, over the ticket-era unit.md');
+  assert.deepEqual(Object.keys(cur.agentDefs), ['unit.md'], 'current has the ticket-era unit.md alone, no tester');
+  assert.match(cur.agentDefs['unit.md'], /^TICKET-ERA-UNIT\r?\n$/, 'current runs the ticket-era unit.md');
   for (const k of ['skills', 'rules', 'claudeJson', 'harnessCheckout']) assert.deepEqual(unit[k], cur[k], k);
   assert.deepEqual(unit.ancestors, [join(fx.unit.result.roundRoot, 'code', 'CLAUDE.md')]);
   // Each overlaid file's git blob, so a run names the definitions it used.
@@ -318,7 +324,7 @@ test('M2: the current arm runs the harness at its commit: ancestor CLAUDE.md, sk
   assert.deepEqual(cur.ancestors, [join(root, 'code', 'CLAUDE.md')]);
   assert.match(readFileSync(cur.ancestors[0], 'utf8'), /^# ROOT-MARK\r?\n$/);
   assert.deepEqual(cur.skills, ['qa']);
-  assert.deepEqual(cur.agents, ['implementer.md']);
+  assert.deepEqual(cur.agents.sort(), ['implementer.md', 'unit.md']);
   assert.deepEqual(cur.rules, ['r.md'], 'the harness rules/ lands in the config dir');
   const hookArgs = cur.settings.hooks.SessionStart[0].hooks[0].args[0];
   assert.equal(hookArgs, `${join(root, 'code', 'claude-config').replace(/\\/g, '/')}/hooks/session-start.mjs`);
