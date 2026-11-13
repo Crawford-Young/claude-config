@@ -6,7 +6,9 @@
 //   node scripts/budget-replay.mjs [--root <projects dir>] [--out <file.md>] [--json]
 //
 // Reads every <session>/subagents/agent-*.jsonl under --root (default ~/.claude/projects)
-// through audit-lib's walker; main sessions are not runs. Rules (also stated in the output):
+// through audit-lib's walker. Main sessions are not runs; they get their own section (box 2):
+// one window per main transcript file, split where context falls (see mainWindows), with
+// clear-at-cap priced for each cap in CAPS. Rules (also stated in the output):
 // - A request is one requestId (several records share one; the last output count wins, as
 //   in audit-lib). `<synthetic>` records are error stand-ins, not requests.
 // - Peak context = the largest input + cache read + cache write on one request of the run.
@@ -31,6 +33,8 @@ import { isMain, parseArgs } from './lib.mjs';
 
 export const IDLE_MS = 5 * 60e3; // the subagent prompt cache lives 5 minutes
 export const BANDS = [150e3, 200e3, 250e3, 300e3]; // context-gauge's bands plus the 300k line
+export const CAPS = [150e3, 200e3, 250e3]; // context-gauge's three bands, the candidate clear-at-cap lines
+export const CLEAR_DROP = 0.5; // a request whose context is under this share of the previous one starts a new main window
 export const SHINGLE = 5;
 export const REPEAT_SHARE = 0.5;
 export const REPEAT_MIN_WORDS = 50;
@@ -75,6 +79,19 @@ export function isRepeat(earlier, later) {
 const textOf = (content) => (typeof content === 'string' ? content : Array.isArray(content) ? content.map((b) => b?.text || '').join('\n') : '');
 const isToolResult =(rec) => Array.isArray(rec.message?.content) && rec.message.content.some((b) => b?.type === 'tool_result');
 
+/** Folds one assistant record into reqs (one entry per requestId; the last output count wins).
+ *  null for a record that is not a request (no usage, or a <synthetic> error stand-in). */
+function takeRequest(reqs, rec) {
+  const m = rec.message;
+  if (!m?.usage || m.model === '<synthetic>') return null;
+  const key = rec.requestId || m.id || rec.uuid;
+  let q = reqs.get(key);
+  const isNew = !q;
+  if (isNew) reqs.set(key, (q = { u: m.usage, model: m.model, texts: [], ended: false }));
+  else if ((m.usage.output_tokens || 0) >= (q.u.output_tokens || 0)) q.u = m.usage;
+  return { key, q, isNew };
+}
+
 /** Replays one subagent run's records (any async iterable) into its figures. */
 export async function replayRun(records, prices) {
   const reqs = new Map(); // key -> { u, model, texts, ended }
@@ -86,14 +103,13 @@ export async function replayRun(records, prices) {
     if (t !== null) [first, last] = [first === null ? t : Math.min(first, t), last === null ? t : Math.max(last, t)];
     if (rec?.type === 'assistant') {
       const m = rec.message;
-      if (!m?.usage || m.model === '<synthetic>') continue;
-      const key = rec.requestId || m.id || rec.uuid;
-      let q = reqs.get(key);
-      if (!q) {
-        reqs.set(key, (q = { u: m.usage, model: m.model, texts: [], ended: false }));
+      const took = takeRequest(reqs, rec);
+      if (!took) continue;
+      const { key, q, isNew } = took;
+      if (isNew) {
         const send = sentAt ?? t;
         if (lastReply !== null && send !== null && send - lastReply > IDLE_MS) wakeAt.set(key, { gapMs: send - lastReply, cause: cause || 'tool' });
-      } else if ((m.usage.output_tokens || 0) >= (q.u.output_tokens || 0)) q.u = m.usage;
+      }
       for (const b of m.content || []) {
         if (b?.type === 'text' && b.text && q.texts.at(-1) !== b.text) q.texts.push(b.text);
         if (b?.type === 'tool_use' && b.name === 'SubagentHandback' && !byToolId.has(b.id)) {
@@ -155,6 +171,83 @@ export async function replayRun(records, prices) {
   };
 }
 
+/** $ of request q if its context were newDepth tokens. The restart request writes the whole
+ *  context (at 1h when q's own writes were 1h, else 5m); a later one keeps its own writes and
+ *  input and reads the rest. Output is unchanged. null when the model has no price. */
+function repriceUsd(q, newDepth, restart, prices) {
+  const input = q.u.input_tokens || 0, [w5, w1] = writesOf(q.u);
+  const out = { input_tokens: input, output_tokens: q.u.output_tokens || 0 };
+  const usage = restart
+    ? { ...out, cache_creation: { ephemeral_5m_input_tokens: w1 ? 0 : Math.max(0, newDepth - input), ephemeral_1h_input_tokens: w1 ? Math.max(0, newDepth - input) : 0 } }
+    : { ...out, cache_read_input_tokens: Math.max(0, newDepth - input - w5 - w1), cache_creation: { ephemeral_5m_input_tokens: w5, ephemeral_1h_input_tokens: w1 } };
+  return priceUsage(usage, q.model, prices).usd;
+}
+
+/** One cap's figures for a window's requests [{ q, depth, usd }] in order. The requests sent
+ *  above the cap are priced as paid (actual) and as if the window had been cleared just
+ *  before the first of them (counterfactual): the fresh window's context is the window's own
+ *  first request (system prompt, CLAUDE.md, tools: what any new window opens with) plus the
+ *  growth since the last request under the cap; the restart request writes all of it, later
+ *  ones read what the restart wrote and keep their own writes. A window whose first request is
+ *  already above the cap has no clear to price (startedAbove). Unpriced models are counted,
+ *  never priced as $0. */
+function capFigures(reqs, cap, prices) {
+  const out = { cap, requests: 0, actual: 0, counterfactual: 0, unpriced: 0, startedAbove: reqs.length > 0 && reqs[0].depth > cap };
+  const c = reqs.findIndex((r) => r.depth > cap);
+  if (c <= 0) return out;
+  const [base, before] = [reqs[0].depth, reqs[c - 1].depth];
+  reqs.slice(c).forEach((r, i) => {
+    if (r.depth <= cap) return;
+    const fresh = repriceUsd(r.q, Math.max(base, base + r.depth - before), i === 0, prices);
+    if (r.usd === null || fresh === null) return void out.unpriced++;
+    out.requests++;
+    out.actual += r.usd;
+    out.counterfactual += fresh;
+  });
+  return out;
+}
+
+/** The context windows of one main-session transcript (any async iterable of records). A window
+ *  is a run of requests; a request whose context is under CLEAR_DROP of the previous one's
+ *  (a /compact, or a /clear that kept the file) starts a new one. Sidechain records and requests
+ *  already in `seen` (a resumed session replays its parent's) are skipped; `seen` gains the
+ *  keys taken. Each window: { requests, peak, usd (null if any request is unpriced), pricedUsd,
+ *  unpriced, first, caps: capFigures per CAPS }. */
+export async function mainWindows(records, prices, seen = new Set()) {
+  const reqs = new Map();
+  const stamp = new Map();
+  for await (const rec of records) {
+    if (rec?.type !== 'assistant' || rec.isSidechain) continue;
+    const key = rec.requestId || rec.message?.id || rec.uuid;
+    if (seen.has(key) && !reqs.has(key)) continue;
+    const took = takeRequest(reqs, rec);
+    if (took?.isNew) stamp.set(took.key, stampOf(rec));
+  }
+  const groups = [];
+  let prev = null;
+  for (const [key, q] of reqs) {
+    seen.add(key);
+    const depth = depthOf(q.u);
+    if (!groups.length || depth < CLEAR_DROP * prev) groups.push([]);
+    groups.at(-1).push({ q, depth, usd: priceUsage(q.u, q.model, prices).usd, at: stamp.get(key) });
+    prev = depth;
+  }
+  return groups.map((g) => {
+    const unpriced = {};
+    let pricedUsd = 0;
+    for (const r of g) r.usd === null ? (unpriced[r.q.model] = (unpriced[r.q.model] || 0) + 1) : (pricedUsd += r.usd);
+    return {
+      requests: g.length,
+      peak: Math.max(...g.map((r) => r.depth)),
+      usd: Object.keys(unpriced).length ? null : pricedUsd,
+      pricedUsd,
+      unpriced,
+      first: g[0].at,
+      caps: CAPS.map((cap) => capFigures(g, cap, prices)),
+    };
+  });
+}
+
 const day = (ms) => (ms === null ? null : new Date(ms).toISOString().slice(0, 10));
 
 /** A run's agent type. An agent-teams teammate's meta carries its own name as agentType
@@ -166,18 +259,22 @@ function typeOf(file, agent) {
   return meta.spawnedAgentType || meta.customAgentType || 'teammate (untyped)';
 }
 
-/** Every subagent run under root, oldest first, plus the date window covered. */
+/** Every subagent run under root, oldest first, the date window covered, and every main-session
+ *  window (mainWindows over each main transcript). */
 export async function replay(root, prices) {
-  const runs = [];
+  const runs = [], windows = [], seen = new Set();
   for await (const { file, ctx } of walkTranscripts(root)) {
-    if (!ctx.agent) continue;
+    if (!ctx.agent) {
+      for (const w of await mainWindows(readJsonl(file), prices, seen)) windows.push({ sessionId: ctx.sessionId, ...w });
+      continue;
+    }
     const r = await replayRun(readJsonl(file), prices);
     if (!r.requests) continue;
     runs.push({ id: ctx.agent.id, sessionId: ctx.sessionId, name: ctx.agent.name || null, type: typeOf(file, ctx.agent), ...r });
   }
   runs.sort((a, b) => (a.first ?? Infinity) - (b.first ?? Infinity));
   const stamps = runs.map((r) => r.first).filter((x) => x !== null);
-  return { runs, first: day(stamps.length ? Math.min(...stamps) : null), last: day(stamps.length ? Math.max(...stamps) : null) };
+  return { runs, windows, first: day(stamps.length ? Math.min(...stamps) : null), last: day(stamps.length ? Math.max(...stamps) : null) };
 }
 
 /** Band counts per agent type and overall, and the wake / repeat totals. */
@@ -207,6 +304,22 @@ export function summarize(runs) {
   };
 }
 
+/** Main windows past each band, per-cap totals (actual, counterfactual, diff = actual - counterfactual:
+ *  what clearing at the cap would have saved, negative when it would have cost more) and the priced
+ *  spend they are a share of. */
+export function summarizeMain(windows) {
+  return {
+    windows: windows.length,
+    over: BANDS.map((b) => windows.filter((w) => w.peak > b).length),
+    spendUsd: windows.reduce((s, w) => s + w.pricedUsd, 0),
+    caps: CAPS.map((cap, i) => {
+      const cs = windows.map((w) => w.caps[i]);
+      const [actual, counterfactual] = [cs.reduce((s, c) => s + c.actual, 0), cs.reduce((s, c) => s + c.counterfactual, 0)];
+      return { cap, windows: cs.filter((c) => c.requests).length, requests: cs.reduce((s, c) => s + c.requests, 0), actual, counterfactual, diff: actual - counterfactual };
+    }),
+  };
+}
+
 const kt = (n) => `${Math.round(n / 1e3)}k`;
 const usd = (n) => (n === null ? 'unpriced' : `$${n.toFixed(2)}`);
 const min = (ms) => (ms < 36e5 ? `${Math.round(ms / 60e3)}m` : `${(ms / 36e5).toFixed(1)}h`);
@@ -214,8 +327,31 @@ const cell = (s) => String(s).replace(/\|/g, '/');
 const table = (head, rows) => (rows.length ? [`| ${head.join(' | ')} |`, `|${head.map(() => '---').join('|')}|`, ...rows.map((r) => `| ${r.map(cell).join(' | ')} |`)] : ['_none_']);
 const label = (r) => r.name || `${r.type} ${r.id.slice(0, 8)}`;
 
+const signed = (n) => `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+
+/** The main-session section: windows, the rules, the per-cap table and the replay's blind spots. */
+function mainSection(windows) {
+  const m = summarizeMain(windows);
+  const started = CAPS.map((cap, i) => windows.filter((w) => w.caps[i].startedAbove).length);
+  const unpriced = windows.reduce((n, w) => n + Object.values(w.unpriced).reduce((x, y) => x + y, 0), 0);
+  return [
+    '### Main sessions: clear at cap',
+    '',
+    `${m.windows} main-session windows (one per main transcript, split where a request's context falls under ${CLEAR_DROP * 100}% of the previous one's: a /compact, or a /clear that kept the file; sidechain records and requests an earlier file already holds are skipped), ${usd(m.spendUsd)} priced main-session spend.`,
+    '',
+    ...table(['windows', ...BANDS.map((b) => `peak > ${kt(b)}`)], [[m.windows, ...m.over]]),
+    '',
+    `Clear at cap C = the window is cleared just before its first request above C. Actual = those requests priced as paid. Clear-at-cap = the same requests re-priced from a fresh window: its context is the window's own first request (what a new window opens with) plus the growth since the last request under C; the restart request writes all of that to the cache (at its own 5m/1h tier), later ones read it back and keep their own writes and output. Saved = actual - clear-at-cap (negative: clearing costs more). A window already above C at its first request has nothing to clear (counted apart).`,
+    '',
+    ...table(['cap', 'windows past', 'requests above', 'actual $', 'clear-at-cap $', 'saved $', 'actual / total spend', 'opened above cap'], m.caps.map((c, i) => [kt(c.cap), c.windows, c.requests, usd(c.actual), usd(c.counterfactual), signed(c.diff), `${m.spendUsd ? ((c.actual / m.spendUsd) * 100).toFixed(1) : '0.0'}%`, started[i]])),
+    '',
+    `The replay cannot see: quality (a cleared window loses what the session knew; a long window may reason worse or better), the cost of writing the continuation (a checkpoint commit and resume block, then reading them back), re-reading the files the cleared window already held, whether the real cache stayed warm across idle gaps (the restart is assumed to write at the crossing request's own tier), or work that needed the context it carried. Requests on a model with no price are left out of every $${unpriced ? ` (${unpriced} requests)` : ''}.`,
+    '',
+  ];
+}
+
 /** The figures as markdown for an issue comment: window, rules, tables. */
-export function renderFigures({ runs, first, last }, { top = 15 } = {}) {
+export function renderFigures({ runs, windows, first, last }, { top = 15 } = {}) {
   const s = summarize(runs);
   const unpriced = {};
   for (const r of runs) for (const [m, n] of Object.entries(r.unpriced)) unpriced[m] = (unpriced[m] || 0) + n;
@@ -249,6 +385,7 @@ export function renderFigures({ runs, first, last }, { top = 15 } = {}) {
     '',
     ...table(['run', 'type', 'hand-backs', 'repeats', 'retries', 'bytes re-sent'], repeated.slice(0, top).map((r) => [label(r), r.type, r.handbacks, r.repeats, r.retries, r.repeatBytes])),
     '',
+    ...(windows?.length ? mainSection(windows) : []),
     `Unpriced models (no prices.json entry; their requests are left out of every $): ${Object.keys(unpriced).length ? Object.entries(unpriced).map(([m, n]) => `${m} (${n} requests)`).join(', ') : 'none'}.`,
     '',
   ].join('\n');
@@ -259,7 +396,7 @@ async function main() {
   const here = dirname(fileURLToPath(import.meta.url));
   const prices = JSON.parse(readFileSync(join(here, 'prices.json'), 'utf8'));
   const r = await replay(typeof a.root === 'string' ? a.root : join(homedir(), '.claude', 'projects'), prices);
-  const out = a.json ? JSON.stringify({ ...r, summary: summarize(r.runs) }, null, 2) : renderFigures(r);
+  const out = a.json ? JSON.stringify({ ...r, summary: summarize(r.runs), main: summarizeMain(r.windows) }, null, 2) : renderFigures(r);
   if (typeof a.out === 'string') writeFileSync(a.out, out);
   else process.stdout.write(`${out}\n`);
 }

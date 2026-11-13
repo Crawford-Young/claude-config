@@ -7,7 +7,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execHarness, tempDir } from './_spawn.mjs';
-import { BANDS, isRepeat, renderFigures, replay, replayRun, summarize } from '../budget-replay.mjs';
+import { BANDS, isRepeat, mainWindows, renderFigures, replay, replayRun, summarize, summarizeMain } from '../budget-replay.mjs';
 
 const prices = {
   models: {
@@ -216,4 +216,84 @@ test('CLI: markdown on stdout from ~/.claude/projects by default; --root, --json
   const j = JSON.parse(readFileSync(out, 'utf8'));
   assert.equal(j.runs.length, 2);
   assert.deepEqual(j.summary.all, { runs: 2, over: [1, 1, 1, 0] });
+});
+
+// ---- main sessions: windows and clear-at-cap (#381 box 2) ----
+const cache = (rid, min, read, write, extra = {}) => reply(rid, min, { input: 0, output: 0, read, write, ...extra });
+const kUsd = (read, write, rate = 5) => (read * 0.2 + write * rate) / 1e3; // $ of read/write k tokens on OPUS, no input/output
+
+test('mainWindows: a request whose context falls below half the previous one starts a new window; sidechain and repeated requests are skipped', async () => {
+  const seen = new Set(['dup']);
+  const ws = await mainWindows(iter([
+    prompt(0),
+    cache('a', 1, 0, 100),
+    cache('b', 2, 100, 20), // 120k
+    cache('c', 3, 100, 10), // 110k: a dip, not a clear
+    cache('d', 4, 0, 30), // 30k < 55k: /compact or /clear
+    cache('e', 5, 30, 10),
+    { ...cache('side', 5.5, 0, 500), isSidechain: true },
+    cache('dup', 6, 0, 900), // seen in an earlier file (a resumed session replays it)
+  ]), prices, seen);
+  assert.deepEqual(ws.map((w) => [w.requests, w.peak]), [[3, 120e3], [2, 40e3]]);
+  assert.ok(seen.has('a') && !seen.has('side'));
+});
+
+test('mainWindows prices clear-at-cap: requests above the cap as paid vs re-priced from a fresh baseline with the restart cache write', async () => {
+  const [w] = await mainWindows(iter([
+    cache('r1', 1, 0, 30), // 30k: the window's baseline
+    cache('r2', 2, 30, 70), // 100k: last request under the cap
+    cache('r3', 3, 100, 60), // 160k: crosses 150k
+    cache('r4', 4, 160, 50), // 210k
+  ]), prices, new Set());
+  const c150 = w.caps.find((c) => c.cap === 150e3);
+  assert.equal(c150.requests, 2);
+  assert.ok(Math.abs(c150.actual - (kUsd(100, 60) + kUsd(160, 50))) < 1e-9);
+  // restarted at r3: context 30k + 60k growth = 90k, all written; r4: 140k = 90k read + its own 50k write
+  assert.ok(Math.abs(c150.counterfactual - (kUsd(0, 90) + kUsd(90, 50))) < 1e-9);
+  const c200 = w.caps.find((c) => c.cap === 200e3);
+  assert.equal(c200.requests, 1); // only r4 is above 200k
+  assert.ok(Math.abs(c200.counterfactual - kUsd(0, 30 + 50)) < 1e-9); // 30k + r4's 50k growth, all written
+  assert.equal(w.caps.find((c) => c.cap === 250e3).requests, 0);
+});
+
+test('mainWindows: restart written at the 1h rate when the crossing request wrote at 1h; a window that starts above the cap and unpriced requests stay out', async () => {
+  const [w] = await mainWindows(iter([
+    cache('r1', 1, 0, 30),
+    cache('r2', 2, 30, 130, { write: 0, write1h: 130 }), // 190k, 1h writes
+    cache('r3', 3, 190, 10, { model: 'claude-fable-5-2' }), // unpriced
+  ]), prices, new Set());
+  const [hi] = await mainWindows(iter([cache('x', 1, 0, 300)]), prices, new Set()); // opens above every cap
+  const c = w.caps.find((x) => x.cap === 150e3);
+  assert.equal(c.requests, 1);
+  assert.equal(c.unpriced, 1);
+  assert.ok(Math.abs(c.counterfactual - kUsd(0, 160, 8)) < 1e-9); // 30k + (160k - 30k) growth = 160k, all written at 1h
+  assert.ok(Math.abs(c.actual - kUsd(30, 130, 8)) < 1e-9);
+  assert.deepEqual(hi.caps.map((x) => x.startedAbove), [true, true, true]);
+  assert.deepEqual(hi.caps.map((x) => x.requests), [0, 0, 0]);
+});
+
+test('summarizeMain totals windows past each band and, per cap, actual, counterfactual and their difference against total priced spend', () => {
+  const caps = (n, a, c) => [150e3, 200e3, 250e3].map((cap) => ({ cap, requests: n, actual: a, counterfactual: c, unpriced: 0, startedAbove: false }));
+  const s = summarizeMain([
+    { peak: 320e3, requests: 9, usd: 10, pricedUsd: 10, caps: caps(3, 4, 5) },
+    { peak: 160e3, requests: 4, usd: 2, pricedUsd: 2, caps: [{ ...caps(2, 1, 0.5)[0] }, ...caps(0, 0, 0).slice(1)] },
+    { peak: 80e3, requests: 2, usd: 1, pricedUsd: 1, caps: caps(0, 0, 0) },
+  ]);
+  assert.deepEqual([s.windows, s.over, s.spendUsd], [3, [2, 1, 1, 1], 13]);
+  assert.deepEqual(s.caps[0], { cap: 150e3, windows: 2, requests: 5, actual: 5, counterfactual: 5.5, diff: -0.5 });
+  assert.deepEqual([s.caps[1].windows, s.caps[1].diff], [1, -1]);
+});
+
+test('renderFigures adds a main-session section with the rule, the per-cap table and what the replay cannot see; the subagent figures are unchanged', async () => {
+  const r = await replay(fixtureRoot(), prices);
+  assert.equal(r.windows.length, 1); // proj/sess-1.jsonl: one window, 401k peak
+  const md = renderFigures(r);
+  assert.match(md, /2 subagent runs.*2026-11-10 to 2026-11-11/);
+  assert.match(md, /### Main sessions: clear at cap/);
+  assert.match(md, /1 main-session windows/);
+  assert.match(md, /\| 150k \|/);
+  assert.match(md, /\| 250k \|/);
+  assert.match(md, /cannot see/i);
+  assert.match(md, /continuation/i);
+  assert.doesNotMatch(md, /recommend/i);
 });
