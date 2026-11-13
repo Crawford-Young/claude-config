@@ -34,7 +34,7 @@ Every agent definition points here. Any agent may spawn the roles it needs, with
 
 ### Agent names
 
-Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call is a plain subagent, its name kept in its `meta.json`, and names nest. SendMessage by name still resumes a finished agent.
+Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call is a plain subagent, its name kept in its `meta.json`, and names nest. SendMessage by name still resumes a finished agent, bounded by the resume rule under Dispatch template.
 
 - Name every spawn `<role>_<kind>_<target>` (kind: repo | epic | issue | pr | topic), built by `node ~/code/claude-config/scripts/session-name.mjs <role> <kind> <target…>` (e.g. `impl_issue_strate-16`), because audit and reflect group spend by the charge (the name minus its role). The grammar's one authority is the header of `scripts/lib.mjs`. In the subagent lane the name goes in `name`, else `description`; a `--bg` session takes it as `-n`.
 - `agent-name-guard.mjs` acts only in company context: the main session under a title in the grammar (or a legacy `director-*`), or a subagent whose name, else description, is a new-grammar name, a legacy tree name, or a legacy typed name with a role. There it blocks a spawn without a lowercase new-grammar name (a legacy tree name with a worker passes, for in-flight batches); elsewhere every spawn passes.
@@ -76,7 +76,9 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 - Every brief names the agent's own scratch subfolder (`<scratchpad>/<agent-name>/`, or `<scratchpad>/<artifact-slug>/` for Artifact working copies), and the agent writes and deletes only inside it, because agents share the session scratchpad and nothing of theirs belongs in a repo or `~/code`.
 - Verify any agent report you act on — reviewer finding or subagent status — against source first, because an agent's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
 - Dispatch a reviewer only after the implementer it reviews has handed back, because a tree read mid-edit gives a false red-gates verdict (strate-18).
-- Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch.
+- One concern per brief, because a multi-concern agent outgrows its context (an agent that ran to 434k tokens, #381).
+- Fixable failure → message the SAME agent with the review's listed items only, never new scope, and only while it is under 5 minutes idle and under 150k handed back; else fresh dispatch with a new role label (`impl-2`), because 167 of 187 idle wakes were resumes rewriting cache ($132.34) and 228 of 884 runs passed 150k. Capability-shaped failure → escalate the model, fresh dispatch.
+- A run reported over the line (soft 150k, hard 200k) is stopped with TaskStop, its disk state committed, the rest split to a new brief, because impl-2_issue_claude-config-368 ran from 323k to 431k after the user flagged it.
 
 ## Issue execution
 
