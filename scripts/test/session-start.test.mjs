@@ -172,3 +172,29 @@ test('no title on clear or compact, outside a ticket worktree, or with no cwd', 
     assert.ok(out.includes(index), JSON.stringify(payload));
   }
 });
+
+// ---- unnamed-session note (#282) ----
+
+const noteLines = (out) => out.split('\n').filter((l) => l.includes('/rename'));
+
+test('an absent or auto-generated session name adds one /rename line with the grammar shape', () => {
+  for (const session_title of [undefined, '', 'code-51', 'free text title']) {
+    for (const source of ['startup', 'resume', 'clear']) {
+      const lines = noteLines(runHook({ source, session_title }));
+      assert.equal(lines.length, 1, `${source} ${session_title}`);
+      assert.match(lines[0], /\/rename <role>_<kind>_<target>/);
+    }
+  }
+});
+
+test('a grammar-named session (agent, charge key, legacy) gets no note', () => {
+  for (const session_title of ['director_topic_batch-381-390', 'issue_claude-config-282', 'impl_issue_claude-config-282', 'ticket-app-12']) {
+    assert.deepEqual(noteLines(runHook({ source: 'startup', session_title })), [], session_title);
+  }
+});
+
+test('compact never carries the note, and a ticket-worktree window (titled by the hook) is not also warned', () => {
+  assert.deepEqual(noteLines(runHook({ source: 'compact' })), []);
+  const { wt } = ticketWorktree();
+  assert.doesNotMatch(runHook({ source: 'startup', cwd: wt }), /\/rename/);
+});

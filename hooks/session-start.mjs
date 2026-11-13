@@ -13,6 +13,9 @@
 //   - one line when hook-errors.log gained entries from THIS hooks/ directory since the
 //     previous session start (#300): count + newest hook. The marker is
 //     ~/.claude/hook-errors.seen (an ISO time, rewritten every start); no marker → silent.
+//   - on startup/resume/clear, one line when the session's name is absent or auto-generated
+//     (a bare `code-51`, free text): reflect and audit join on the name (#282). Silent for a
+//     grammar-named session and for a window the hook titles itself (ticket worktree).
 //   - after a compaction: the re-orientation reminders that compaction drops
 //     (domain CLAUDE.md reload, marker discipline)
 //
@@ -29,7 +32,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { errorLog, run } from './_hooklib.mjs';
-import { worktreeChargeKey } from '../scripts/lib.mjs';
+import { isChosenName, worktreeChargeKey } from '../scripts/lib.mjs';
 
 /** The title to give this session, or null: only on startup/resume, only untitled, only in a ticket worktree. */
 function ticketTitle(payload) {
@@ -106,6 +109,9 @@ run('session-start', (payload) => {
     title = ticketTitle(payload);
   } catch {
     // best-effort: an unnamed window is the old behaviour
+  }
+  if (!title && ['startup', 'resume', 'clear'].includes(payload?.source) && !isChosenName(payload.session_title)) {
+    lines.push('Session name is auto-generated or unset: run `/rename <role>_<kind>_<target>` (e.g. `director_topic_<words>`) so reflect and audit can find it.');
   }
   const context = lines.join('\n');
   if (title) {

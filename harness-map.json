@@ -381,7 +381,7 @@
    "kind": "hook",
    "label": "session-start",
    "file": "hooks/session-start.mjs",
-   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders; names an untitled session started in a ticket worktree issue_<repo>-<N> (a role-less charge key) via sessionTitle (#344, #360)."
+   "summary": "SessionStart — injects the skill index (skills/INDEX.md; skills are Read, not Skill-tool invoked, #64), lists open in-progress issues (#72) and post-compaction reminders; names an untitled session started in a ticket worktree issue_<repo>-<N> (a role-less charge key) via sessionTitle (#344, #360); on startup/resume/clear adds a one-line /rename note when the session name is absent or auto-generated (#282)."
   },
   {
    "id": "hook:active-repo",
@@ -1122,7 +1122,7 @@
    "from": "hook:session-start",
    "to": "script:lib",
    "kind": "reads",
-   "label": "worktreeChargeKey"
+   "label": "worktreeChargeKey, isChosenName"
   },
   {
    "from": "hook:session-start",
