@@ -12,7 +12,9 @@
 // open `debt` issues that name a file those commits touched (#137). A name with no
 // issue takes the whole window, unless --issue <N> names the issue (one session that
 // worked several): it overrides the name's number, and the `<prefix>#N` form then
-// takes each repo's directory name.
+// takes each repo's directory name. Every agent run under a kept window comes too, whatever its
+// own charge (audit.mjs --with-agents), listed per charge: a batch director (topic charge) gathers
+// with the agents it ran (issue charges), and its Time covers each kept window (#389).
 
 import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -119,7 +121,7 @@ function main() {
     if (process.argv[i] === '--repo' && process.argv[i + 1]) repos.push(resolve(process.argv[i + 1]));
   }
 
-  const auditArgs = [join(dirname(fileURLToPath(import.meta.url)), 'audit.mjs'), '--session', name, '--json'];
+  const auditArgs = [join(dirname(fileURLToPath(import.meta.url)), 'audit.mjs'), '--session', name, '--with-agents', '--json'];
   if (args.root) auditArgs.push('--root', args.root);
   if (args['idle-gap']) auditArgs.push('--idle-gap', args['idle-gap']);
   const audit = spawnSync(process.execPath, auditArgs, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -134,6 +136,8 @@ function main() {
   const time = report.time?.names.find((g) => g.name === key);
   if (unit) {
     log(`## Audit — ${unit.windows} window(s) charged to ${key}, ${report.files} transcripts${time ? ` · $${unit.usd.toFixed(2)} over ${minutes(time.activeMs)} active of ${minutes(time.wallMs)} wall` : ''}\n`);
+    const agents = report.names.filter((g) => g.name !== key);
+    if (agents.length) log(`Agents under its windows, per charge: ${agents.map((g) => `${g.name} (${g.requests} request${g.requests === 1 ? '' : 's'}, $${g.usd.toFixed(2)})`).join(', ')}\n`);
     log(renderMarkdown(report));
   } else log(`## Audit — no priced requests in windows charged to ${key}, ${report.files} transcripts`);
 

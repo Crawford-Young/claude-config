@@ -508,7 +508,7 @@
    "kind": "script",
    "label": "reflect-gather.mjs",
    "file": "scripts/reflect-gather.mjs",
-   "summary": "A unit's evidence via audit.mjs --session <name>, per-repo git activity, and the open debt issues (gh) naming files the unit touched, in one payload."
+   "summary": "A unit's evidence via audit.mjs --session <name> --with-agents (every agent run under its windows too, per charge: a batch director with its issue-charged agents, #389), per-repo git activity, and the open debt issues (gh) naming files the unit touched, in one payload."
   },
   {
    "id": "script:cleanup",
@@ -675,7 +675,7 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by charge, lib's chargeKey (every form of one charge joins; a named subagent joins its own name, #272, #360), --session filters to one charge; agent spend per type × model × effort with warm-redo, steered, re-run and escalation columns, the redo-or-escalation rate and a fit flag (#370); --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by charge, lib's chargeKey (every form of one charge joins; a named subagent joins its own name, #272, #360), --session filters to one charge (--with-agents adds every subagent run under a kept window, whatever its charge, #389); agent spend per type × model × effort with warm-redo, steered, re-run and escalation columns, the redo-or-escalation rate and a fit flag (#370); --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
   },
   {
    "id": "script:audit-lib",

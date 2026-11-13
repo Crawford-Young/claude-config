@@ -55,6 +55,46 @@ test('gathers every window of the unit through the audit filter, with repo activ
   assert.doesNotMatch(r.stdout, /checklist/i);
 });
 
+/** The 4342ff5e shape (#389): a batch director (a topic charge) whose long window ran two agents
+ *  charged to issues, then a 2-request window after /clear in a new file. */
+function batchFixture() {
+  const dir = tempDir('reflect-gather-');
+  const proj = join(dir, 'projects', 'C--proj');
+  const sub = join(proj, 'long', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  const say = (id, sessionId, timestamp) => ({ type: 'assistant', uuid: `u-${id}`, requestId: id, timestamp, sessionId,
+    message: { id: `m-${id}`, model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 1 }, content: [] } });
+  const title = (sessionId) => ({ type: 'custom-title', sessionId, customTitle: 'director_topic_batch-368-376' });
+  // a minute of work on 11-10, idle for days, a minute more on 11-13
+  writeFileSync(join(proj, 'long.jsonl'), lines(say('l1', 'long', '2026-11-10T23:53:00Z'), say('l2', 'long', '2026-11-10T23:54:00Z'),
+    say('l3', 'long', '2026-11-13T14:34:00Z'), say('l4', 'long', '2026-11-13T14:35:00Z'), title('long')));
+  writeFileSync(join(sub, 'agent-a01.jsonl'), lines(say('a1', 'long', '2026-11-10T23:53:20Z'), say('a2', 'long', '2026-11-10T23:53:40Z')));
+  writeFileSync(join(sub, 'agent-a01.meta.json'), JSON.stringify({ agentType: 'implementer', name: 'impl_issue_claude-config-368' }));
+  writeFileSync(join(sub, 'agent-a02.jsonl'), lines(say('a3', 'long', '2026-11-10T23:53:50Z')));
+  writeFileSync(join(sub, 'agent-a02.meta.json'), JSON.stringify({ agentType: 'recon', description: 'recon_issue_claude-config-369' }));
+  writeFileSync(join(proj, 'short.jsonl'), lines(title('short'), say('s1', 'short', '2026-11-13T14:52:49.000Z'), say('s2', 'short', '2026-11-13T14:53:02.500Z')));
+  return join(dir, 'projects');
+}
+
+test('a batch director gathers the agents run under its windows, listed per charge (#389)', () => {
+  const r = spawnHarness(cli, ['director_topic_batch-368-376', '--root', batchFixture()]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Audit — 2 window\(s\) charged to topic_batch-368-376, 4 transcripts/);
+  assert.match(r.stdout, /\nAgents under its windows, per charge: issue_claude-config-368 \(2 requests, \$[\d.]+\), issue_claude-config-369 \(1 request, \$[\d.]+\)\n/);
+  assert.match(r.stdout, /## Per charge[^\n]*\n[\s\S]*\| issue_claude-config-368 \| 1 \|[\s\S]*\| issue_claude-config-369 \| 1 \|/);
+  assert.match(r.stdout, /## Per agent type\n[^\n]*\n[^\n]*\n(\| (implementer|recon) \| 1 \|[^\n]*\n){2}/);
+});
+
+test('a batch director\'s Time covers every kept window: the long one before /clear and the short one after (#389)', () => {
+  const r = spawnHarness(cli, ['director_topic_batch-368-376', '--root', batchFixture()]);
+  assert.equal(r.status, 0, r.stderr);
+  // long: 23:53 11-10 to 14:35 11-13 (3762 min wall, 2 min active); short: 13.5s of both
+  assert.match(r.stdout, /## Audit — [^\n]* over 2 min active of 3762 min wall\n/);
+  assert.match(r.stdout, /## Time\nwall 62\.7h · \*\*active 2\.2m\*\*/);
+  assert.match(r.stdout, /\*\*Sessions\*\*[^\n]*\n[^\n]*\n[^\n]*\n\| 2026-11-10 \| director_topic_batch-368-376 \| 62\.7h \| 2\.0m \|/);
+  assert.match(r.stdout, /\| 2026-11-13 \| director_topic_batch-368-376 \| 13\.5s \| 13\.5s \|/);
+});
+
 test('a renamed window with no priced requests reports, not crashes', () => {
   const f = fixture();
   writeFileSync(join(f.proj, 'w4.jsonl'), lines({ type: 'custom-title', sessionId: 'w4', customTitle: 'repo-9' }));

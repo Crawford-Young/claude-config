@@ -192,3 +192,46 @@ test('--session counts a warm redo the director sent from its own transcript, wi
   assert.deepEqual([j.files, j.totals.requests], [1, 1]);
   assert.deepEqual(j.agentMix.map((m) => [m.type, m.runs, m.warmRedos, m.redoOrEscalation]), [['implementer-opus', 1, 1, 1]]);
 });
+
+/** A batch director (a topic charge) whose window spawned two agents charged to issues (#389). */
+function batchFixture() {
+  const root = tempDir('audit-cli-');
+  const proj = join(root, 'C--proj');
+  const sub = join(proj, 'd', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  const say = (id, sessionId, ts) => ({ type: 'assistant', uuid: `u-${id}`, requestId: id, timestamp: ts, sessionId,
+    message: { id: `m-${id}`, model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 1 }, content: [] } });
+  writeFileSync(join(proj, 'd.jsonl'), lines(say('d1', 'd', '2026-10-05T10:00:00Z'), say('d2', 'd', '2026-10-05T10:05:00Z'),
+    { type: 'custom-title', sessionId: 'd', customTitle: 'director_topic_batch-1-2' }));
+  writeFileSync(join(sub, 'agent-a01.jsonl'), lines(say('t1', 'd', '2026-10-05T10:01:00Z'), say('t2', 'd', '2026-10-05T10:02:00Z')));
+  writeFileSync(join(sub, 'agent-a01.meta.json'), JSON.stringify({ agentType: 'implementer', name: 'impl_issue_repo-1' }));
+  writeFileSync(join(sub, 'agent-a02.jsonl'), lines(say('t3', 'd', '2026-10-05T10:03:00Z')));
+  writeFileSync(join(sub, 'agent-a02.meta.json'), JSON.stringify({ agentType: 'recon', description: 'recon_issue_repo-2' }));
+  // another director's agent, charged to the same issue: not under a kept window
+  mkdirSync(join(proj, 'o', 'subagents'), { recursive: true });
+  writeFileSync(join(proj, 'o.jsonl'), lines(say('o1', 'o', '2026-10-05T10:00:00Z'), { type: 'custom-title', sessionId: 'o', customTitle: 'director_topic_other' }));
+  writeFileSync(join(proj, 'o', 'subagents', 'agent-b01.jsonl'), lines(say('t9', 'o', '2026-10-05T10:01:00Z')));
+  writeFileSync(join(proj, 'o', 'subagents', 'agent-b01.meta.json'), JSON.stringify({ agentType: 'implementer', name: 'impl_issue_repo-1' }));
+  return root;
+}
+
+test('--session on a director keeps its window\'s time when the agents it ran are charged elsewhere (#389)', () => {
+  const r = spawnHarness(cli, ['--root', batchFixture(), '--session', 'director_topic_batch-1-2', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  const { time, names } = JSON.parse(r.stdout);
+  assert.deepEqual(names.map((g) => g.name), ['topic_batch-1-2'], 'without --with-agents the agents stay out');
+  assert.deepEqual(time.sessions.map((s) => [s.sessionId, s.wallMs]), [['d', 5 * 60e3]]);
+  assert.deepEqual(time.names.map((g) => [g.name, g.wallMs]), [['topic_batch-1-2', 5 * 60e3]]);
+});
+
+test('--session --with-agents also keeps every agent run under a kept window, each listed under its own charge (#389)', () => {
+  const r = spawnHarness(cli, ['--root', batchFixture(), '--session', 'director_topic_batch-1-2', '--with-agents', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.equal(j.files, 3);
+  assert.deepEqual(j.names.map((g) => [g.name, g.requests]).sort(), [['issue_repo-1', 2], ['issue_repo-2', 1], ['topic_batch-1-2', 2]]);
+  assert.deepEqual(Object.keys(j.agents).sort(), ['implementer', 'recon']);
+  assert.deepEqual(j.time.agentRuns.map((a) => a.id).sort(), ['a01', 'a02'], 'the other director\'s agent stays out');
+  assert.deepEqual(j.time.sessions.map((s) => [s.sessionId, s.wallMs]), [['d', 5 * 60e3]]);
+  assert.match(spawnHarness(cli, ['--root', batchFixture(), '--with-agents']).stderr, /--with-agents needs --session/);
+});

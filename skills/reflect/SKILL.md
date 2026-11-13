@@ -11,10 +11,10 @@ Run when the user asks, or once at batch or epic close (`directing.md` "Closing 
 ## 1. Gather
 
 ```
-node ~/code/claude-config/scripts/reflect-gather.mjs <session-name> [--issue <N> if the charge is not an issue, epic or PR] --repo <path> [--repo <path>...]
+node ~/code/claude-config/scripts/reflect-gather.mjs <session-name, or for a batch the director's name> [--issue <N> if the charge is not an issue, epic or PR] --repo <path> [--repo <path>...]
 ```
 
-One payload: `audit.mjs --session <session-name>` over every window carrying the unit's charge, legacy forms included (cost, depth, agents, skill reads, hook blocks), each repo's commits since the first window, and the open `debt` issues naming a file those commits touched. Name each debt issue to the user as a candidate for the next wave, so filed debt gets picked up instead of rotting. A window never named is invisible to it: say so instead of guessing. Add the issue thread (`gh issue view N --comments`) for wrong assumptions logged mid-unit.
+One payload: `audit.mjs --session <session-name> --with-agents` over every window carrying the unit's charge, legacy forms included (cost, depth, agents, skill reads, hook blocks), plus every agent run under those windows, each under its own charge (a batch director's issue agents), each repo's commits since the first window, and the open `debt` issues naming a file those commits touched. Name each debt issue to the user as a candidate for the next wave, so filed debt gets picked up instead of rotting. A window never named is invisible to it: say so instead of guessing. Add the issue thread (`gh issue view N --comments`) for wrong assumptions logged mid-unit.
 
 ## 2. Answer three questions
 
