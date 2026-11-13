@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isolatedEnv, spawnHarness, tempDir } from './_spawn.mjs';
-import { acquireSuiteLock, discoverGates, gateVerdict, holderState, lockDir, procStart, releaseOnSignals } from '../qa.mjs';
+import { acquireSuiteLock, discoverGates, gateVerdict, holderState, lockDir, procStart, releaseOnExit } from '../qa.mjs';
 
 const qaScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'qa.mjs');
 
@@ -171,26 +171,57 @@ test('release leaves a lock that is no longer its own', async () => {
   assert.equal(ownerOf(dir).repo, 'C:/o');
 });
 
-test('SIGINT releases the lock and exits 130; SIGTERM 143', async () => {
-  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-    const dir = join(tempDir('qa-lock-'), 'lock');
-    const lock = await acquireSuiteLock({ dir, repo: 'C:/r', session: 's', log: () => {} });
-    const proc = Object.assign(new EventEmitter(), { exitCode: null, exit: (c) => (proc.exitCode = c) });
-    releaseOnSignals(lock, proc);
-    proc.emit(signal);
-    await new Promise((r) => setTimeout(r, 200));
-    assert.equal(proc.exitCode, code, signal);
-    assert.equal(existsSync(dir), false, signal);
-  }
+test('acquiring and arming the exit release install no SIGINT/SIGTERM listener, so Ctrl+C keeps its default stop', async () => {
+  const before = [process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')];
+  const dir = join(tempDir('qa-lock-'), 'lock');
+  const lock = await acquireSuiteLock({ dir, repo: 'C:/r', session: 's', log: () => {} });
+  const proc = new EventEmitter();
+  releaseOnExit(lock, proc);
+  assert.deepEqual([process.listenerCount('SIGINT'), process.listenerCount('SIGTERM')], before);
+  assert.deepEqual(proc.eventNames(), ['exit']);
+  await lock.release();
+});
+
+test('a lock left by a killed holder is taken over', async () => {
+  const dir = join(tempDir('qa-lock-'), 'lock');
+  const code = `import(${JSON.stringify(pathToFileURL(qaScript).href)}).then(async (m) => {
+    await m.acquireSuiteLock({ dir: ${JSON.stringify(dir)}, repo: 'C:/killed' });
+    process.stdout.write('held\\n');
+    setInterval(() => {}, 1000);
+  });`;
+  const holder = spawn(process.execPath, ['-e', code], { env: isolatedEnv(tempDir('qa-killed-home-')) });
+  await new Promise((res, rej) => {
+    holder.stdout.on('data', (d) => String(d).includes('held') && res());
+    holder.on('close', () => rej(new Error('holder exited before holding')));
+  });
+  const closed = new Promise((res) => holder.on('close', res));
+  holder.kill('SIGKILL');
+  await closed;
+  const lines = [];
+  const lock = await acquireSuiteLock({ dir, repo: 'C:/r', session: 's', log: (l) => lines.push(l), pollMs: 20 });
+  assert.equal(ownerOf(dir).pid, process.pid);
+  assert.equal(lines.filter((l) => l.includes(`took over from pid ${holder.pid}`)).length, 1, lines.join('\n'));
+  await lock.release();
 });
 
 test('the exit fallback releases a lock that main never released', async () => {
   const dir = join(tempDir('qa-lock-'), 'lock');
   const lock = await acquireSuiteLock({ dir, repo: 'C:/r', session: 's', log: () => {} });
   const proc = Object.assign(new EventEmitter(), { exit: () => {} });
-  releaseOnSignals(lock, proc);
+  releaseOnExit(lock, proc);
   proc.emit('exit', 1);
   assert.equal(existsSync(dir), false);
+});
+
+test('procStart bounds the start-time spawn with a timeout, and a timed-out or failed read is null (the holder counts as alive)', () => {
+  for (const platform of ['win32', 'darwin']) {
+    let opts;
+    const hung = (_cmd, _argv, o) => ((opts = o), { status: null, stdout: '', error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
+    assert.equal(procStart(process.pid, hung, platform), null, platform);
+    assert.ok(Number.isFinite(opts.timeout) && opts.timeout > 0 && opts.timeout <= 30_000, `${platform}: ${opts.timeout}`);
+    assert.equal(procStart(process.pid, () => ({ status: 0, stdout: ' 123\n' }), platform), '123', platform);
+  }
+  assert.equal(holderState({ pid: process.pid, start: 'x' }, () => null), 'alive');
 });
 
 test('CLI: a run queues behind a live holder, names it once, logs the wait and runs after the release (#384)', async () => {

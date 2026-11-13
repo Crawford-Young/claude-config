@@ -37,7 +37,7 @@ async function main() {
   if (wanted.length === 0) die(args.gate ? `no gate named "${args.gate}" (have: ${gates.map((g) => g.name).join(', ')})` : `no gates discovered in ${repo}`);
 
   const lock = await acquireSuiteLock({ dir: lockDir(), repo });
-  releaseOnSignals(lock);
+  releaseOnExit(lock);
   const h = lock.holder;
   const waitLine = `qa-lock: waited ${(lock.waitedMs / 1000).toFixed(1)} s${h ? ` for pid ${h.pid}, repo ${h.repo}, session ${h.session}` : ''}\n`;
 
@@ -77,6 +77,7 @@ async function main() {
 
 const TAKEOVER_STALE_MS = 30_000; // a taker crashed mid-takeover: its mutex stops blocking
 const OWNERLESS_GRACE_MS = 10_000; // a lock dir whose holder died before writing owner.json
+const START_READ_TIMEOUT_MS = 10_000; // a hung start-time read counts as unreadable, so the holder stays alive
 const RECHECK_START_MS = 30_000; // a waiter re-reads a live holder's start time this often
 
 /** The machine-wide lock dir; CLAUDE_QA_LOCK_DIR gives a test run a private one. */
@@ -85,16 +86,16 @@ export function lockDir() {
 }
 
 /** The OS start time of `pid` as an opaque string, or null when it is gone or unreadable. */
-export function procStart(pid) {
-  if (process.platform === 'linux') {
+export function procStart(pid, spawn = spawnSync, platform = process.platform) {
+  if (platform === 'linux') {
     const stat = readIfExists(`/proc/${pid}/stat`);
     return stat ? stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null : null; // field 22, starttime
   }
   const [cmd, argv] =
-    process.platform === 'win32'
+    platform === 'win32'
       ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${Number(pid)} -ErrorAction Stop).StartTime.ToFileTimeUtc()`]]
       : ['ps', ['-o', 'lstart=', '-p', String(Number(pid))]];
-  const r = spawnSync(cmd, argv, { encoding: 'utf8', windowsHide: true });
+  const r = spawn(cmd, argv, { encoding: 'utf8', windowsHide: true, timeout: START_READ_TIMEOUT_MS }); // a timeout leaves status null
   const out = (r.stdout ?? '').trim();
   return r.status === 0 && out ? out : null;
 }
@@ -109,10 +110,10 @@ function pidAlive(pid) {
 }
 
 /** 'dead' | 'reused' | 'alive' for a lock record. An unreadable start time cannot prove reuse. */
-export function holderState(rec) {
+export function holderState(rec, start = procStart) {
   if (!Number.isInteger(rec?.pid) || !pidAlive(rec.pid)) return 'dead';
   if (!rec.start) return 'alive';
-  const now = procStart(rec.pid);
+  const now = start(rec.pid);
   if (now === null) return pidAlive(rec.pid) ? 'alive' : 'dead';
   return now === rec.start ? 'alive' : 'reused';
 }
@@ -236,14 +237,12 @@ export async function acquireSuiteLock({ dir, repo, session = sessionName(), log
   };
 }
 
-/** Release `lock` on SIGINT (exit 130), SIGTERM (exit 143) and, as a last resort, on exit. */
-export function releaseOnSignals(lock, proc = process) {
-  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-    proc.on(signal, async () => {
-      await lock.release();
-      proc.exit(code);
-    });
-  }
+/**
+ * Release `lock` when the process exits. No signal listeners: they would switch off Node's
+ * default stop, and gates under spawnSync would keep running after Ctrl+C. A killed run leaves
+ * a dead pid, which the next waiter takes over.
+ */
+export function releaseOnExit(lock, proc = process) {
   proc.on('exit', () => lock.releaseSync());
 }
 
