@@ -1325,6 +1325,12 @@
   },
   {
    "from": "script:audit-lib",
+   "to": "hook:subagent-budget",
+   "kind": "reads",
+   "label": "LINES (soft and hard context lines)"
+  },
+  {
+   "from": "script:audit-lib",
    "to": "hook:_hooklib",
    "kind": "reads",
    "label": "shared shell SKILL.md read detector"
