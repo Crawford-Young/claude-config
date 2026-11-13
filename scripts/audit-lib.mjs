@@ -59,6 +59,7 @@ import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { shellSkillReads } from '../hooks/_hooklib.mjs';
+import { LINES as BUDGET_LINES } from '../hooks/subagent-budget.mjs';
 import { chargeKey, parseAgentName } from './lib.mjs';
 
 const MTOK = 1e6;
@@ -707,7 +708,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       for (const k of ['wallMs', 'activeMs', ...SPLIT]) g[k] += run[k];
     }
     for (const g of names.values()) g.windows = g.windows.size;
-    const { agents, agentRuns } = agentTimes(cost);
+    const { agents, agentRuns, overLine } = agentTimes(cost);
     const { tools, commands, retry } = toolTimes(idleOf);
     return {
       idleGapMin,
@@ -717,6 +718,7 @@ export function createCollector({ prices, since, until, installedSkills = [], do
       names: [...names.values()].sort((a, b) => b.activeMs - a.activeMs),
       agents,
       agentRuns: agentRuns.sort((a, b) => b.wallMs - a.wallMs),
+      overLine,
       tools,
       commands,
       retry,
@@ -790,14 +792,14 @@ export function createCollector({ prices, since, until, installedSkills = [], do
     for (const [key, tl] of lines) {
       if (!tl.agent || !tl.ts.length || timeOnly.has(key)) continue;
       const first = tl.ts.reduce((a, b) => Math.min(a, b)), wallMs = tl.ts.reduce((a, b) => Math.max(a, b)) - first;
-      agentRuns.push({ id: tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0, peak: cost.runPeak.get(tl.agent.id) || 0, tokens: cost.runTokens.get(tl.agent.id) || 0 });
+      agentRuns.push({ id: tl.agent.id, name: tl.agent.name ?? tl.agent.id, sessionId: tl.win, type: tl.agent.type, first: new Date(first).toISOString().slice(0, 10), wallMs, usd: cost.runUsd.get(tl.agent.id) || 0, peak: cost.runPeak.get(tl.agent.id) || 0, tokens: cost.runTokens.get(tl.agent.id) || 0 });
       (wallsOf[tl.agent.type] ||= []).push(wallMs);
     }
     const agents = {};
     for (const [type, ms] of Object.entries(wallsOf)) {
       agents[type] = { runs: ms.length, wallMs: ms.reduce((a, b) => a + b, 0), p50: pct(ms, 50), p95: pct(ms, 95), usd: cost.agents[type]?.usd || 0 };
     }
-    return { agents, agentRuns };
+    return { agents, agentRuns, overLine: overLine(agentRuns) };
   }
 
   /** Tool and command latency, and what each failed call cost until a retry of
@@ -1300,6 +1302,19 @@ const splitCells = (x) => [dur(x.wallMs), dur(x.activeMs), share(x.modelMs, x.ac
 const SPLIT_HEAD = ['wall', 'active', 'model', 'tools', 'user', 'other'];
 const cell = (s) => String(s).replace(/\|/g, '/');
 
+/** Every run whose peak context passed the subagent budget's hard line (hooks/subagent-budget.mjs, #381), peak descending, with run counts. */
+export function overLine(agentRuns, { soft, hard } = BUDGET_LINES) {
+  const runs = agentRuns.filter((a) => a.peak > hard).sort((a, b) => b.peak - a.peak || a.id.localeCompare(b.id));
+  return { soft, hard, total: agentRuns.length, over: runs.length, overSoft: agentRuns.filter((a) => a.peak > soft).length, runs };
+}
+
+function overLineText(o) {
+  const k = (n) => `${n / 1e3}k`;
+  if (!o.over) return `No run over ${k(o.hard)} (0 of ${o.total}; ${o.overSoft} over the ${k(o.soft)} soft line).`;
+  return [`${o.over} of ${o.total} runs over ${k(o.hard)}; ${o.overSoft} over the ${k(o.soft)} soft line`, '',
+    table(['run', 'type', 'day', 'peak ctx', 'tokens', '$'], o.runs.map((x) => [cell(x.name), x.type, x.first, kt(x.peak), kt(x.tokens), usd(x.usd)]))].join('\n');
+}
+
 function renderTime(t, top) {
   const x = t.totals, out = ['## Time'];
   out.push(`wall ${dur(x.wallMs)} · **active ${dur(x.activeMs)}** (idle gaps over ${t.idleGapMin} min removed) · of active: model ${share(x.modelMs, x.activeMs)} · tools ${share(x.toolsMs, x.activeMs)} · user ${share(x.userMs, x.activeMs)} · other ${share(x.otherMs, x.activeMs)}`);
@@ -1309,6 +1324,7 @@ function renderTime(t, top) {
     t.sessions.slice(0, top).map((s) => [s.first, cell(s.title || s.sessionId.slice(0, 8)).slice(0, 50), ...splitCells(s), usd(s.usd)])));
   out.push('', '**Agent time**', table(['type', 'runs', 'wall', 'p50 run', 'p95 run', '$'],
     Object.entries(t.agents).sort((a, b) => b[1].wallMs - a[1].wallMs).map(([k, a]) => [k, a.runs, dur(a.wallMs), dur(a.p50), dur(a.p95), usd(a.usd)])));
+  out.push('', '**Runs over the hard line**', overLineText(t.overLine));
   out.push('', `**Slowest agent runs** (top ${top})`, table(['type', 'session', 'day', 'wall', 'peak ctx', 'tokens', '$'],
     t.agentRuns.slice(0, top).map((a) => [a.type, a.sessionId.slice(0, 8), a.first, dur(a.wallMs), kt(a.peak), kt(a.tokens), usd(a.usd)])));
   const lat = (o) => Object.entries(o).sort((a, b) => b[1].p95 - a[1].p95).slice(0, top).map(([k, l]) => [cell(k), l.calls, dur(l.p50), dur(l.p95), dur(l.totalMs)]);

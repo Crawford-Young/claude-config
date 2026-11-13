@@ -683,6 +683,30 @@ test('a resumed subagent run has one peak context (largest single request), besi
   assert.match(renderMarkdown(c.report(), { top: 5 }), /\| recon \|[^\n]*\| 150k \| 460k \|/, 'the slowest-runs table shows the peak');
 });
 
+test('runs over the hard line are listed whole, with counts, beyond the slowest-runs top-N', () => {
+  const c = createCollector({ prices: PRICES });
+  const one = (id, name, type, peak) => c.add(asst('r-' + id, usage({ input_tokens: peak, output_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }), { ts: '2026-11-02T10:00:00Z' }), { sessionId: 's1', agent: { id, type, name } });
+  one('a', 'big-run', 'implementer', 210e3);
+  one('b', 'mid-run', 'recon', 160e3);
+  one('c', 'small-run', 'reviewer', 40e3);
+  const r = c.report().time.overLine;
+  assert.deepEqual([r.hard, r.soft, r.total, r.over, r.overSoft], [200e3, 150e3, 3, 1, 2]);
+  assert.deepEqual(r.runs.map((x) => [x.name, x.type, x.first, x.peak, x.tokens]), [['big-run', 'implementer', '2026-11-02', 210e3, 210e3 + 1]]);
+  assert.ok(r.runs[0].usd > 0);
+  const md = renderMarkdown(c.report(), { top: 1 });
+  assert.match(md, /1 of 3 runs over 200k; 2 over the 150k soft line/);
+  assert.match(md, /\| big-run \| implementer \| 2026-11-02 \| 210k \| 210k \| \$/);
+  assert.doesNotMatch(md, /mid-run|small-run/);
+});
+
+test('no run over the hard line: one line saying so', () => {
+  const c = createCollector({ prices: PRICES });
+  c.add(asst('r1', usage({ input_tokens: 160e3, output_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }), { ts: '2026-11-02T10:00:00Z' }), { sessionId: 's1', agent: { id: 'm', type: 'recon' } });
+  const r = c.report().time.overLine;
+  assert.deepEqual([r.over, r.runs.length, r.total, r.overSoft], [0, 0, 1, 1]);
+  assert.match(renderMarkdown(c.report(), { top: 5 }), /No run over 200k \(0 of 1; 1 over the 150k soft line\)\./);
+});
+
 test('time: parallel subagents count once toward session time, each toward its own run', () => {
   const c = createCollector({ prices: PRICES, idleGapMin: 0.5 }); // 30 s: main alone would idle out
   feed(c, MAIN,
