@@ -205,6 +205,13 @@ export function gradeAgreement(runs, { kappaMin = KAPPA_MIN, userMin = USER_MIN 
   return { kappaMin, userMin, graders, user, qualityReported: withheld.length === 0, withheld, ungraded };
 }
 
+/** The pairs reported when `--pair` isn't given, for the arms the runs hold: current minus bare, then
+ *  current minus solo with solo, unit minus solo with both, unit minus current with unit (#385). */
+export function defaultPairs(arms) {
+  const has = (arm) => arms.includes(arm);
+  return [['current', 'bare'], ...(has('solo') ? [['current', 'solo']] : []), ...(has('unit') && has('solo') ? [['unit', 'solo']] : []), ...(has('unit') ? [['unit', 'current']] : [])];
+}
+
 const outcome = (d, better) => (Math.abs(d) < TIE ? 'tied' : (d > 0) === (better === 'higher') ? 'won' : 'lost');
 const byRun = (a, b) => a.ticket.localeCompare(b.ticket, 'en', { numeric: true }) || a.run - b.run;
 
@@ -219,8 +226,8 @@ function missingReason(runs, ticket, arm) {
  *  heldReason, flags: {timedOut, budgetCapped}, values, grades: {first, second, user}, subagents:
  *  {spawned, costShare} | null, claudeLaunches: [command]}]. Excluded and resultless runs count in no
  *  metric; a held run has no grade, so it counts in the run-side metrics only; timed-out and
- *  budget-capped runs count in all (they are the arm's real outcome). A pair with solo is reported
- *  twice (#374): over every ticket, then over `spawnExpected` (ticket ids) only, where the director
+ *  budget-capped runs count in all (they are the arm's real outcome). A pair with solo or unit is
+ *  reported twice (#374, #385): over every ticket, then over `spawnExpected` (ticket ids) only, where the director
  *  would spawn. A ticket a pair can't compare is named with why, per pair and per metric. */
 export function compare(runs, { pairs, spawnExpected = [], iterations = 10000, seed = 1, kappaMin, userMin, joined = true } = {}) {
   const counted = runs.filter((r) => r.status === 'counted');
@@ -252,7 +259,7 @@ export function compare(runs, { pairs, spawnExpected = [], iterations = 10000, s
   const spawnSet = new Set(spawnExpected);
   const scopes = ([a, b]) => [
     { a, b, scope: 'all', tickets },
-    ...(a === 'solo' || b === 'solo' ? [{ a, b, scope: 'spawn-expected', tickets: tickets.filter((t) => spawnSet.has(t)) }] : []),
+    ...([a, b].some((x) => x === 'solo' || x === 'unit') ?[{ a, b, scope: 'spawn-expected', tickets: tickets.filter((t) => spawnSet.has(t)) }] : []),
   ];
   const paired = pairs.flatMap(scopes).map(({ a, b, scope, tickets: inScope }) => {
     const hasCounted = (ticket, arm) => counted.some((r) => r.ticket === ticket && r.arm === arm);

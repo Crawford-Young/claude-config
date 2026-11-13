@@ -8,12 +8,17 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 /** bare: no harness (--safe-mode). current: the harness at the ticket's parent. solo (#374): current
  *  with subagent spawning off, so a harness result splits into the rules, hooks and skills versus the
- *  director and its agents. */
-export const ARMS = ['bare', 'current', 'solo'];
+ *  director and its agents. unit (#385): current with the main session run as the unit agent, whose
+ *  definitions are overlaid from the live harness (today's, not the ticket's). */
+export const ARMS = ['bare', 'current', 'solo', 'unit'];
 /** Whether an arm runs the harness checkout: its CLAUDE.md chain, skills, agents, rules and hooks. */
 export const usesHarness = (arm) => arm !== 'bare';
 /** The tools solo denies: Agent spawns a subagent, Workflow a script that spawns them. */
 export const SOLO_DENIED_TOOLS = ['Agent', 'Workflow'];
+/** The agent the unit arm runs its session as, and the definitions it overlays from the live harness:
+ *  the unit agent and the tester it spawns. */
+export const UNIT_AGENT = 'unit';
+export const UNIT_AGENT_FILES = ['agents/unit.md', 'agents/tester.md'];
 /** Where runs, packets and canary captures go, beside qa.mjs's logs. */
 export const DEFAULT_OUT = join(homedir(), '.claude', 'ab-271');
 /** The harness repo under the workspace. */
@@ -247,11 +252,14 @@ export function pruneClaudeJson(j) {
 
 /** claude's argv for one round. bare adds --safe-mode; solo adds a deny of SOLO_DENIED_TOOLS
  *  (`claude --help`, 2.1.322: "--disallowedTools <tools...> Comma or space-separated list of tool names
- *  to deny"), which the canary proves takes them out of the model's tool list. Nothing else differs. */
+ *  to deny"), which the canary proves takes them out of the model's tool list; unit adds --agent
+ *  UNIT_AGENT (`claude --help`, 2.1.323: "--agent <agent> Agent for the current session. Overrides the
+ *  'agent' setting."). Nothing else differs. */
 export function claudeArgs(arm, { model, effort, permissionMode, budgetUsd }) {
   if (!ARMS.includes(arm)) throw new Error(`arm must be one of ${ARMS.join(', ')}, got ${JSON.stringify(arm)}`);
   const args = ['-p', '--model', model, '--output-format', 'json', '--effort', effort, '--permission-mode', permissionMode, '--permission-prompts', 'none', '--max-budget-usd', String(budgetUsd)];
   if (arm === 'bare') return ['--safe-mode', ...args];
+  if (arm === 'unit') return [...args, '--agent', UNIT_AGENT];
   return arm === 'solo' ? [...args, '--disallowedTools', SOLO_DENIED_TOOLS.join(',')] : args;
 }
 
@@ -401,12 +409,14 @@ export function subagentMetrics(jsonl, modelUsage) {
 }
 
 /** What a run's subagent count says beside its arm: a current run that spawned none measures what solo
- *  does; a solo run that spawned any wasn't solo; a count claude reports (`reported`, null when it
+ *  does; a solo run that spawned any wasn't solo; a unit run that spawned none measured the unit agent
+ *  alone; a count claude reports (`reported`, null when it
  *  didn't) that the transcripts don't match means one of them missed some. → [note]. */
 export function subagentNotes(arm, { spawned }, reported) {
   const notes = [];
   if (arm === 'current' && spawned === 0) notes.push('none spawned: this current run measures the same thing as the solo arm');
   if (arm === 'solo' && spawned > 0) notes.push(`solo spawned ${spawned} subagent(s): spawning was not off`);
+  if (arm === 'unit' && spawned === 0) notes.push('none spawned: this unit run measures the unit agent working alone, not a unit spawning workers');
   if (reported !== null && reported !== spawned) notes.push(`claude reports ${reported} spawned, the transcripts show ${spawned}`);
   return notes;
 }
@@ -666,13 +676,17 @@ export function planRound(manifest, ticket, arm, run, { tmp, workspace, out, rou
   // The cap comes from the prior alone, so every arm of a ticket gets the same one: a cap from measured
   // runs would hold the second arm to the first arm's spend (#288).
   const budgetUsd = Math.ceil(2 * estimateRound(ticket, manifest, []).usd);
+  const harnessSource = join(workspace, HARNESS_PATH);
+  // unit overlays today's definitions from the live harness: the ticket's parent may predate them.
+  const overlay = arm === 'unit' ? UNIT_AGENT_FILES.map((file) => ({ file, from: join(harnessSource, file), to: join(layout.config, file) })) : [];
   return {
     ticket,
     arm,
     run,
     layout,
     source,
-    harnessSource: join(workspace, HARNESS_PATH),
+    harnessSource,
+    overlay,
     resultsDir: join(out, 'runs', ticket.id, `${arm}-r${run}`),
     fetch: checkoutSteps(source, ticket.parent, layout.checkout),
     claude: { args: claudeArgs(arm, { model: manifest.model, effort: manifest.effort, permissionMode: manifest.permissionMode, budgetUsd }) },

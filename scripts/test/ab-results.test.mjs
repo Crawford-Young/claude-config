@@ -10,7 +10,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnHarness, tempDir } from './_spawn.mjs';
 import { GRADE_SLOTS, USER_SAMPLE, blindId, userSample } from '../ab/grade.mjs';
+import { cpSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import * as resultsLib from '../ab/results-lib.mjs';
 import { KAPPA_MIN, bootstrapMean, bootstrapPairDiff, claudeLaunches, gradeAgreement, kappa, median, rng, runFlags, summarize, transcriptTokens } from '../ab/results-lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -228,7 +230,7 @@ test('userSample picks 10 runs balanced across arms, repeats under a salt, and k
 test('grade.mjs writes every packet for two separate graders and a blind user sample, each in its own dir with its own ids', () => {
   const { out, manifest, grade } = gradedOut('ab-grade-');
   // 16 run dirs: one crashed (no result), one excluded, one held -> 13 packets per grader.
-  assert.match(grade.stdout, /13 packet\(s\) in .*; excluded as contaminated: bare 1, current 0, solo 0; held as still identifying their arm: bare 0, current 1, solo 0/);
+  assert.match(grade.stdout, /13 packet\(s\) in .*; excluded as contaminated: bare 1, current 0, solo 0, unit 0; held as still identifying their arm: bare 0, current 1, solo 0, unit 0/);
   assert.match(grade.stdout, /second grader: 13 packet\(s\) in .*packets-second; user sample: 10 packet\(s\) in .*packets-user/);
   const key = JSON.parse(readFileSync(join(out, 'blind-key.json'), 'utf8'));
   const runKey = (r) => `${r.ticket}/${r.arm}/${r.run}`;
@@ -393,6 +395,42 @@ test('#374: with a solo arm the default pairs are current:bare and current:solo,
   near(spawn.metrics.passRate.mean, -0.5625, 'spawn-expected mean');
   assert.match(md, /^## current − solo$/m);
   assert.match(md, /^## current − solo, spawn-expected tickets only \(t-1, t-3\)$/m);
+});
+
+test('#385: defaultPairs is current:bare, then current:solo with solo, unit:solo with unit and solo, unit:current with unit', () => {
+  const { defaultPairs } = resultsLib;
+  assert.equal(typeof defaultPairs, 'function');
+  assert.deepEqual(defaultPairs(['bare', 'current']), [['current', 'bare']]);
+  assert.deepEqual(defaultPairs(['bare', 'current', 'solo']), [['current', 'bare'], ['current', 'solo']]);
+  assert.deepEqual(defaultPairs(['bare', 'current', 'unit']), [['current', 'bare'], ['unit', 'current']]);
+  assert.deepEqual(defaultPairs(['bare', 'current', 'solo', 'unit']), [['current', 'bare'], ['current', 'solo'], ['unit', 'solo'], ['unit', 'current']]);
+});
+
+test('#385: with a unit arm the default pairs add unit:solo and unit:current, each over all tickets and again over the spawn-expected ones', () => {
+  const out = tempDir('ab-unit-pairs-');
+  buildOut(out);
+  // The unit runs are the solo run dirs under the unit name, so every unit value equals solo's.
+  for (const t of ['t-1', 't-2', 't-3']) {
+    const from = join(out, 'runs', t, 'solo-r1');
+    const to = join(out, 'runs', t, 'unit-r1');
+    cpSync(from, to, { recursive: true });
+    const file = join(to, 'result.json');
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), arm: 'unit' }));
+  }
+  const { json, md } = results(out);
+  assert.deepEqual(json.arms, ['bare', 'current', 'solo', 'unit']);
+  assert.deepEqual(json.pairs.map((p) => [p.a, p.b, p.scope]), [
+    ['current', 'bare', 'all'],
+    ['current', 'solo', 'all'], ['current', 'solo', 'spawn-expected'],
+    ['unit', 'solo', 'all'], ['unit', 'solo', 'spawn-expected'],
+    ['unit', 'current', 'all'], ['unit', 'current', 'spawn-expected'],
+  ]);
+  const unitSolo = json.pairs.filter((p) => p.a === 'unit' && p.b === 'solo');
+  assert.deepEqual(unitSolo.map((p) => p.tickets), [['t-1', 't-2', 't-3'], ['t-1', 't-3']]);
+  assert.deepEqual(unitSolo[0].metrics.costUsd.perTicket.map((t) => [t.ticket, t.d, t.outcome]), [['t-1', 0, 'tied'], ['t-2', 0, 'tied'], ['t-3', 0, 'tied']]);
+  assert.deepEqual(unitSolo[1].metrics.costUsd.perTicket.map((t) => t.ticket), ['t-1', 't-3']);
+  assert.match(md, /^## unit − current$/m);
+  assert.match(md, /^## unit − current, spawn-expected tickets only \(t-1, t-3\)$/m);
 });
 
 test('#374: the per-ticket table shows each run\'s subagents, spawned and share of cost', () => {

@@ -6,9 +6,10 @@
 // Joins <out>/runs/<ticket>/<arm>-r<n>/result.json (and the run's transcripts, for tokens) with
 // blind-key.json and the grade.json of every packet slot grade.mjs wrote. Writes <out>/results.md and
 // <out>/results.json: one row per ticket with each arm's median and range per metric; for each pair
-// (default current minus bare, plus current minus solo when the runs hold solo; any two arms the runs
-// hold) the per-ticket difference and the mean over tickets with seeded bootstrap intervals and tickets
-// won / tied / lost, a pair with solo again over the manifest's spawnExpected tickets, and every ticket
+// (default current minus bare, plus current minus solo when the runs hold solo, unit minus solo when
+// they hold unit and solo, unit minus current when they hold unit; any two arms the runs hold) the
+// per-ticket difference and the mean over tickets with seeded bootstrap intervals and tickets won /
+// tied / lost, a pair with solo or unit again over the manifest's spawnExpected tickets, and every ticket
 // a pair can't compare, with why; each run's subagents (spawned, share of cost); grader agreement on
 // Done-when verdicts, which withholds the quality scores below its floor; and every excluded, held,
 // timed-out, budget-capped and resultless run per arm, and each run whose Bash launched claude itself.
@@ -21,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { die, isMain, log, parseArgs, readIfExists } from '../lib.mjs';
 import { DEFAULT_OUT, parseManifest, readResult } from './ab-lib.mjs';
 import { GRADE_SLOTS, exclusionReason } from './grade.mjs';
-import { claudeLaunches, compare, renderResults, runFlags, runValues, transcriptTokens } from './results-lib.mjs';
+import { claudeLaunches, compare, defaultPairs, renderResults, runFlags, runValues, transcriptTokens } from './results-lib.mjs';
 
 const AB_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -107,7 +108,7 @@ function main() {
     spawnExpected = manifest.tickets.filter((t) => t.spawnExpected).map((t) => t.id);
     runs = loadRuns(out, keyText ? JSON.parse(keyText) : null);
     const arms = [...new Set(runs.map((r) => r.arm))].sort();
-    pairs = parsePairs(args.pair || (arms.includes('solo') ? 'current:bare,current:solo' : 'current:bare'), arms);
+    pairs = parsePairs(args.pair || defaultPairs(arms).map((p) => p.join(':')).join(','), arms);
   } catch (e) {
     die(e.message);
   }

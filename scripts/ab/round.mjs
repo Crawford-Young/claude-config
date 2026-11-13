@@ -2,11 +2,12 @@
 //
 // A round lives under <tmp>/ab/<round id>, which is the session's HOME:
 //   code/.worktrees/claude-config-<N>  the ticket checkout: the parent and its history only, no branch, no remote
-//   code/claude-config          current and solo only: the harness checkout at the ticket's harness commit
-//   code/{CLAUDE.md,<domain>/}  current and solo only: that commit's workspace/ (the ancestor CLAUDE.md chain)
+//   code/claude-config          all but bare: the harness checkout at the ticket's harness commit
+//   code/{CLAUDE.md,<domain>/}  all but bare: that commit's workspace/ (the ancestor CLAUDE.md chain)
 //   .claude/                    CLAUDE_CONFIG_DIR: settings for the arm, the account (no login: auth is the
 //                               user's CLAUDE_CODE_OAUTH_TOKEN), an empty projects/ (no memory, and
-//                               transcripts no other round can see); current and solo add skills/, agents/, rules/
+//                               transcripts no other round can see); all but bare add skills/, agents/, rules/,
+//                               and unit overlays agents/unit.md and agents/tester.md from the live harness
 //   AppData/{Roaming,Local}     APPDATA and LOCALAPPDATA, so Windows code finds the round as its home too
 //   tmp/                        TEMP, TMP and TMPDIR, so the session's temp files stay in the round (Git
 //                               Bash's /tmp still mounts the real %TEMP%; the contamination scan watches it)
@@ -55,10 +56,13 @@ export function realClaudePaths(env = process.env) {
 }
 
 /** Build the round in plan.layout (which must not exist yet) and return the env for the gates
- *  (claude's adds the user's CLAUDE_CODE_OAUTH_TOKEN, which it alone gets) and the prompt. */
+ *  (claude's adds the user's CLAUDE_CODE_OAUTH_TOKEN, which it alone gets), the prompt, and the
+ *  overlaid definitions as [{file, blob}] (null in arms that overlay nothing). */
 export function prepareRound(plan, { workspace }) {
   const { layout: l, ticket, arm } = plan;
   if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) throw new Error(tokenHelp(RUN_COMMAND));
+  // Before anything is built, so a missing definition leaves no round dir behind.
+  for (const o of plan.overlay) if (!existsSync(o.from)) throw new Error(`the ${arm} arm overlays ${o.from}, which does not exist`);
   const real = realClaudePaths();
   for (const d of [l.root, l.appData, l.localAppData, l.tmp]) mkdirSync(d, { recursive: true });
   fetchCheckout(plan.source, ticket.parent, l.checkout, [ticket.merge]);
@@ -69,6 +73,7 @@ export function prepareRound(plan, { workspace }) {
       if (d.isDirectory() && existsSync(join(l.harness, 'skills', d.name, 'SKILL.md'))) cpSync(join(l.harness, 'skills', d.name), join(l.config, 'skills', d.name), { recursive: true });
     }
     cpSync(join(l.harness, 'agents'), join(l.config, 'agents'), { recursive: true });
+    for (const o of plan.overlay) cpSync(o.from, o.to);
     // Harness commits before #345 have no rules/.
     if (existsSync(join(l.harness, 'rules'))) cpSync(join(l.harness, 'rules'), join(l.config, 'rules'), { recursive: true });
   }
@@ -84,7 +89,9 @@ export function prepareRound(plan, { workspace }) {
   if (arm === 'bare' && above.length) throw new Error(`a CLAUDE.md above the bare checkout would load: ${above.join(', ')}`);
   if (usesHarness(arm) && !above.includes(join(l.code, 'CLAUDE.md'))) throw new Error(`the ${arm} checkout has no harness CLAUDE.md above it (found: ${above.join(', ') || 'none'})`);
 
-  return { env: childEnv(process.env, barrierEnv(l)), prompt: promptFrom(ticket.body) };
+  // The git blob of each overlaid file ties the run to the commit that holds those bytes.
+  const overlay = plan.overlay.length ? plan.overlay.map((o) => ({ file: o.file, blob: must(['git', '-C', plan.harnessSource, 'hash-object', '--', o.file]).trim() })) : null;
+  return { env: childEnv(process.env, barrierEnv(l)), prompt: promptFrom(ticket.body), overlay };
 }
 
 /** The round dir after the round: kept (`keep`) with a PowerShell line to remove it, else removed. */
