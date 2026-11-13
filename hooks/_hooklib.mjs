@@ -297,7 +297,7 @@ export function isBrowserApproving(answers) {
 const browserRemedy =
   'Ask the user with AskUserQuestion — give it an option that approves opening the browser (answer wording like "launch"/"browser"/"Chrome", without "hold"/"wait"/"no") — then retry. One approval covers the rest of the session.';
 
-/** A visible browser (Chrome MCP, headed Playwright) needs the user's consent
+/** A visible browser (Chrome MCP; browser-gate.mjs is the only caller) needs the user's consent
  *  once per session: an approving answer records `sessionId` in the state
  *  file, and every later browser call in that session passes without reading
  *  the transcript. Returns the block reason, or null to allow. Fails closed. */

@@ -9,8 +9,8 @@
 // ~/.claude/browser-gate-sessions.json (CLAUDE_BROWSER_GATE_STATE overrides) —
 // so later calls in that session pass without re-asking. Read-only context
 // calls (tabs_context_mcp, list_connected_browsers) are never gated.
-// bash-guard.mjs applies the same rule to headed Playwright via the shared
-// _hooklib.mjs browserGateReason.
+// This gate alone applies the rule, through _hooklib.mjs browserGateReason;
+// bash-guard no longer gates headed Playwright.
 //
 // Fails CLOSED, like the other guards: an unreadable transcript blocks.
 

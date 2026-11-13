@@ -28,7 +28,8 @@
    "file": "workspace/games/CLAUDE.md",
    "summary": "Godot 4, GDScript, GUT stack rules.",
    "rules": [
-    "Hand-load DIAGNOSTICS.md before movement/physics/feel work"
+    "Hand-load DIAGNOSTICS.md before movement/physics/feel work",
+    "Hand-load EXPORT.md before export, export-preset or web-build work"
    ]
   },
   {
@@ -316,19 +317,18 @@
    "kind": "hook",
    "label": "bash-guard",
    "file": "hooks/bash-guard.mjs",
-   "summary": "PreToolUse:Bash|PowerShell — ten rules, incl. gate output piped onward with a runnable rewrite (rule 3, #295), shell-launched fable (rule 7, added in C8), push/PR approval (rule 8, #75) and headed-Playwright browser consent (rule 9, #75); gate-record forgery (rule 11, #190) went with #291, the heredoc doubled-backslash block (rule 10) with #293.",
+   "summary": "PreToolUse:Bash|PowerShell — eight numbered rules (1-4, 6-8, 12; a gap is a cut rule): rule 1 blocks add -A/commit -a only in shared (non-worktree) checkouts and allows git add -N (#368); rule 3 is one fixed message, run the gate unpiped and redirect it (#368, was a runnable rewrite, #295); rule 6 also blocks git commit in the claude-config main checkout and resolves literal cd/-C paths only (#368); shell-launched fable (rule 7), push/PR approval (rule 8, #75), node -e substitution (rule 12, #258). Headed-Playwright consent (old rule 9) and rules 5, 10, 11 are gone: browser-gate alone gates a visible browser.",
    "rules": [
-    "No git add -A / commit -a",
+    "No git add -A / commit -a in a shared (non-worktree) checkout; linked worktrees and git add -N pass; an unresolvable dir counts as shared (#368)",
     "No .env in git",
-    "No gate (by command word, incl. cargo/just) piped onward",
+    "No gate (by command word, incl. cargo/just) piped onward — one fixed message (#368)",
     "No Set-Content/Out-File",
-    "No commit on main in code repos (each git call judged in its own cd'd repo)",
-    "claude-config main never switches branch or restores files",
+    "claude-config main never switches branch, restores files or takes a commit; literal cd/-C paths only (#368)",
     "claude --model fable needs FABLE OK",
     "git push / gh pr create / gh pr merge need an approving AskUserQuestion answer or typed user prompt in the transcript (never a peer, tool, hook or notification record), single-use per verb — or, when its first gated call is a lone canonical push/PR create/merge command, bound to that branch's whole ship until its merge, every later gated call a lone canonical command for it (#305); a remote branch delete (push --delete, -d, or :branch refspecs only) is exempt like --dry-run; a negator refuses only the act it negates",
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
     "One gated verb per Bash call — a compound with two is blocked unspent",
-    "playwright --headed/--ui/codegen/show-report/open need browser consent; headless playwright test is ungated",
+    "A node/bun -e script or deno eval holding a shell substitution is blocked (#258)",
     "A command nesting blocks, groups or substitutions more than 100 levels deep is blocked unread (#167)"
    ]
   },
@@ -533,7 +533,7 @@
    "kind": "script",
    "label": "verify-frontmatter.mjs",
    "file": "scripts/verify-frontmatter.mjs",
-   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (unflagged descriptions + skills/INDEX.md + CLAUDE.md files) stay within CAPS (issues #63, #64); also reports synced skill/plugin description bytes, report only (#124; --synced-skills/--synced-plugins).",
+   "summary": "CI gate: every SKILL.md and agent def has parseable frontmatter, and resident bytes (unflagged descriptions + skills/INDEX.md + CLAUDE.md files) stay within CAPS (issues #63, #64); also reports synced skill/plugin description bytes, report only (#124; --synced-skills/--synced-plugins); checks the implementer-opus body matches implementer's.",
    "rules": [
     "Caps live in one CAPS const at the top of the script",
     "Bytes measured as UTF-8 with CRLF normalized to LF"
@@ -619,7 +619,7 @@
    "kind": "script",
    "label": "guard-replay.mjs",
    "file": "scripts/guard-replay.mjs",
-   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106).",
+   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106); --by-rule counts the live bash-guard blocks per rule (#368).",
    "rules": [
     "Run before a guard or approval-parser PR",
     "Report only, exit 0; local transcripts, never CI"
@@ -630,7 +630,7 @@
    "kind": "script",
    "label": "ab/run.mjs",
    "file": "scripts/ab/run.mjs",
-   "summary": "The #271 A/B, bare Claude Code vs the harness on 10 replayed tickets: run.mjs runs one round that round.mjs builds (the ticket at its parent with no route to the fix; its own home, Claude config, gh and git; the harness at the ticket's commit for the current arm), grade.mjs writes blind grading packets, canary.mjs proves what an arm loads against a local API stub.",
+   "summary": "The #271 A/B, bare Claude Code vs the harness on 10 replayed tickets: run.mjs runs one round that round.mjs builds (the ticket at its parent with no route to the fix; its own home, Claude config, gh and git; the harness at the ticket's commit for the current arm), grade.mjs writes blind grading packets, canary.mjs proves what an arm loads against a local API stub, results.mjs reads the runs into paired current-vs-bare and current-vs-solo comparisons (the solo arm, run only where the manifest's spawnExpected tickets need subagents), and the manifest's pending list holds the #369 project tickets until the runner has them.",
    "rules": [
     "A live round runs one (ticket, arm, run) and needs the user's clearance first; --dry-run prints its commands and estimate",
     "Hand a grader the packets dir only, never blind-key.json"
@@ -664,14 +664,14 @@
    "kind": "script",
    "label": "audit.mjs",
    "file": "scripts/audit.mjs",
-   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by charge, lib's chargeKey (every form of one charge joins; a named subagent joins its own name, #272, #360), --session filters to one charge; agent spend per type × model × effort; --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
+   "summary": "Transcript-replay audit: $, context depth, per-agent-type cost, skill/doc invocations, hook blocks and timings, and time (active vs wall, model/tools/user split, agent and tool latency, retry cost), inline edits vs dispatches; grouped by charge, lib's chargeKey (every form of one charge joins; a named subagent joins its own name, #272, #360), --session filters to one charge; agent spend per type × model × effort with warm-redo, steered, re-run and escalation columns, the redo-or-escalation rate and a fit flag (#370); --stamps flags `verified:` stamps naming a model older than prices.json's newest of its line (#113)."
   },
   {
    "id": "script:audit-lib",
    "kind": "script",
    "label": "audit-lib.mjs",
    "file": "scripts/audit-lib.mjs",
-   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-charge rows keyed by lib's chargeKey (a named subagent's request by its meta.json name, else a non-bare description, #272, #318), timestamp timelines for the time dimension; agentMix per type × model × effort; checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
+   "summary": "Pure accounting for audit.mjs: requestId dedupe, 5m/1h cache pricing, cost-state coverage line, a window per custom title (streamed, replays kept with the first transcript read), per-charge rows keyed by lib's chargeKey (a named subagent's request by its meta.json name, else a non-bare description, #272, #318), timestamp timelines for the time dimension; agentMix per type × model × effort (warm redo = resumed, steered, re-run, escalated, redo-or-escalation rate, agentFit flags, #370); checkStamps parses `verified: YYYY-MM` stamps (CLAUDE.md chain, workspace/docs, agents, skills) against the newest version of each line in prices.json (#113)."
   },
   {
    "id": "store:push-gate-approvals",
@@ -1104,7 +1104,7 @@
    "from": "hook:bash-guard",
    "to": "phase:land-pr",
    "kind": "gates",
-   "label": "no add -A, no commit on main, push/PR needs the user's approval"
+   "label": "no add -A in shared checkouts, no commit on claude-config main, push/PR needs the user's approval"
   },
   {
    "from": "hook:bash-guard",
@@ -1272,6 +1272,11 @@
   },
   {
    "from": "script:guard-replay",
+   "to": "script:lib",
+   "kind": "reads"
+  },
+  {
+   "from": "script:guard-replay",
    "to": "store:transcripts",
    "kind": "reads"
   },
@@ -1416,6 +1421,12 @@
    "to": "script:session-name",
    "kind": "invokes",
    "label": "agent names (SKILL.md, directing.md)"
+  },
+  {
+   "from": "script:verify-frontmatter",
+   "to": "agent:implementer-opus",
+   "kind": "gates",
+   "label": "body must match implementer's"
   },
   {
    "from": "script:verify-frontmatter",
