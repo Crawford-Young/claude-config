@@ -235,3 +235,94 @@ test('--session --with-agents also keeps every agent run under a kept window, ea
   assert.deepEqual(j.time.sessions.map((s) => [s.sessionId, s.wallMs]), [['d', 5 * 60e3]]);
   assert.match(spawnHarness(cli, ['--root', batchFixture(), '--with-agents']).stderr, /--with-agents needs --session/);
 });
+
+/** One unit window plus four named workers under one charge, distinct peak contexts and two models (#406). */
+function peaksFixture() {
+  const root = tempDir('audit-cli-');
+  const proj = join(root, 'C--proj');
+  const sub = join(proj, 'd', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  const say = (id, ts, model, usage) => ({ type: 'assistant', uuid: `u-${id}`, requestId: id, timestamp: ts, sessionId: 'd',
+    message: { id: `m-${id}`, model, usage: { output_tokens: 1, ...usage }, content: [] } });
+  const at = (m) => `2026-10-05T10:${String(m).padStart(2, '0')}:00Z`;
+  writeFileSync(join(proj, 'd.jsonl'), lines(say('d1', at(0), 'claude-opus-5', { input_tokens: 10 }),
+    { type: 'custom-title', sessionId: 'd', customTitle: 'unit_issue_repo-9' }));
+  const worker = (file, name, agentType, recs) => {
+    writeFileSync(join(sub, `agent-${file}.jsonl`), lines(...recs));
+    writeFileSync(join(sub, `agent-${file}.meta.json`), JSON.stringify({ agentType, name }));
+  };
+  // peak = input + cache_read + cache_creation of the largest request
+  worker('a01', 'test_issue_repo-9', 'tester', [say('t1', at(1), 'claude-sonnet-5', { input_tokens: 10, cache_read_input_tokens: 40000 })]);
+  worker('a02', 'impl_issue_repo-9', 'implementer', [
+    say('i1', at(2), 'claude-opus-5', { input_tokens: 10, cache_read_input_tokens: 50000 }),
+    say('i2', at(3), 'claude-opus-5', { input_tokens: 10, cache_read_input_tokens: 100000, cache_creation_input_tokens: 60000 }),
+    say('i3', at(4), 'claude-sonnet-5', { input_tokens: 10, cache_read_input_tokens: 20000 })]);
+  worker('a03', 'review_issue_repo-9', 'reviewer', [say('r1', at(5), 'claude-opus-5', { input_tokens: 90000 })]);
+  worker('a04', 'unit_issue_repo-9', 'unit', [say('n1', at(6), 'claude-sonnet-5', { input_tokens: 20000 })]);
+  // an unnamed run: no name, no description -> charged by its window's title
+  worker('aunnamed1', undefined, 'recon', [say('x1', at(7), 'claude-sonnet-5', { input_tokens: 30000 })]);
+  return root;
+}
+
+const peakSection = (stdout) => {
+  const i = stdout.indexOf('**Agents per charge**');
+  assert.notEqual(i, -1, 'the Agents per charge section is printed');
+  const rest = stdout.slice(i + '**Agents per charge**'.length);
+  const end = rest.search(/\n\*\*|\n#/);
+  return end === -1 ? rest : rest.slice(0, end);
+};
+const cells = (line) => line.split('|').slice(1, -1).map((c) => c.trim());
+/** The section's table as [{header: cell}] objects, one per data row. */
+const peakRows = (stdout) => {
+  const rows = peakSection(stdout).split('\n').filter((l) => l.startsWith('|'));
+  const head = cells(rows[0]);
+  return { head, data: rows.slice(2).map((l) => Object.fromEntries(cells(l).map((c, i) => [head[i], c]))) };
+};
+
+test('--session prints Agents per charge: every run by name with charge, type, model, peak ctx and $, past --top, sorted by peak (#406)', () => {
+  const r = spawnHarness(cli, ['--root', peaksFixture(), '--session', 'unit_issue_repo-9', '--with-agents', '--top', '1']);
+  assert.equal(r.status, 0, r.stderr);
+  const { head, data } = peakRows(r.stdout);
+  for (const h of ['charge', 'name', 'type', 'model', 'peak ctx', '$']) assert.ok(head.includes(h), `column ${h} in ${head}`);
+  assert.deepEqual(data.map((c) => c.name), ['impl_issue_repo-9', 'review_issue_repo-9', 'test_issue_repo-9', 'aunnamed1', 'unit_issue_repo-9'],
+    'all five runs despite --top 1, by peak ctx descending');
+  assert.deepEqual(data.map((c) => [c.type, c.model, c['peak ctx']]), [
+    ['implementer', 'claude-opus-5', '160k'],
+    ['reviewer', 'claude-opus-5', '90k'],
+    ['tester', 'claude-sonnet-5', '40k'],
+    ['recon', 'claude-sonnet-5', '30k'],
+    ['unit', 'claude-sonnet-5', '20k'],
+  ]);
+  for (const c of data) assert.match(c['$'], /^\$\d+\.\d\d$/);
+  assert.deepEqual(data.map((c) => [c.name, c.charge]), data.map((c) => [c.name, 'issue_repo-9']),
+    'every run, the unnamed one included, is charged to the unit\'s charge');
+});
+
+test('--session --with-agents lists each run under its own charge in Agents per charge (#406)', () => {
+  const r = spawnHarness(cli, ['--root', batchFixture(), '--session', 'director_topic_batch-1-2', '--with-agents']);
+  assert.equal(r.status, 0, r.stderr);
+  const { data } = peakRows(r.stdout);
+  const chargeOf = Object.fromEntries(data.map((c) => [c.name, c.charge]));
+  assert.equal(chargeOf['impl_issue_repo-1'], 'issue_repo-1');
+  assert.equal(chargeOf['recon_issue_repo-2'], 'issue_repo-2');
+  assert.equal(data.length, 2);
+});
+
+test('an unfiltered audit prints no Agents per charge section (#406)', () => {
+  const r = spawnHarness(cli, ['--root', peaksFixture()]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /Agents per charge/);
+});
+
+test('--json time.agentRuns entries carry the model of the run\'s most-used model-and-effort setting (#406)', () => {
+  const r = spawnHarness(cli, ['--root', peaksFixture(), '--session', 'unit_issue_repo-9', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  const byName = Object.fromEntries(JSON.parse(r.stdout).time.agentRuns.map((a) => [a.name, a.model]));
+  assert.deepEqual(byName, {
+    'impl_issue_repo-9': 'claude-opus-5', // 2 opus requests vs 1 sonnet
+    'review_issue_repo-9': 'claude-opus-5',
+    'test_issue_repo-9': 'claude-sonnet-5',
+    'unit_issue_repo-9': 'claude-sonnet-5',
+    'aunnamed1': 'claude-sonnet-5',
+  });
+});

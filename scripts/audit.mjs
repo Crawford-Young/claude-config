@@ -98,4 +98,4 @@ if (o.session && !files) {
 }
 const report = { ...c.report(), staleStamps };
 if (o.json) console.log(JSON.stringify({ files, ...report }, null, 2));
-else console.log(`# Transcript audit — ${files} transcripts${o.session ? ` charged to ${wanted}` : ''}${o.since ? ` from ${o.since}` : ''}${o.until ? ` to ${o.until}` : ''}\n\n${renderMarkdown(report, { top: +o.top })}`);
+else console.log(`# Transcript audit — ${files} transcripts${o.session ? ` charged to ${wanted}` : ''}${o.since ? ` from ${o.since}` : ''}${o.until ? ` to ${o.until}` : ''}\n\n${renderMarkdown(report, { top: +o.top, session: !!o.session })}`);
