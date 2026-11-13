@@ -153,6 +153,55 @@ test('an Agent tool with no name parameter: the name in description stands in, n
   assert.equal(spawn(f, undefined, { tool_input: { name: 'bad', description: 'impl_issue_repo-6', prompt: 'y' } }).code, 2, 'a present name is judged on its own, not rescued by description');
 });
 
+// The director -> unit -> worker tree (#385): a unit is a subagent named only in meta.json `description`.
+const byDescription = (f, description, extra) => {
+  const payload = { session_id: 's1', transcript_path: f.transcript, tool_name: 'Agent', tool_input: { description, prompt: 'y', subagent_type: 'implementer' }, ...extra };
+  return spawnHarness(guard, [], { input: JSON.stringify(payload), home: f.home });
+};
+
+test('a unit named only by its meta.json description spawns its workers: by name and by description (#385)', () => {
+  for (const unit of ['unit_issue_claude-config-380', 'unit_issue_strate-16', 'unit_topic_batch-381-390']) {
+    const f = fixture();
+    meta(f, 'u1', { description: unit });
+    const charge = unit.replace(/^unit_/, '');
+    for (const role of ['test', 'impl', 'review', 'impl-2', 'recon']) {
+      const name = `${role}_${charge}`;
+      assert.equal(spawn(f, name, { agent_id: 'u1' }).code, 0, `name ${name}`);
+      assert.equal(byDescription(f, name, { agent_id: 'u1' }).status, 0, `description ${name}`);
+    }
+  }
+});
+
+test("a unit's worker (depth 3) spawns a worker too (#385)", () => {
+  const f = fixture();
+  meta(f, 'w1', { description: 'impl_issue_claude-config-380', spawnDepth: 2 });
+  assert.equal(spawn(f, 'recon_issue_claude-config-380', { agent_id: 'w1' }).code, 0);
+  assert.equal(byDescription(f, 'recon_issue_claude-config-380', { agent_id: 'w1' }).status, 0);
+});
+
+test('a unit spawning an unnamed or free-text worker is blocked with the rule (#385)', () => {
+  const f = fixture();
+  meta(f, 'u1', { description: 'unit_issue_claude-config-380' });
+  for (const name of [undefined, '', 'write the failing tests']) {
+    const r = spawn(f, name, { agent_id: 'u1' });
+    assert.equal(r.code, 2, JSON.stringify(name));
+    assert.match(r.stderr, GRAMMAR, JSON.stringify(name));
+    assert.match(r.stderr, COMMAND, JSON.stringify(name));
+  }
+  const r = byDescription(f, 'write the failing tests', { agent_id: 'u1' });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, GRAMMAR);
+});
+
+test('a worker name with anything after the target that breaks the grammar is blocked (#385)', () => {
+  const f = fixture();
+  meta(f, 'u1', { description: 'unit_issue_claude-config-380' });
+  for (const name of ['impl_issue_claude-config-380_extra', 'impl_issue_claude-config-380 review', 'impl_issue_claude-config-380-', 'impl_issue_claude-config-380.', 'impl_issue_claude-config-380_impl']) {
+    assert.equal(spawn(f, name, { agent_id: 'u1' }).code, 2, name);
+    assert.equal(byDescription(f, name, { agent_id: 'u1' }).status, 2, `description ${name}`);
+  }
+});
+
 test('a transcript_path inside the subagents dir still finds the session', () => {
   const f = fixture();
   meta(f, 'a1', { name: 'impl_issue_repo-5' });

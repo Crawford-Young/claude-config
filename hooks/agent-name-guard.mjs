@@ -16,7 +16,9 @@
 // parameter, #318) must be an agent name, or a tree name with a worker (in-flight
 // batches), lowercase and trimmed as given; a name that would pass but for its case or
 // spaces is told its fixed form. Who may spawn what is not this guard's call: any agent
-// spawns any role, within the harness's depth limit.
+// spawns any role, within the harness's depth limit. A unit's workers (director -> unit ->
+// worker, #385) pass by the subagent-caller rule: the unit is named in its meta.json
+// description, and a worker spawns a worker the same way (pinned by the #385 tests).
 //
 // Beside agent-model-guard on the same matcher: a block here holds even when that guard
 // answers allow with updatedInput. The rule as documented for the Agent SDK ("If any hook
