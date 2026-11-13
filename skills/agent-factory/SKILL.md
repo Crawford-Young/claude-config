@@ -73,7 +73,7 @@ Every dispatch's `Output format` inherits this shape by default — the brief's 
 - Never restate brief contents in dispatch prose — point at the brief.
 - No commit steps in implementer briefs — the orchestrator owns git.
 - A component-library brief names the `release` skill's gates (lint, typecheck, test, e2e/axe, build, Storybook build) and the repo's README + wave-row DoD — a unit-gates-only brief let both slip to ship time (bcb08c8, strate#105).
-- Any brief that reads, edits or republishes an Artifact names a scratch folder (the session scratchpad, or a `<scratchpad>/<artifact-slug>/` subfolder) for working copies — nothing lands in a repo or `~/code` (strate v1 mockup work, 2026-10-08).
+- Every brief names the agent's own scratch subfolder (`<scratchpad>/<agent-name>/`, or `<scratchpad>/<artifact-slug>/` for Artifact working copies), and the agent writes and deletes only inside it, because agents share the session scratchpad and nothing of theirs belongs in a repo or `~/code`.
 - Verify any agent report you act on — reviewer finding or subagent status — against source first, because an agent's report can describe a file state that has since changed; when a reviewer contests an implementer's empirical claim, re-run the experiment — neither report is authority.
 - Dispatch a reviewer only after the implementer it reviews has handed back, because a tree read mid-edit gives a false red-gates verdict (strate-18).
 - Fixable failure → message the SAME agent with findings (warm redo). Capability-shaped failure → escalate the model, fresh dispatch.
