@@ -1042,6 +1042,19 @@ test('a warm redo sent from a timeOnly window still counts for the run it reache
   assert.deepEqual(c.report().agentMix.map((m) => [m.runs, m.warmRedos]), [[1, 1]]);
 });
 
+test('a sendsOnly record feeds the redo signal alone: no spend, no timeline, and a send outside --since is ignored (#378)', () => {
+  const c = createCollector({ prices: PRICES, since: '2026-10-01' });
+  c.add(runAt('so1', 'claude-opus-5', '2026-10-01T12:00:00Z'), named('a1', 'impl_issue_r-5'));
+  const director = { ...MAIN, sendsOnly: true };
+  c.add(runAt('so2', 'claude-opus-5', '2026-10-01T12:00:00Z'), director);
+  c.add(sendCall('so3', { to: 'a1', message: 'fix it' }), director);
+  c.add(sendResult('so3', { success: true, resumedAgentId: 'a1', pin: { id: 'a1' } }), director);
+  c.add({ ...sendResult('so3', { success: true, resumedAgentId: 'a9', pin: { id: 'a9' } }), timestamp: '2026-09-01T00:00:00Z' }, director);
+  const r = c.report();
+  assert.equal(r.totals.requests, 1);
+  assert.deepEqual(r.agentMix.map((m) => [m.runs, m.warmRedos]), [[1, 1]]);
+});
+
 test('a report with no flagged row says so under the fit rule', () => {
   assert.match(renderMarkdown(mixFixture()), /fit flag: [^\n]*\nno row flagged/);
 });

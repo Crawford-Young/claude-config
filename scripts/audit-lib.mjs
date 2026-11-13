@@ -297,7 +297,8 @@ function refusal(text) {
 /** Accumulates records (add) and produces the report (report). ctx is
  *  { sessionId, agent: null | { id, type, model }, window?, name?, timeOnly? } — from
  *  transcriptWindows. Rows key by window, else by sessionId (one window per file).
- *  A timeOnly record feeds its file's timeline and nothing else. */
+ *  A timeOnly record feeds its file's timeline and nothing else (plus its SendMessage redo
+ *  signal, #370); a sendsOnly one, from a file charged elsewhere, feeds that signal alone (#378). */
 export function createCollector({ prices, since, until, installedSkills = [], docPrefixes = [], idleGapMin = IDLE_GAP_MIN, tolerance = PRICE_TOLERANCE }) {
   const requests = new Map(); // requestId -> { u, model, day, ctx }
   const lines = new Map(); // sessionId or sessionId/agent -> timeline (#97), per file as windows share idle detection
@@ -442,6 +443,10 @@ export function createCollector({ prices, since, until, installedSkills = [], do
   function add(rec, ctx) {
     if (!rec || typeof rec !== 'object') return;
     const sid = ctx.sessionId, win = ctx.window ?? sid;
+    if (ctx.sendsOnly) {
+      if (inRange(rec.timestamp)) trackSend(rec);
+      return;
+    }
     fileOf.set(win, sid);
     if (ctx.timeOnly) {
       timeOnly.add(win);
