@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // guard-replay.mjs — diff guard verdicts between two checkouts over real transcripts (#106).
 //   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]
-// Replays unique Bash/PowerShell commands (each under the tool that ran it) through staticCheck, gatedVerbs and browserCommand,
+// Replays unique Bash/PowerShell commands (each under the tool that ran it) through staticCheck and gatedVerbs,
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
 // in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
-// --branch adds the stateful rules (#165): each command's gitCalls(scrub(c)) diffed structurally,
+// --branch adds the stateful rules (#165): each command's gitCalls(scrub(c)) diffed by sub, args and repo,
 // then branchRules allow/BLOCK verdicts with cwd = a temp unborn repo and a temp born repo.
 // --full (#168) follows each changed line with the whole command, redacted and indented, and,
 // where the line collapsed the new verdict (branchRules' BLOCK), its reason.
@@ -145,14 +145,13 @@ function tempRepo(born) {
   return dir;
 }
 
-/** The gitCalls fields branchRules reads, with the temp repo's path shown as <repo>. */
+/** The gitCalls fields branchRules reads, with the temp repo's path shown as <repo>. An older
+ *  checkout's viaOr and loop (rule 5's, cut by #368) are not compared. */
 const callShape = (calls, repo) =>
-  calls.map(({ sub, args, repo: r, viaOr, loop }) => ({
+  calls.map(({ sub, args, repo: r }) => ({
     sub,
     args,
     repo: typeof r === 'string' && r.startsWith(repo) ? `<repo>${r.slice(repo.length)}` : r,
-    viaOr,
-    loop,
   }));
 
 /** A branchRules verdict as allow/BLOCK; missing and throws stay as they are. */
@@ -171,11 +170,11 @@ const RULES = [
   ['2', 'staging or committing a real .env file', /^Refusing to stage\/commit a \.env/],
   ['3', 'a gate piped onward (the pipe masks its rc)', /^A pipe after a gate reports/],
   ['4', 'PowerShell Set-Content/Out-File/Add-Content (mojibake, BOM)', /^PowerShell Set-Content\/Out-File\/Add-Content/],
-  ['5', 'git commit on main/master in a code repo, or in a dir it cannot resolve', /is on (?:main|master) — never commit|^This git commit runs in a directory the guard can't resolve/],
-  ['6', 'branch switch or file restore on the claude-config main checkout', /^No file restores on the claude-config main checkout|^The claude-config main checkout is the live junction surface/],
+  ['5', 'git commit on main/master in a code repo, or in a dir it cannot resolve (cut, #368)', /is on (?:main|master) — never commit|^This git commit runs in a directory the guard can't resolve/],
+  ['6', 'branch switch, file restore or commit on the claude-config main checkout', /^No file restores on the claude-config main checkout|^The claude-config main checkout is the live junction surface|^No commits in the claude-config main checkout/],
   ['7', 'a shell-launched claude on a usage-billed model', /^A shell-launched claude on /],
   ['8', 'git push / gh pr create / gh pr merge without approval', /needs explicit user approval|already spent that approval|^This command holds \d+ gated verbs|^This approval(?:'s PR)? /],
-  ['9', 'a visible browser without consent', /opens a visible browser and needs the user's consent/],
+  ['9', 'a visible browser without consent (cut, #368)', /opens a visible browser and needs the user's consent/],
   ['10', 'a heredoc with a doubled backslash (removed, #293)', /^A heredoc body holding a doubled backslash/],
   ['11', 'a write into a transcript or gate state file (removed, #291)', /^This writes into a session transcript/],
   ['12', 'a node/bun/deno eval script the shell substitutes into', /^This node\/bun\/deno eval script/],
@@ -192,8 +191,15 @@ const UNSORTED = { 8: 'out of scope (#305)', 10: 'removed (#293)', 11: 'removed 
 const STATIC_RULES = new Set(['1', '2', '3', '4', '12']);
 /** How far after a block the check looks: tool calls, ending early at the next prompt. */
 const FOLLOW_CALLS = 10;
-/** A worktree (scripts/worktree.mjs or Claude Code's own) or a temp/scratch repo: one owner's files. */
-const OWNED = /[\\/]\.?worktrees[\\/]|[\\/](?:temp|tmp)[\\/]|^\/tmp(?:\/|$)|scratchpad/i;
+/** A worktree (scripts/worktree.mjs or Claude Code's own), the temp dir or a session scratchpad: one
+ *  owner's files. A `tmp/` or `temp/` segment inside a repo is none of them (#368). */
+function owned(p) {
+  const s = String(p).replace(/\\/g, '/');
+  if (/\/\.?worktrees\/|\/scratchpad(?:\/|$)/i.test(s) || /^\/tmp(?:\/|$)/.test(s)) return true;
+  if (/^(?:[a-z]:|\/[a-z])\/Users\/[^/]+\/AppData\/Local\/Temp(?:\/|$)/i.test(s)) return true;
+  const temp = tmpdir().replace(/\\/g, '/').toLowerCase();
+  return s.toLowerCase() === temp || s.toLowerCase().startsWith(`${temp}/`);
+}
 /** The docs repo commits to its default branch by design (rule 5's own exemption). */
 const DOCS = /[\\/]code[\\/]docs(?:[\\/]|$)/i;
 /** Whole-tree staging by a route rule 1 does not parse. */
@@ -202,12 +208,12 @@ const SWEEP = /\bxargs\b[^|;&\n]*\bgit\s+add\b|\bgit\s+add\s+(?:-[a-zA-Z]*u\b|--
 /** The check, as the report states it. classify() implements it, in this order. */
 const CHECK = [
   'Each live block is judged from the transcript it sits in: the block, then the next tool calls (at most 10, ending at the next user prompt). A *like call* is the next allowed shell call doing the same act: a git add/commit (rules 1, 2), the same gate (3), a git commit (5), a git checkout/switch/restore (6), else at least half the same words.',
-  "1. **false, since fixed** — the current rules no longer block that command: always replayed for the static rules (1–4, 12); rules 5 and 6 read the repo's branch, so they are replayed only while it is still the branch the block names (rule 6: the claude-config main checkout on main), and a rule-5 unresolved dir always.",
-  "2. **false, no harm** — the harm the rule names was absent: rule 1/2 staged in a worktree or temp repo (no other session's files), or `git add -N`; rule 4 wrote ASCII-only text with Set-Content/Add-Content (Out-File always counts: UTF-16 or a BOM on Windows PowerShell 5.1, the only PowerShell here); rule 5's repo was a temp repo or under the docs repo.",
-  '3. **true, asked** — an AskUserQuestion came before any like call.',
+  "1. **false, since fixed** — the checkout's rules no longer block that command: always replayed for the static rules (1–4, 12); rules 5 and 6 read the repo's branch, so they are replayed only while it is still the branch the block names (rule 6: the claude-config main checkout on main), and a rule-5 unresolved dir always. A checkout without rule 5 or 9 (cut by #368) blocks none of theirs.",
+  "2. **false, no harm** — the harm the rule names was absent: rule 1/2 staged in a worktree, the temp dir or a scratchpad (no other session's files; a `tmp/` segment inside a repo path is none of these), or `git add -N`; rule 4 wrote ASCII-only text with Set-Content/Add-Content (Out-File always counts: UTF-16 or a BOM on Windows PowerShell 5.1, the only PowerShell here); rule 5's repo was a temp repo or under the docs repo.",
+  '3. **true, asked** — an AskUserQuestion came before any like call, and it is the next call or names the blocked act (rule 3: a pipe, gate or rc; rule 6: a checkout, restore, switch or branch; and so on).',
   '4. **true, dropped** — no like call followed (rule 3: **undecided**, there is no rerun to read the rc from).',
   '5. **false, bypass** — the like call did the same thing by another route: rule 1 `xargs git add`, `git add -u`, `git add $(git status…)`; rule 5 a `git branch -m … main`.',
-  '6. **false / true by the like call** — rule 3: the rerun passed (rc 0: the pipe masked nothing) is false, failed is true; rule 5 with an unresolved dir: the like commit ran in a worktree or temp repo is false.',
+  "6. **false / true by the like call** — rule 3: a rerun meant to fail (its description or command says red, expect…fail, mutation or probe, or it feeds bash-guard.mjs a payload) is false; otherwise the rc echoed right after the gate decides (a qa.mjs run: its worst EXIT: line; no echo: Claude Code's exit code, only when the gate ran last): 0 is false (the pipe masked nothing), nonzero true; rule 5 with an unresolved dir: the like commit ran in a worktree or temp repo is false.",
   '7. **true, remedy** — the harm was live (rule 1/2 a shared checkout, rule 4 as above, rule 5 a code repo on main, rules 7/9/12/nesting/crash by construction) and the like call took the rule\'s way.',
   '8. **undecided** — anything else; listed below with its command.',
   'Rule 8 (out of scope, #305) and the removed rules 10 and 11 are counted, not sorted. *Replay* counts the unique commands the current rules block (7: needs clearance; 8 and 9: a gated call, which blocks only without approval or consent); rules 5 and 6 depend on the branch at the time, so they are not replayed.',
@@ -235,9 +241,9 @@ const gitOf = (g, e) => {
     return [];
   }
 };
-const repoFact = (repos, owned = "a worktree or temp repo: no other session's files to sweep") => {
+const repoFact = (repos, why = "a worktree or temp repo: no other session's files to sweep") => {
   if (!repos.length || repos.some((r) => typeof r !== 'string')) return fact(null, 'its repo is unresolved');
-  return repos.every((r) => OWNED.test(r)) ? fact(false, owned) : fact(true, 'a shared checkout');
+  return repos.every(owned) ? fact(false, why) : fact(true, 'a shared checkout');
 };
 const sweeps = ({ sub, args }) =>
   (sub === 'add' && args.some((a) => a === '--all' || a === '.' || a === './' || /^-[a-zA-Z]*A[a-zA-Z]*$/.test(a))) ||
@@ -265,7 +271,7 @@ function harm(b, g) {
   if (b.rule === '5') {
     const m = /^"(.+)" is on (?:main|master)/.exec(b.reason);
     if (!m) return fact(null, "the commit's dir was unresolved");
-    if (OWNED.test(m[1])) return fact(false, 'a temp repo');
+    if (owned(m[1])) return fact(false, 'a temp repo');
     if (DOCS.test(m[1])) return fact(false, 'the docs repo, which commits to its default branch by design');
     return fact(true, 'a code repo on its default branch');
   }
@@ -301,19 +307,44 @@ function bypass(b, e, g) {
   return false;
 }
 
-/** A rerun's gate rc: an rc=/exit=/qa=/EXIT: marker (the worst one; qa.mjs prints one EXIT: per
- *  gate), else Claude Code's "Exit code N"; null if neither shows. */
-function rcOf(e) {
-  const marks = [...String(e.result).matchAll(/\b(?:rc|exit|EXIT|qa)[=:]\s*(\d+)/g)].map((m) => Number(m[1]));
+/** A clause that reports the rc of the clause before it (`echo rc=$?`, PowerShell's
+ *  `"rc=$LASTEXITCODE"`), capturing the label it prints the rc after. */
+const RC_ECHO = /^(?:(?:echo|printf|write-output|write-host)\s+)?["']?([^"'$]*)\$(?:\?|\{PIPESTATUS\[0\]\}|LASTEXITCODE)/i;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** A rerun's gate rc (#368): the marker the clause right after the gate's echoes, read off the
+ *  result by its label; for a qa.mjs run with none, its worst EXIT: line (one per gate it ran);
+ *  else Claude Code's "Exit code N", which is the last command's, so only when the gate ran last.
+ *  Null if none of these shows. */
+function rcOf(b, e, g) {
+  const gate = gateText(b, g);
+  const parts = g.clauses(g.scrub(e.cmd)).map((c) => c.replace(/^[({\s]+/, ''));
+  let k = gate === null ? -1 : parts.findIndex((c) => [...wordSet(gate)].every((w) => wordSet(c).has(w)));
+  const qa = k === -1 && (k = parts.findIndex((c) => /\bqa\.mjs\b/.test(c))) !== -1;
+  if (k === -1) return null;
+  const result = String(e.result);
+  const label = RC_ECHO.exec(parts[k + 1] ?? '')?.[1].trim();
+  if (label) {
+    const m = new RegExp(`${/^\w/.test(label) ? '(?<!\\w)' : ''}${escapeRe(label)}\\s*(-?\\d+)`).exec(result);
+    return m ? Number(m[1]) : null;
+  }
+  const marks = qa ? [...result.matchAll(/\bEXIT:(\d+)/g)].map((m) => Number(m[1])) : [];
   if (marks.length) return Math.max(...marks);
-  const code = e.error ? /^Exit code (\d+)/.exec(String(e.result).trim()) : null;
+  const code = e.error && k === parts.length - 1 ? /^Exit code (\d+)/.exec(result.trim()) : null;
   return code ? Number(code[1]) : null;
 }
+
+/** A rerun meant to fail: a TDD red step (it says red, expect…fail, or runs tests against the
+ *  base/main/pre-change copy) or a mutation run, by its description or command; or a guard probe
+ *  (a payload fed to bash-guard.mjs, or a call that says probe). */
+const MEANT_TO_FAIL = /\b(?:red|mutation|mutant|probe)\b|\bexpect(?:s|ed|ing)?\b[^.;\n]{0,24}\bfail|\bagainst (?:the )?(?:base|main|old|original|pre-[\w-]+)\b/i;
+const meantToFail = (e) => MEANT_TO_FAIL.test(e.description ?? '') || MEANT_TO_FAIL.test(e.cmd) || /\bbash-guard\.mjs\b/.test(e.cmd);
 
 /** The harm, decided by the like call where the block alone could not decide it (rules 3 and 5). */
 function after(b, e, g, h) {
   if (b.rule === '3') {
-    const rc = rcOf(e);
+    if (meantToFail(e)) return fact(false, 'the rerun was meant to fail (a TDD red step, a mutation run or a guard probe), so its rc hid nothing');
+    const rc = rcOf(b, e, g);
     if (rc === null) return fact(null, 'the rerun shows no rc');
     return rc === 0 ? fact(false, 'the unpiped rerun passed, so the pipe masked nothing') : fact(true, `the unpiped rerun failed (rc ${rc}), which the pipe would have masked`);
   }
@@ -329,11 +360,27 @@ const branchOf = (dir) => {
   return r.status === 0 ? r.stdout.trim() : null;
 };
 
-/** Do the current rules still block it? A static rule always replays; rules 5 and 6 read the
+const rule5 = new WeakMap();
+/** Does checkout `g` still have rule 5 (a commit on main, cut by #368)? Probed once, on a temp repo on main. */
+function hasRule5(g) {
+  if (!rule5.has(g)) {
+    const dir = tempRepo(true);
+    try {
+      rule5.set(g, ruleOf(verdictText(() => g.branchRules('git commit -m x', dir, 'Bash'))) === '5');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  return rule5.get(g);
+}
+
+/** Do the checkout's rules still block it? A static rule always replays; rules 5 and 6 read the
  *  repo's branch, so they replay only while it is the one the block names (rule 6: the
- *  claude-config main checkout on main); an unresolved dir is judged before any branch. */
+ *  claude-config main checkout on main); an unresolved dir is judged before any branch. A
+ *  checkout without rule 5 or 9 (cut by #368) blocks none of theirs. */
 function stillBlocked(b, g) {
   if (STATIC_RULES.has(b.rule)) return ruleOf(verdictText(() => g.staticCheck(b.cmd, null, b.tool))) === b.rule;
+  if ((b.rule === '5' && !hasRule5(g)) || (b.rule === '9' && typeof g.browserCommand !== 'function')) return false;
   if (b.rule === '5' || b.rule === '6') {
     const m = /^"(.+)" is on (main|master)/.exec(b.reason);
     const cfg = process.env.CLAUDE_CONFIG_REPO || join(process.env.CLAUDE_WORKSPACE_ROOT || join(homedir(), 'code'), 'claude-config');
@@ -343,6 +390,18 @@ function stillBlocked(b, g) {
   return true;
 }
 
+/** Words naming each rule's act: an AskUserQuestion that holds them asks about the block. */
+const ACT = {
+  1: /\b(?:git add|stag(?:e|es|ed|ing)|sweep\w*|commit\w*)\b/i,
+  2: /\.env\b|\bsecrets?\b/i,
+  3: /\b(?:pipe\w*|unpiped|gates?|rc|exit code)\b/i,
+  4: /\b(?:Set-Content|Out-File|Add-Content|encoding|BOM)\b/i,
+  5: /\bcommit\w*/i,
+  6: /\b(?:checkout|restore\w*|switch\w*|branch\w*|discard\w*)\b/i,
+  7: /\b(?:fable|mythos|billed|FABLE OK)\b/i,
+  12: /\b(?:eval|node -e|template literal|substitut\w+)\b/i,
+};
+
 /** One live block's verdict by CHECK: { verdict: 'true' | 'false' | 'undecided' | null (unsorted), why }. */
 export function classify(b, g) {
   const v = (verdict, why) => ({ verdict, why });
@@ -351,8 +410,9 @@ export function classify(b, g) {
   let h = harm(b, g);
   if (h.live === false) return v('false', `no harm: ${h.why}`);
   let next = null;
-  for (const e of b.follow) {
-    if (e.kind === 'ask') return v('true', 'asked the user');
+  for (const [i, e] of b.follow.entries()) {
+    // Only an ask about the block: the next call, or one naming its act.
+    if (e.kind === 'ask' && (i === 0 || ACT[b.rule]?.test(e.text ?? ''))) return v('true', 'asked the user');
     if (e.kind === 'shell' && !e.blocked && like(b, e, g)) {
       next = e;
       break;
@@ -374,6 +434,13 @@ const isPrompt = (o) => {
   const text = typeof c === 'string' ? c : Array.isArray(c) && !c.some((x) => x?.type === 'tool_result') ? textOf(c) : '';
   return text.trim() !== '' && !/^\s*</.test(text);
 };
+
+/** An AskUserQuestion call's questions, headers and options as one text. */
+const askText = (input) =>
+  (Array.isArray(input?.questions) ? input.questions : [])
+    .flatMap((q) => [q?.question, q?.header, ...(Array.isArray(q?.options) ? q.options.flatMap((o) => [o?.label, o?.description]) : [])])
+    .filter((x) => typeof x === 'string')
+    .join(' / ');
 
 /** Every live bash-guard block, each with the calls after it, plus the window's totals. Only
  *  assistant and user records count (an api-request-blob copies old messages), each tool_use once. */
@@ -406,10 +473,12 @@ function scanBlocks(paths) {
           if ((c.name === 'Bash' || c.name === 'PowerShell') && typeof c.input?.command === 'string') {
             calls++;
             commands.set(`${c.name}\n${c.input.command}`, { command: c.input.command, tool: c.name });
-            const e = { kind: 'shell', tool: c.name, cmd: c.input.command, cwd: o.cwd ?? null, t: ts, blocked: false, result: '', error: false };
+            const description = typeof c.input.description === 'string' ? c.input.description : '';
+            const e = { kind: 'shell', tool: c.name, cmd: c.input.command, description, cwd: o.cwd ?? null, t: ts, blocked: false, result: '', error: false };
             shells.set(c.id, e);
             events.push(e);
-          } else events.push({ kind: c.name === 'AskUserQuestion' ? 'ask' : 'tool' });
+          } else if (c.name === 'AskUserQuestion') events.push({ kind: 'ask', text: askText(c.input) });
+          else events.push({ kind: 'tool' });
         } else if (o.type === 'user' && c?.type === 'tool_result' && shells.has(c.tool_use_id)) {
           const e = shells.get(c.tool_use_id);
           shells.delete(c.tool_use_id);
@@ -442,7 +511,7 @@ function replay(commands, g) {
     const hits = new Set([ruleOf(verdictText(() => g.staticCheck(c, null, tool)))]);
     if (verdictText(() => g.billedLaunch(c))) hits.add('7');
     if (verdictText(() => g.gatedVerbs(c, cwd, tool).join(' '))) hits.add('8');
-    if (verdictText(() => g.browserCommand(c, cwd, tool))) hits.add('9');
+    if (typeof g.browserCommand === 'function' && verdictText(() => g.browserCommand(c, cwd, tool))) hits.add('9');
     hits.delete('other');
     for (const r of hits) counts[r] = (counts[r] || 0) + 1;
   }
@@ -512,7 +581,6 @@ async function main() {
   const cmdFns = [
     ['staticCheck', (m, c, tool) => verdict(m.staticCheck, c, null, tool)],
     ['gatedVerbs', (m, c, tool) => verdict(m.gatedVerbs, c, cwd, tool)],
-    ['browserCommand', (m, c, tool) => verdict(m.browserCommand, c, cwd, tool)],
   ];
   for (const { command: c, tool } of commands) for (const [name, f] of cmdFns) report(name, f(a, c, tool), f(b, c, tool), c);
 

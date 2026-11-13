@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { execHarness, tempDir } from './_spawn.mjs';
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -141,19 +142,20 @@ test('more secret shapes are redacted; ordinary names and flags are kept', () =>
   assert.match(out, /--sort-key=name f/);
 });
 
-// --branch fixtures: for a for-loop, the new checkout keeps call #0, marks call #1
-// loop: true and adds call #2; it blocks a commit only where HEAD resolves, so only
-// the born repo flips.
-const call = (sub, loop) => `{ sub: '${sub}', args: [], repo: cwd + '/sub', viaOr: false, loop: ${loop} }`;
+// --branch fixtures: for a for-loop, the new checkout keeps call #0, moves call #1
+// to another dir and adds call #2; it blocks a commit only where HEAD resolves, so
+// only the born repo flips. Fields branchRules no longer reads (viaOr, loop) are not
+// compared (#368).
+const call = (sub, dir, extra = '') => `{ sub: '${sub}', args: [], repo: cwd + '/${dir}'${extra} }`;
 const branchOld = `export const scrub = (c) => c;
-export const gitCalls = (c, cwd) => (c.includes('git') ? [${call('status', false)}, ${call('add', false)}] : []);
+export const gitCalls = (c, cwd) => (c.includes('git') ? [${call('status', 'sub', ', viaOr: true, loop: true')}, ${call('add', 'sub')}] : []);
 export const branchRules = () => null;`;
 const branchNew = `import { spawnSync } from 'node:child_process';
 export const scrub = (c) => c;
 export const gitCalls = (c, cwd) => {
   if (!c.includes('git')) return [];
   const loop = c.startsWith('for');
-  return [${call('status', false)}, ${call('add', 'loop')}, ...(loop ? [${call('add', true)}] : [])];
+  return [${call('status', 'sub', ', viaOr: false, loop: false')}, ${call('add', "' + (loop ? 'other' : 'sub') + '")}, ...(loop ? [${call('add', 'sub')}] : [])];
 };
 export const branchRules = (c, cwd) =>
   c.includes('commit') && spawnSync('git', ['-C', cwd, 'rev-parse', '--verify', '-q', 'HEAD']).status === 0 ? 'blocked' : null;`;
@@ -164,8 +166,8 @@ test('--branch diffs gitCalls per call and branchRules verdicts on an unborn and
     .trim()
     .split('\n');
   assert.deepEqual(lines, [
-    'gitCalls#1: {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":false} -> {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":true} | for f in a; do git add f; done',
-    'gitCalls#2: none -> {"sub":"add","args":[],"repo":"<repo>/sub","viaOr":false,"loop":true} | for f in a; do git add f; done',
+    'gitCalls#1: {"sub":"add","args":[],"repo":"<repo>/sub"} -> {"sub":"add","args":[],"repo":"<repo>/other"} | for f in a; do git add f; done',
+    'gitCalls#2: none -> {"sub":"add","args":[],"repo":"<repo>/sub"} | for f in a; do git add f; done',
     'branchRules[born]: allow -> BLOCK | git commit -m x',
     'summary: 3 changed; 3 commands, 0 answers from 1 files; --branch: 2 gitCalls, 1 branchRules over 6 probes (unborn + born)',
   ]);
@@ -174,17 +176,17 @@ test('--branch diffs gitCalls per call and branchRules verdicts on an unborn and
 test('each command replays under the tool that ran it, a command run by both once per tool', () => {
   // #171: the hook judges a ( … ) group or pipeline stage by its payload tool.
   const toolCo = checkout("return tool === 'PowerShell' && c === 'sc f x' ? 'blocked' : null;", 'true', `export const scrub = (c) => c;
-export const gitCalls = (c, cwd, tool) => [{ sub: String(tool), args: [], repo: cwd, viaOr: false, loop: false }];
+export const gitCalls = (c, cwd, tool) => [{ sub: String(tool), args: [], repo: cwd }];
 export const branchRules = (c, cwd, tool) => (tool === 'PowerShell' ? 'blocked' : null);`);
   const plainCo = checkout('return null;', 'true', `export const scrub = (c) => c;
-export const gitCalls = (c, cwd) => [{ sub: 'Bash', args: [], repo: cwd, viaOr: false, loop: false }];
+export const gitCalls = (c, cwd) => [{ sub: 'Bash', args: [], repo: cwd }];
 export const branchRules = () => null;`);
   const cfg = config({ 's.jsonl': [bash('git commit -m x'), bash('git commit -m x', 'PowerShell'), bash('sc f x'), bash('sc f x', 'PowerShell')] });
   const lines = run(cfg, plainCo, toolCo, '--branch').trim().split('\n');
   assert.deepEqual(lines, [
     'staticCheck: null -> "blocked" | sc f x',
-    'gitCalls#0: {"sub":"Bash","args":[],"repo":"<repo>","viaOr":false,"loop":false} -> {"sub":"PowerShell","args":[],"repo":"<repo>","viaOr":false,"loop":false} | git commit -m x',
-    'gitCalls#0: {"sub":"Bash","args":[],"repo":"<repo>","viaOr":false,"loop":false} -> {"sub":"PowerShell","args":[],"repo":"<repo>","viaOr":false,"loop":false} | sc f x',
+    'gitCalls#0: {"sub":"Bash","args":[],"repo":"<repo>"} -> {"sub":"PowerShell","args":[],"repo":"<repo>"} | git commit -m x',
+    'gitCalls#0: {"sub":"Bash","args":[],"repo":"<repo>"} -> {"sub":"PowerShell","args":[],"repo":"<repo>"} | sc f x',
     'branchRules[unborn]: allow -> BLOCK | git commit -m x',
     'branchRules[unborn]: allow -> BLOCK | sc f x',
     'branchRules[born]: allow -> BLOCK | git commit -m x',
@@ -193,7 +195,7 @@ export const branchRules = () => null;`);
   ]);
 });
 
-test('gatedVerbs and browserCommand replay under the tool that ran each command', () => {
+test('gatedVerbs replays under the tool that ran each command; browserCommand (rule 9, cut by #368) is not replayed', () => {
   const toolCo = checkout('return null;', 'true', '', {
     gated: "(c, cwd, tool) => (tool === 'PowerShell' ? ['git push'] : [])",
     browser: "(c, cwd, tool) => (tool === 'PowerShell' ? 'playwright' : null)",
@@ -201,8 +203,7 @@ test('gatedVerbs and browserCommand replay under the tool that ran each command'
   const cfg = config({ 's.jsonl': [bash('x'), bash('y', 'PowerShell')] });
   assert.deepEqual(run(cfg, checkout('return null;'), toolCo).trim().split('\n'), [
     'gatedVerbs: [] -> ["git push"] | y',
-    'browserCommand: null -> "playwright" | y',
-    'summary: 2 changed; 2 commands, 0 answers from 1 files',
+    'summary: 1 changed; 2 commands, 0 answers from 1 files',
   ]);
 });
 
@@ -244,12 +245,12 @@ test('--full adds no reason line where the verdict is already printed whole', ()
 });
 
 test('--branch redacts secrets in the printed gitCalls args too', () => {
-  const argsCall = (loop) => `{ sub: 'remote', args: c.split(' ').slice(2), repo: cwd, viaOr: false, loop: ${loop} }`;
-  const co = (loop) => checkout('return null;', 'true', `export const scrub = (c) => c;
-export const gitCalls = (c, cwd) => [${argsCall(loop)}];
+  const argsCall = (dir) => `{ sub: 'remote', args: c.split(' ').slice(2), repo: cwd + '/${dir}' }`;
+  const co = (dir) => checkout('return null;', 'true', `export const scrub = (c) => c;
+export const gitCalls = (c, cwd) => [${argsCall(dir)}];
 export const branchRules = () => null;`);
   const cfg = config({ 's.jsonl': [bash('git remote add o https://me:tok7@github.com/x GH_TOKEN=tok8')] });
-  const out = run(cfg, co(false), co(true), '--branch');
+  const out = run(cfg, co('a'), co('b'), '--branch');
   assert.doesNotMatch(out, /tok7|tok8/);
   assert.match(out, /https:\/\/me:\*\*\*@github\.com\/x/);
 });
@@ -264,16 +265,22 @@ const WT = 'C:/Users/u/code/.worktrees/shop-1-x';
 const hookError = (reason, hook = 'bash-guard.mjs') => `PreToolUse:Bash hook error: [node "C:/u/claude-config/hooks/${hook}"]: ${reason}`;
 let useId = 0;
 /** A shell call and its result: `blocked` is a hook reason, `out` the output of an allowed call. */
-function shell(command, { blocked = null, hook, out = 'ok', tool = 'Bash', cwd = SHARED, t = '2026-10-01T10:00:00.000Z' } = {}) {
+function shell(command, { blocked = null, hook, out = 'ok', error = false, tool = 'Bash', cwd = SHARED, t = '2026-10-01T10:00:00.000Z', description } = {}) {
   const id = `toolu_${++useId}`;
   return [
-    { type: 'assistant', timestamp: t, cwd, message: { content: [{ type: 'tool_use', id, name: tool, input: { command } }] } },
-    { type: 'user', timestamp: t, cwd, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: Boolean(blocked), content: blocked ? hookError(blocked, hook) : out }] } },
+    { type: 'assistant', timestamp: t, cwd, message: { content: [{ type: 'tool_use', id, name: tool, input: { command, description } }] } },
+    { type: 'user', timestamp: t, cwd, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: Boolean(blocked) || error, content: blocked ? hookError(blocked, hook) : out }] } },
   ];
 }
+/** An AskUserQuestion call, as the transcript holds it. */
+const askCall = (question, options = ['Yes', 'No']) => ({
+  type: 'assistant',
+  message: { content: [{ type: 'tool_use', id: `toolu_${++useId}`, name: 'AskUserQuestion', input: { questions: [{ question, options: options.map((label) => ({ label })) }] } }] },
+});
 const follow = (command, o = {}) => ({ kind: 'shell', cmd: command, tool: 'Bash', cwd: SHARED, blocked: false, result: 'ok', error: false, ...o });
 const block = (rule, cmd, follows = [], o = {}) => ({ rule, reason: '', cmd, tool: 'Bash', cwd: SHARED, follow: follows, ...o });
 const verdictOf = (b) => classify(b, guard).verdict;
+const SINCE_FIXED = 'since fixed: the current rules no longer block it';
 
 test('ruleOf maps current and retired bash-guard wordings to their rule', () => {
   const cases = [
@@ -287,6 +294,8 @@ test('ruleOf maps current and retired bash-guard wordings to their rule', () => 
     ["This git commit runs in a directory the guard can't resolve — …", '5'],
     ['No file restores on the claude-config main checkout: …', '6'],
     ['The claude-config main checkout is the live junction surface — it never leaves main.', '6'],
+    ["No commits in the claude-config main checkout: it holds other sessions' uncommitted live edits, …", '6'],
+    ["git add -A/--all is banned in a shared checkout: it carries concurrent sessions' in-flight files.", '1'],
     ['A shell-launched claude on "fable" is usage-billed and needs per-run user clearance', '7'],
     ["git push needs explicit user approval; neither the user's latest typed prompt …", '8'],
     ['gh pr merge already spent that approval — one push/PR per approving answer.', '8'],
@@ -335,6 +344,15 @@ test('rule 1: false in a worktree or for git add -N; true in a shared checkout t
   assert.equal(verdictOf(block('1', 'git add -A', [follow('git ls-files -m | xargs git add')])), 'false', 'a sweep by another route is a bypass');
 });
 
+test('a repo path with a tmp/ or temp/ segment is not a temp repo; the temp dir and a scratchpad are', () => {
+  for (const cwd of ['C:/Users/u/code/web/tmp/site', 'C:/Users/u/code/temp/shop', '/home/u/code/app/tmp']) {
+    assert.equal(verdictOf(block('1', 'git add -A', [follow('git add a.ts', { cwd })], { cwd })), 'true', cwd);
+  }
+  for (const cwd of [join(tmpdir(), 'gr-x'), '/tmp/probe', 'C:/Users/u/AppData/Local/Temp/probe', '/c/Users/u/AppData/Local/Temp/p', 'C:/Users/u/AppData/Local/Temp/claude/x/scratchpad/r']) {
+    assert.equal(verdictOf(block('1', 'git add -A', [follow('git add a.ts', { cwd })], { cwd })), 'false', cwd);
+  }
+});
+
 test('rule 3: the unpiped rerun of the gate decides — passed is false, failed is true, none is undecided', () => {
   const gate = 'cd /r && pnpm test 2>&1 | tail -5';
   const rerun = 'cd /r && pnpm test > "$T/log" 2>&1; echo rc=$?; tail -5 "$T/log"';
@@ -353,20 +371,90 @@ test('rule 3: a rerun with extra flags, or through qa.mjs, is the same gate', ()
   assert.equal(verdictOf(block('3', gate, [follow('node --test scripts/test/b.test.mjs; echo rc=$?', { result: 'rc=1' })])), 'undecided', 'another file is another gate');
 });
 
+test('rule 3: a rerun that was meant to fail — a TDD red step, a mutation run, a guard probe — is false, not true', () => {
+  const gate = 'node --test scripts/test/a.test.mjs 2>&1 | tail -8';
+  const rerun = 'node --test scripts/test/a.test.mjs > "$T/l" 2>&1; echo rc=$?';
+  const expected = { verdict: 'false', why: 'no harm: the rerun was meant to fail (a TDD red step, a mutation run or a guard probe), so its rc hid nothing' };
+  for (const description of [
+    'Run the new test to confirm red',
+    'TDD red step: expect the test to fail',
+    'Mutation run: break isGate and expect failures',
+    // new tests run against the code before the change: a red step by another name
+    'Run new #264 tests against base hook copy',
+    'Run #214 tests against main hook copy',
+    'Run new tests against pre-gate script copy',
+  ]) {
+    assert.deepEqual(classify(block('3', gate, [follow(rerun, { result: 'rc=1', description })]), guard), expected, description);
+  }
+  assert.deepEqual(classify(block('3', gate, [follow(`${rerun} # mutation: isGate returns false`, { result: 'rc=1' })]), guard), expected, 'the command says so');
+  const probe = 'echo \'{"tool_input":{"command":"node --test scripts/test/a.test.mjs | tail"}}\' | node hooks/bash-guard.mjs; echo rc=$?';
+  assert.deepEqual(classify(block('3', gate, [follow(probe, { result: 'rc=2' })]), guard), expected, 'a guard probe');
+  // An ordinary failing rerun is still true, and a red step that passed is plain false.
+  assert.equal(verdictOf(block('3', gate, [follow(rerun, { result: 'rc=1', description: 'Rerun the tests unpiped' })])), 'true');
+  assert.equal(verdictOf(block('3', gate, [follow(rerun, { result: 'rc=0', description: 'Confirm red' })])), 'false');
+});
+
+test('rule 3: the rc is the marker echoed right after the gate, never the worst of unrelated ones', () => {
+  const gate = 'cd /r && pnpm test 2>&1 | tail -5';
+  const two = 'cd /r && pnpm test > "$T/log" 2>&1; echo rc=$?; node scripts/other.mjs; echo exit=$?';
+  assert.equal(verdictOf(block('3', gate, [follow(two, { result: 'rc=0\nexit=1' })])), 'false', 'the gate passed; the other script failed');
+  assert.equal(verdictOf(block('3', gate, [follow(two, { result: 'rc=1\nexit=0' })])), 'true');
+  const labelled = 'cd /r && pnpm test > "$T/log" 2>&1; echo "tests EXIT:$?"; pnpm lint > "$T/l2" 2>&1; echo "lint EXIT:$?"';
+  assert.equal(verdictOf(block('3', gate, [follow(labelled, { result: 'lint EXIT:1\ntests EXIT:0' })])), 'false');
+  // No marker after the gate: Claude Code's exit code is the last command's, so it counts only when the gate ran last.
+  assert.equal(verdictOf(block('3', gate, [follow('cd /r && pnpm test > "$T/log" 2>&1; cat "$T/log"', { result: 'Exit code 1\nx', error: true })])), 'undecided');
+  assert.equal(verdictOf(block('3', gate, [follow('cd /r && pnpm test', { result: 'Exit code 1\nx', error: true })])), 'true');
+});
+
+test('an AskUserQuestion counts as asked only when it is the next call or names the blocked act', () => {
+  const gate = 'cd /r && pnpm test 2>&1 | tail -5';
+  const rerun = 'cd /r && pnpm test > "$T/log" 2>&1; echo rc=$?';
+  const ask = (text) => ({ kind: 'ask', text });
+  assert.equal(verdictOf(block('3', gate, [follow('ls'), ask('Which colour for the badge?'), follow(rerun, { result: 'rc=0' })])), 'false', 'an unrelated question later is not about the block');
+  assert.equal(verdictOf(block('3', gate, [follow('ls'), ask('The guard blocked the piped gate; rerun it unpiped?'), follow(rerun, { result: 'rc=0' })])), 'true');
+  assert.equal(verdictOf(block('3', gate, [ask('Which colour for the badge?'), follow(rerun, { result: 'rc=0' })])), 'true', 'the next call');
+  const repo = mainRepo();
+  asConfigRepo(repo, () => {
+    const restore = `git -C ${repo} checkout -- a.md`;
+    assert.equal(verdictOf(block('6', restore, [follow('ls'), ask('Discard the edit to a.md with git restore?')])), 'true');
+    assert.equal(verdictOf(block('6', restore, [follow('ls'), ask('Which colour?'), follow(`git -C ${repo} checkout -- a.md b.md`)])), 'undecided');
+  });
+});
+
+test('--by-rule reads each call description and AskUserQuestion text from the transcript', () => {
+  const blocked = shell('node --test scripts/test/a.test.mjs 2>&1 | tail -8', { blocked: "A pipe after a gate reports the pipe's exit code, not the gate's." });
+  const red = shell('node --test scripts/test/a.test.mjs > "$T/l" 2>&1; echo rc=$?', { out: 'rc=1', description: 'TDD red: confirm the new test fails' });
+  const cfg = config({ 's.jsonl': [...blocked, ...red] });
+  assert.match(run(cfg, '--by-rule', repoRoot), /^\| 3 \| [^|]+ \| 1 \| 0 \| 1 \| 0 \| \d+ \|$/m, 'a red step is false');
+  const later = shell('node --test scripts/test/a.test.mjs > "$T/l" 2>&1; echo rc=$?', { out: 'rc=1' });
+  const asked = config({ 's.jsonl': [...blocked, ...shell('ls'), askCall('Ship the pipe-free rerun?'), ...later] });
+  assert.match(run(asked, '--by-rule', repoRoot), /^\| 3 \| [^|]+ \| 1 \| 1 \| 0 \| 0 \| \d+ \|$/m);
+});
+
 test('rule 4: Out-File writes UTF-16 or a BOM on Windows PowerShell; ASCII-only Set-Content mangles nothing', () => {
   assert.equal(verdictOf(block('4', 'gh issue view 1 | Out-File x.txt', [], { tool: 'PowerShell' })), 'true');
   assert.equal(verdictOf(block('4', 'Set-Content keep.txt "x"', [], { tool: 'PowerShell' })), 'false');
 });
 
-test('rule 5: docs subtrees and temp repos are no harm; a rename back to main is a bypass; a worktree commit is the remedy', () => {
+/** A checkout whose branchRules still has rule 5 (cut by #368): a commit blocks. A by-rule
+ *  run over an older checkout judges rule 5's blocks this way. */
+const withRule5 = { ...guard, branchRules: (c) => (/\bcommit\b/.test(c) ? '"C:\\Users\\u\\code\\shop" is on main — never commit to the default branch.' : null) };
+const verdict5 = (b) => classify(b, withRule5).verdict;
+
+test('rule 5 is cut: under the current rules every rule-5 block is false, since fixed', () => {
+  const r = '"C:\\Users\\u\\code\\shop" is on main — never commit to the default branch.';
+  assert.deepEqual(classify(block('5', 'git commit -m x', [follow(`cd ${WT} && git commit -m x`)], { reason: r }), guard), { verdict: 'false', why: SINCE_FIXED });
+});
+
+test('rule 5 (an older checkout): docs subtrees and temp repos are no harm; a rename back to main is a bypass; a worktree commit is the remedy', () => {
   const onMain = (p) => `"${p}" is on main — never commit to the default branch.`;
-  assert.equal(verdictOf(block('5', 'git commit -m x', [], { reason: onMain('C:\\Users\\u\\code\\docs\\games\\notes') })), 'false');
-  assert.equal(verdictOf(block('5', 'git commit -m x', [], { reason: onMain('C:/Users/u/AppData/Local/Temp/probe') })), 'false');
+  assert.equal(verdict5(block('5', 'git commit -m x', [], { reason: onMain('C:\\Users\\u\\code\\docs\\games\\notes') })), 'false');
+  assert.equal(verdict5(block('5', 'git commit -m x', [], { reason: onMain('C:/Users/u/AppData/Local/Temp/probe') })), 'false');
   const r = onMain('C:\\Users\\u\\code\\shop');
-  assert.equal(verdictOf(block('5', 'git commit -m x', [follow('git switch -c tmp && git commit -m x && git branch -m tmp main')], { reason: r })), 'false');
-  assert.equal(verdictOf(block('5', 'git commit -m x', [follow(`cd ${WT} && git commit -m x`)], { reason: r })), 'true');
+  assert.equal(verdict5(block('5', 'git commit -m x', [follow('git switch -c tmp && git commit -m x && git branch -m tmp main')], { reason: r })), 'false');
+  assert.equal(verdict5(block('5', 'git commit -m x', [follow(`cd ${WT} && git commit -m x`)], { reason: r })), 'true');
   const unknown = "This git commit runs in a directory the guard can't resolve — …";
-  assert.equal(verdictOf(block('5', 'cd $W && git commit -m x', [follow(`git -C ${WT} commit -m x`)], { reason: unknown })), 'false', 'the unresolved dir was a worktree');
+  assert.equal(verdict5(block('5', 'cd $W && git commit -m x', [follow(`git -C ${WT} commit -m x`)], { reason: unknown })), 'false', 'the unresolved dir was a worktree');
 });
 
 /** A temp repo on main with one commit. */
@@ -388,15 +476,13 @@ function asConfigRepo(repo, fn) {
     else process.env.CLAUDE_CONFIG_REPO = prev;
   }
 }
-const SINCE_FIXED = 'since fixed: the current rules no longer block it';
-
-test('rules 5 and 6 replay through the current rules while the repo is on the branch the block names', () => {
+test('rules 5 and 6 replay through the checkout\'s rules while the repo is on the branch the block names', () => {
   const repo = mainRepo();
   const reason = `"${repo}" is on main — never commit to the default branch.`;
-  assert.equal(classify(block('5', `git -C ${repo} status`, [], { reason }), guard).why, SINCE_FIXED);
-  assert.equal(classify(block('5', `git -C ${repo} commit -m x`, [], { reason }), guard).why, 'no harm: a temp repo', 'still blocked: judged on');
+  assert.equal(classify(block('5', `git -C ${repo} status`, [], { reason }), withRule5).why, SINCE_FIXED);
+  assert.equal(classify(block('5', `git -C ${repo} commit -m x`, [], { reason }), withRule5).why, 'no harm: a temp repo', 'still blocked: judged on');
   const elsewhere = `"${repo}" is on master — never commit to the default branch.`;
-  assert.notEqual(classify(block('5', `git -C ${repo} status`, [], { reason: elsewhere }), guard).why, SINCE_FIXED, 'another branch now: not replayed');
+  assert.notEqual(classify(block('5', `git -C ${repo} status`, [], { reason: elsewhere }), withRule5).why, SINCE_FIXED, 'another branch now: not replayed');
   asConfigRepo(repo, () => {
     assert.equal(classify(block('6', `git -C ${repo} status`), guard).why, SINCE_FIXED);
     assert.notEqual(classify(block('6', `git -C ${repo} checkout -- a.md`), guard).why, SINCE_FIXED);
