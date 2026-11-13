@@ -699,6 +699,27 @@ test('runs over the hard line are listed whole, with counts, beyond the slowest-
   assert.doesNotMatch(md, /mid-run|small-run/);
 });
 
+test('a run resumed under a second main session is one run over the line, not two', () => {
+  const c = createCollector({ prices: PRICES });
+  const big = (sessionId, rid, peak) => c.add(asst(rid, usage({ input_tokens: peak, output_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }), { ts: '2026-11-02T10:00:00Z' }), { sessionId, agent: { id: 'same', type: 'recon', name: 'resumed' } });
+  big('sA', 'r1', 210e3);
+  big('sB', 'r2', 220e3);
+  const r = c.report().time.overLine;
+  assert.deepEqual([r.total, r.over, r.runs.length, r.runs[0].peak], [1, 1, 1, 220e3]);
+  assert.match(renderMarkdown(c.report(), { top: 5 }), /1 of 1 runs over 200k/);
+});
+
+test('the budget lines are inclusive, like the hook: exactly 200k is over, exactly 150k is soft', () => {
+  const c = createCollector({ prices: PRICES });
+  const one = (id, peak) => c.add(asst('r-' + id, usage({ input_tokens: peak, output_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }), { ts: '2026-11-02T10:00:00Z' }), { sessionId: 's1', agent: { id, type: 'recon' } });
+  one('hard', 200e3);
+  one('soft', 150e3);
+  one('below', 149999);
+  const r = c.report().time.overLine;
+  assert.deepEqual([r.total, r.over, r.overSoft], [3, 1, 2]);
+  assert.equal(r.runs[0].peak, 200e3);
+});
+
 test('no run over the hard line: one line saying so', () => {
   const c = createCollector({ prices: PRICES });
   c.add(asst('r1', usage({ input_tokens: 160e3, output_tokens: 1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } }), { ts: '2026-11-02T10:00:00Z' }), { sessionId: 's1', agent: { id: 'm', type: 'recon' } });

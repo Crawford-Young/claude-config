@@ -1349,7 +1349,7 @@
    "from": "script:budget-replay",
    "to": "script:audit-lib",
    "kind": "reads",
-   "label": "walkTranscripts, readJsonl, priceUsage"
+   "label": "walkTranscripts, readJsonl, priceUsage, depthOf"
   },
   {
    "from": "script:budget-replay",
