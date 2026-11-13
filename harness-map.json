@@ -377,6 +377,18 @@
    ]
   },
   {
+   "id": "hook:subagent-budget",
+   "kind": "hook",
+   "label": "subagent-budget",
+   "file": "hooks/subagent-budget.mjs",
+   "summary": "PreToolUse (no matcher) — the hand-back budget stop inside subagents (#381): reads the subagent's own context from <session>/subagents/agent-<agent_id>.jsonl; main sessions (no agent_id) are context-gauge's.",
+   "rules": [
+    "150k soft: one note per agent — finish the step, write the commit-message file, hand back",
+    "200k hard: blocks every tool but Read, Write, Edit, MultiEdit, SubagentHandback, ToolSearch",
+    "Lines from CLAUDE_CTX_AGENT_SOFT / CLAUDE_CTX_AGENT_HARD; fails open"
+   ]
+  },
+  {
    "id": "hook:session-start",
    "kind": "hook",
    "label": "session-start",
@@ -1128,6 +1140,42 @@
    "to": "phase:cleanup-continuation",
    "kind": "gates",
    "label": "checkpoint before context grows costly"
+  },
+  {
+   "from": "hook:subagent-budget",
+   "to": "phase:execute-dispatch",
+   "kind": "gates",
+   "label": "subagent hands back by 200k"
+  },
+  {
+   "from": "hook:subagent-budget",
+   "to": "hook:context-gauge",
+   "kind": "reads",
+   "label": "contextTokens (sidechain), readTail"
+  },
+  {
+   "from": "hook:subagent-budget",
+   "to": "hook:_hooklib",
+   "kind": "reads",
+   "label": "block, run, withClaim, readState/writeState"
+  },
+  {
+   "from": "hook:subagent-budget",
+   "to": "script:lib",
+   "kind": "reads",
+   "label": "isMain"
+  },
+  {
+   "from": "hook:subagent-budget",
+   "to": "store:transcripts",
+   "kind": "reads",
+   "label": "the subagent's own agent-<agent_id>.jsonl"
+  },
+  {
+   "from": "store:settings-json",
+   "to": "hook:subagent-budget",
+   "kind": "loads",
+   "label": "PreToolUse (all tools)"
   },
   {
    "from": "hook:session-start",
