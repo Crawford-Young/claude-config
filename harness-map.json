@@ -467,6 +467,29 @@
    ]
   },
   {
+   "id": "agent:unit",
+   "kind": "agent",
+   "label": "unit",
+   "file": "agents/unit.md",
+   "summary": "Owns one whole issue: splits its Done-when into briefs and spawns tester → implementer → reviewer under its own charge; hands back READY.",
+   "rules": [
+    "Never edits source or tests; Write only for its commit-message, brief and scratch files",
+    "Git read-only: never commits, pushes or opens a PR",
+    "Stops and reports after 3 NEEDS-FIX"
+   ]
+  },
+  {
+   "id": "agent:tester",
+   "kind": "agent",
+   "label": "tester",
+   "file": "agents/tester.md",
+   "summary": "Writes the failing tests for one brief before any implementation; reports written vs failed.",
+   "rules": [
+    "Test files only",
+    "Green from birth is listed, not counted as failed"
+   ]
+  },
+  {
    "id": "model:opus",
    "kind": "model",
    "label": "opus",
@@ -1003,6 +1026,52 @@
    "to": "model:fable",
    "kind": "routes-to",
    "label": "diagnostic lane"
+  },
+  {
+   "from": "skill:agent-factory",
+   "to": "agent:unit",
+   "kind": "dispatches",
+   "label": "one whole issue (directing.md)"
+  },
+  {
+   "from": "agent:unit",
+   "to": "agent:tester",
+   "kind": "dispatches",
+   "label": "failing tests first"
+  },
+  {
+   "from": "agent:unit",
+   "to": "agent:implementer",
+   "kind": "dispatches"
+  },
+  {
+   "from": "agent:unit",
+   "to": "agent:implementer-opus",
+   "kind": "dispatches"
+  },
+  {
+   "from": "agent:unit",
+   "to": "agent:reviewer",
+   "kind": "dispatches",
+   "label": "after the implementer hands back"
+  },
+  {
+   "from": "agent:unit",
+   "to": "doc:routing",
+   "kind": "reads",
+   "label": "picks the implementer"
+  },
+  {
+   "from": "agent:unit",
+   "to": "model:opus",
+   "kind": "routes-to",
+   "label": "frontmatter, high"
+  },
+  {
+   "from": "agent:tester",
+   "to": "model:sonnet",
+   "kind": "routes-to",
+   "label": "frontmatter, medium"
   },
   {
    "from": "store:settings-json",

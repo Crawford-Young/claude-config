@@ -43,7 +43,7 @@ Agent teams are off since 2026-10-16 (#272, user decision): a named Agent call i
 
 ## Model routing
 
-Roster: `implementer`, `implementer-opus`, `reviewer`, `recon`. The pick per situation lives in [`agents/ROUTING.md`](../../agents/ROUTING.md), the measured source: read its table before dispatching. Fable is usage-billed and hook-gated (per-run user clearance, `FABLE OK`).
+Roster: `implementer`, `implementer-opus`, `reviewer`, `recon`, plus the unit tier (#385): `unit` owns one whole issue and spawns `tester` → implementer → `reviewer` (director's side: `directing.md`). The pick per situation lives in [`agents/ROUTING.md`](../../agents/ROUTING.md), the measured source: read its table before dispatching. Fable is usage-billed and hook-gated (per-run user clearance, `FABLE OK`).
 
 Set `model:` explicitly on every dispatch of a type without a frontmatter default (hook-enforced). Any brief, any model: omit "verify your work" scaffolding (over-verification — the harness's verifier is a fresh-context subagent regardless of which model wrote the brief); add one scope line that fixes the file boundary (parallel safety) and fixes what's broken inside it; cap delegation explicitly when the dispatched type carries the `Agent` tool.
 

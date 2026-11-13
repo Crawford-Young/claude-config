@@ -2,7 +2,7 @@
 
 Evidence-distilled guide for choosing a model per dispatch. When a dispatch surprises, add a rule here as one imperative line naming its reason, and put the incident in `~/code/docs/harness-evolution/archive/rule-history.md` (the retired per-type profiles sit beside it in `2026-08-21-agent-profiles.md`). Keep this file short.
 
-Roster: `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the same at opus and high), `reviewer` (review; Write only for scratch probe files), `recon` (read-only local and web lookups). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it.
+Roster: `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the same at opus and high), `reviewer` (review; Write only for scratch probe files), `recon` (read-only local and web lookups), `unit` (owns one issue; spawns workers, edits nothing), `tester` (failing tests first, test files only; sonnet medium, spawned by a unit). Built-in types without a frontmatter `model:` (e.g. `Explore`, `general-purpose`) get `model: sonnet` filled when a dispatch omits it.
 
 | Situation | Model | Effort | Evidence: n runs, $/run (31 days to 2026-10-13) |
 |---|---|---|---|
@@ -12,6 +12,7 @@ Roster: `implementer` (code via TDD, docs/prose edits), `implementer-opus` (the 
 | Verbatim transcription where the brief carries complete byte-for-byte code | **sonnet** (orchestrator diff-verifies) | low | unmeasured: no implementer run at low |
 | Review with enumerated probes / adjudication-style brief; byte-compare reviews | **sonnet** | high | reviewer · sonnet-5-5 · high: n=3, $0.15 (sonnet-5: n=4, $0.43); thin; not rated (re-runs follow implementer fixes) |
 | Review the orchestrator cannot pre-frame; 3+ file integration; novel pattern with nothing in-repo to copy; high-stakes code (auth, payments, migrations, and anything that deletes refs, branches or data — the is-it-safe-to-delete check is the part a scoped task gets wrong, and it cannot be undone) | **opus** | high (implementer: dispatch `implementer-opus`, named; reviewer: its frontmatter) | implementer · opus-5-5 · medium (frontmatter, no override; n=53, $2.44) is the pre-#195 baseline, redo ≤59% (n=39, 31 days to 2026-11-10; upper bound — follow-on assignments count); implementer-opus · opus-5-5 · high: redo ≤36% (n=53, same window and caveat); reviewer · opus-5-5 · high (frontmatter): n=31, $1.07, not rated (re-runs follow implementer fixes) |
+| One whole issue with several Done-when boxes, handed over by a director (dispatch `unit`; it spawns `tester` → implementer → `reviewer`) | **opus** | high (frontmatter) | unmeasured: pilot on #385 |
 | Doc/MD restructure with verbatim-preserve constraints | **sonnet** | default | unmeasured: runs carry no task kind to tell it from implementation |
 | Long-horizon sessions; multistep research; finished-artifact analysis; or Opus at `xhigh`/`max` still falling short | **fable** — per-run user clearance (`FABLE OK`), hook-enforced | default | unmeasured: one fable run, a recon at low ($0.18) |
 
