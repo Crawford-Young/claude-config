@@ -74,7 +74,12 @@ for await (const { windows, records } of transcriptWindows(o.root)) {
   if (kept.length) {
     files++;
     if (!agent) live.add(sessionId);
-  } else if (!live.has(sessionId)) continue;
+  } else if (!live.has(sessionId)) {
+    // a file charged elsewhere (the director's own) still holds the SendMessage fix rounds sent to a kept run (#378):
+    // read it for those alone, nothing of its spend or time
+    if (o.session) for await (const { rec, ctx } of records) c.add(rec, { ...ctx, sendsOnly: true });
+    continue;
+  }
   // the file's other windows still feed its timeline, so idle time matches the whole-root run;
   // cost-state totals the whole file: a slice of it has nothing to stand beside
   const whole = kept.length === windows.length;

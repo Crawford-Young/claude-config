@@ -169,3 +169,26 @@ test('--stamps checks model stamps against prices.json: exit 1 naming each stale
   assert.equal(clean.status, 0, clean.stderr);
   assert.match(clean.stdout, /no stale model stamps/);
 });
+
+test('--session counts a warm redo the director sent from its own transcript, without charging the director\'s spend (#378)', () => {
+  const root = tempDir('audit-cli-');
+  const proj = join(root, 'C--proj');
+  const sub = join(proj, 'd', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  const send = [
+    { type: 'assistant', uuid: 'ds1', requestId: 'dq', timestamp: '2026-10-05T10:05:00Z', sessionId: 'd',
+      message: { id: 'dm', model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 1 },
+        content: [{ type: 'tool_use', id: 'tu1', name: 'SendMessage', input: { to: 'a01', message: 'fix the red test' } }] } },
+    { type: 'user', uuid: 'dr1', timestamp: '2026-10-05T10:05:01Z', sessionId: 'd',
+      toolUseResult: { success: true, resumedAgentId: 'a01', pin: { id: 'a01' } },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: [{ type: 'text', text: '{}' }] }] } },
+  ];
+  writeFileSync(join(proj, 'd.jsonl'), lines(...req('d1', 'd', 'director-harness'), ...send));
+  writeFileSync(join(sub, 'agent-a01.jsonl'), lines(...req('t1', 'd')));
+  writeFileSync(join(sub, 'agent-a01.meta.json'), JSON.stringify({ agentType: 'implementer-opus', name: 'impl_issue_repo-9' }));
+  const r = spawnHarness(cli, ['--root', root, '--session', 'impl_issue_repo-9', '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.deepEqual([j.files, j.totals.requests], [1, 1]);
+  assert.deepEqual(j.agentMix.map((m) => [m.type, m.runs, m.warmRedos, m.redoOrEscalation]), [['implementer-opus', 1, 1, 1]]);
+});
