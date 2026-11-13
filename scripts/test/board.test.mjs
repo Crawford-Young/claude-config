@@ -97,6 +97,7 @@ else if (a[0] === 'api') {
     const name = fx.readback ?? (fx.options[st.option] ?? null);
     out({ data: { node: { fieldValueByName: name ? { name } : null } } });
   } else if (q.includes('projectV2(number')) out(page('boardPages'));
+  else if (q.includes('issues(states:CLOSED')) out(fx.closedPages ? page('closedPages') : { data: Object.fromEntries([...q.matchAll(/(r\\d+):/g)].map((m) => [m[1], { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } }])) });
   else if (q.includes('issues(states')) out(page('issuePages'));
   else process.exit(2);
 } else process.exit(2);
@@ -242,7 +243,7 @@ test('sweep adds open live-repo issues missing from the board, across pages, eve
   const urls = verb(stub.calls(), 'project', 'item-add').map((c) => c[c.indexOf('--url') + 1]);
   assert.deepEqual(urls, ['https://github.com/Crawford-Young/app/issues/2', 'https://github.com/Crawford-Young/app/issues/3']);
   // only live repos are read, and the second page asks only for the repo that had more
-  const issueQueries = stub.calls().filter((c) => c[0] === 'api' && c.some((x) => x.includes('issues(states')));
+  const issueQueries = stub.calls().filter((c) => c[0] === 'api' && c.some((x) => x.includes('issues(states:OPEN')));
   assert.equal(issueQueries.length, 2);
   const [q1, q2] = issueQueries.map((c) => c.find((x) => x.startsWith('query=')));
   assert.match(q1, /"app"/);
@@ -287,6 +288,84 @@ test('sweep leaves items it added this run out of drift: their status is null un
   assert.doesNotMatch(r.stdout, /^drift app#2 /m);
   const edited = verb(stub.calls(), 'project', 'item-edit').map((c) => c[c.indexOf('--id') + 1]);
   assert.ok(!edited.includes('I2'), edited.join(' '));
+});
+
+// A closed issue must not keep `in-progress`: label drift is reported and repaired apart from Status drift.
+const labelFx = () => {
+  const page = structuredClone(BOARD_PAGES[1]);
+  page.data.user.projectV2.items.nodes.push(
+    item('I11', 'Done', iss('app', 11, 'CLOSED', { labels: ['bug', 'in-progress'] })), // status in sync, label stale
+    item('I12', 'QA', iss('shop', 12, 'CLOSED', { labels: ['in-progress'] })), // prod: Status left alone, label still stale
+    item('I13', 'In Progress', iss('app', 13, 'CLOSED', { labels: ['in-progress'] })), // both drift
+  );
+  return sweepFx({ boardPages: [BOARD_PAGES[0], page] });
+};
+const LABEL_DRIFT = [
+  'drift app#11 closed issue carries in-progress -> remove label',
+  'drift shop#12 closed issue carries in-progress -> remove label',
+  'drift app#13 closed issue carries in-progress -> remove label',
+];
+
+test('sweep reports a closed issue still labelled in-progress as drift and removes nothing without --apply', () => {
+  const stub = ghStub(labelFx());
+  const r = runBoard(['sweep'], stub);
+  assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.split(/\r?\n/).filter((l) => l.startsWith('drift '));
+  for (const l of LABEL_DRIFT) assert.ok(lines.includes(l), `${l}\n${lines.join('\n')}`);
+  assert.equal(lines.length, DRIFT.length + 1 + LABEL_DRIFT.length, lines.join('\n')); // + app#13's Status drift
+  assert.match(r.stdout, /9 drift/);
+  assert.equal(verb(stub.calls(), 'issue', 'edit').length, 0);
+});
+
+test('sweep --apply removes in-progress from closed issues, in prod repos too, and never from open ones', () => {
+  const stub = ghStub(labelFx());
+  const r = runBoard(['sweep', '--apply'], stub);
+  assert.equal(r.status, 0, r.stderr);
+  const removed = verb(stub.calls(), 'issue', 'edit').map((c) => c.slice(2));
+  assert.deepEqual(removed, [
+    ['11', '--repo', 'Crawford-Young/app', '--remove-label', 'in-progress'],
+    ['12', '--repo', 'Crawford-Young/shop', '--remove-label', 'in-progress'],
+    ['13', '--repo', 'Crawford-Young/app', '--remove-label', 'in-progress'],
+  ]);
+});
+
+// Closed + labelled issues are also found by repo query, so ones off the board are not missed.
+const closedIssue = (n) => ({ number: n });
+const CLOSED_PAGES = [
+  {
+    data: {
+      r0: { issues: { pageInfo: { hasNextPage: true, endCursor: 'c1' }, nodes: [closedIssue(11), closedIssue(20)] } }, // 11 is also a board item
+      r1: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [closedIssue(21)] } },
+    },
+  },
+  { data: { r0: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [closedIssue(22)] } } } },
+];
+const offBoardFx = () => ({ ...labelFx(), closedPages: CLOSED_PAGES });
+
+test('sweep reports closed in-progress issues that are off the board, once, across pages', () => {
+  const stub = ghStub(offBoardFx());
+  const r = runBoard(['sweep'], stub);
+  assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.split(/\r?\n/).filter((l) => l.includes('closed issue carries'));
+  const text = lines.join('\n');
+  for (const n of ['app#20', 'shop#21', 'app#22']) assert.ok(lines.includes(`drift ${n} closed issue carries in-progress -> remove label`), text);
+  assert.equal(lines.filter((l) => l.startsWith('drift app#11 ')).length, 1, text);
+  assert.equal(lines.length, LABEL_DRIFT.length + 3, text);
+  const closedQueries = stub.calls().filter((c) => c[0] === 'api' && c.some((x) => x.includes('issues(states:CLOSED')));
+  assert.equal(closedQueries.length, 2);
+  const [q1, q2] = closedQueries.map((c) => c.find((x) => x.startsWith('query=')));
+  assert.match(q1, /"in-progress"/);
+  assert.doesNotMatch(q1, /"old"/);
+  assert.doesNotMatch(q2, /"shop"/);
+  assert.match(q2, /"c1"/);
+});
+
+test('sweep --apply edits each closed in-progress issue once, board item or not', () => {
+  const stub = ghStub(offBoardFx());
+  const r = runBoard(['sweep', '--apply'], stub);
+  assert.equal(r.status, 0, r.stderr);
+  const removed = verb(stub.calls(), 'issue', 'edit').map((c) => `${c[4]}#${c[2]}`);
+  assert.deepEqual(removed.sort(), ['Crawford-Young/app#11', 'Crawford-Young/app#13', 'Crawford-Young/app#20', 'Crawford-Young/app#22', 'Crawford-Young/shop#12', 'Crawford-Young/shop#21']);
 });
 
 test('sweep exits nonzero when gh fails', () => {
