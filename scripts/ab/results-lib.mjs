@@ -101,9 +101,11 @@ export function transcriptTokens(texts) {
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 // A command segment whose program is claude: at the start, or after ; & | ( $( or a newline, past any
 // VAR=value prefixes, PowerShell's call operator and a quoted or bare path; or npx of the package. Not
-// after a backtick: round 1's sed script named "`claude -n`" as a markdown code span.
+// after a backtick: round 1's sed script named "`claude -n`" as a markdown code span. A launcher
+// wrapper may sit before the program: `bash|sh|zsh -c`, `nohup`, `timeout [-opts] DURATION`, and
+// PowerShell's `Start-Process [-FilePath]`; a wrapper around another program stays quiet.
 const CLAUDE_LAUNCH =
-  /(?:(?:^|[;&|(\n]|\$\()\s*(?:&\s*)?(?:[A-Za-z_]\w*=\S*\s+)*["']?(?:[^\s"';&|]*[\\/])?claude(?:\.exe)?["']?(?=\s|$|[;&|)])|\bnpx\s+(?:-\S+\s+)*@anthropic-ai\/claude-code\b)/i;
+  /(?:(?:^|[;&|(\n]|\$\()\s*(?:&\s*)?(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:(?:ba|z)?sh\s+-c|nohup|timeout\s+(?:-\S+\s+)*\S+|Start-Process(?:\s+-FilePath)?)\s+)*["']?(?:[^\s"';&|]*[\\/])?claude(?:\.exe)?["']?(?=\s|$|[;&|)])|\bnpx\s+(?:-\S+\s+)*@anthropic-ai\/claude-code\b)/i;
 
 /** The shell commands in a run's transcripts that launch claude (Bash or PowerShell tool calls, each
  *  once by tool_use id). A nested `claude -p` or `--bg` runs outside the session: solo's tool deny
