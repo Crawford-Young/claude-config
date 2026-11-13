@@ -2,8 +2,9 @@
 // Every arm shares one layout under <tmp>/ab/<round id>, so a path names no arm; still, every round
 // path is replaced in each spelling a log can carry it. The other tells: the safe-mode flag and env
 // var, an arm label, harness-workflow files (COMMIT_MSG_<n>.txt, dropped whole) and commit-body
-// vocabulary. Redactions share one placeholder in every arm. Harness file names stay: every ticket is a
-// claude-config ticket (round 5), so the repo holds them and a mention says nothing about the arm.
+// vocabulary. Redactions share one placeholder in every arm. Harness file names stay (every ticket is a
+// claude-config ticket, round 5, so the repo holds them and a mention says nothing about the arm),
+// except the unit arm's own definitions, agents/unit.md and agents/tester.md (UNIT_TELL), which are redacted.
 
 import { ARMS } from './ab-lib.mjs';
 

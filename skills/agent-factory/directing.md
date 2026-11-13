@@ -28,7 +28,7 @@ Assign every shared, exclusive resource before briefing: a distinct **dev-server
 
 An issue with several Done-when boxes goes to one `unit` agent (`agents/unit.md`), which spawns `tester` → implementer → `reviewer` under its own charge, so no single agent carries the whole ticket (the flat tree put 434k and 347k in single implementers, #381). Your part shrinks to four steps:
 
-- **Decompose** to issues, not briefs: one unit per issue, named `unit_issue_<repo>-<N>`, briefed with the issue number, its worktree, its singletons and the shared rules file. The unit writes the worker briefs.
+- **Decompose** to issues, not briefs: one unit per issue, named `unit_issue_<repo>-<N>`, briefed with the issue number, its worktree, its singletons, the shared rules file, its commit-message file and a delegation cap (how many workers it may spawn before it must hand back). The unit writes the worker briefs. Elsewhere in this file "unit" is any dispatch that owns a ticket; here it is the `unit` agent type.
 - **Verify READY** against source before acting on it: re-run each Done-when command the hand-back lists and compare the rc, read `git status --short` in the worktree against the tree state it reports, and read the reviewer's verdict, because a report can describe a tree that has since changed. `NOT READY` or a mismatch goes back as listed items inside the resume bounds, else to a fresh unit (`unit-2`).
 - **Ask** the user everything the unit raised as `NEEDS_CONTEXT`, once, with AskUserQuestion.
 - **Ship**: you commit from the unit's commit-message file and run the ship question below. The unit never commits, pushes or opens a PR.
