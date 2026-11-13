@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { execHarness, spawnHarness, tempDir, withoutUserGitConfig } from './_spawn.mjs';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,13 +101,17 @@ test('#368: rule 1 blocks a sweep in a shared main checkout, not in a linked wor
   });
 });
 
-test('#368: git add -N records intent only, so rule 1 never blocks it', () => {
+test('#368: git add -N records intent only, so rule 1 lets it name paths or `.`, but not -A/--all', () => {
   const ws = tempDir('ws-');
   const shop = join(ws, 'shop');
   mkdirSync(shop);
   execFileSync('git', ['init', '-q', '-b', 'main', shop]);
   inWorkspace(ws, () => {
-    for (const c of ['git add -N .', 'git add --intent-to-add .', 'git add -N -A', 'git add -AN']) assert.equal(staticCheck(c, shop), null, c);
+    for (const c of ['git add -N .', 'git add --intent-to-add .', 'git add -N a.ts b.ts', 'git add -N ./']) assert.equal(staticCheck(c, shop), null, c);
+    // -A/--all sweeps every tracked change too, which -N does not need.
+    for (const c of ['git add -N -A', 'git add -AN', 'git add -NA', 'git add --intent-to-add --all', 'git add -N --all .', 'git add -A -N a.ts']) {
+      assert.match(staticCheck(c, shop) ?? '', /git add -A\/--all is banned/, c);
+    }
     assert.match(staticCheck('git add -N a.ts && git add -A', shop) ?? '', /is banned/, 'a later sweep in the same command still blocks');
   });
 });
@@ -419,6 +423,56 @@ test('#368: rule 6 blocks a commit in the claude-config main checkout on main; r
   assert.equal(guardRun(`cd ${cfg} && node scripts/land.mjs start s -m "x" -- a.md`, h, env), 0);
 });
 
+/** h/code/claude-config (the spawned hook's default cfgMain) on main, with hooks/,
+ *  scripts/ and agents/ dirs, plus a linked worktree of it under h/code/.worktrees. */
+function cfgLayout() {
+  const h = tmpHome();
+  const cfg = join(h, 'code', 'claude-config');
+  for (const d of ['hooks', 'scripts', 'agents']) mkdirSync(join(cfg, d), { recursive: true });
+  const git = (...a) => execFileSync('git', ['-C', cfg, ...a]);
+  git('init', '-q', '-b', 'main');
+  git('-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'root');
+  const wt = join(h, 'code', '.worktrees', 'claude-config-1-x');
+  git('worktree', 'add', '-q', '-b', 'feat/x', wt);
+  mkdirSync(join(wt, 'hooks'));
+  return { h, cfg, wt };
+}
+
+test('#368 review: rule 6 judges the toplevel, so a subdir or a junction into the main checkout is caught', () => {
+  const { h, cfg, wt } = cfgLayout();
+  const junction = join(h, '.claude', 'agents');
+  symlinkSync(join(cfg, 'agents'), junction, 'junction');
+  const run = (command, cwd) => spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd }), home: h }).status;
+  const blocked = [
+    ['cd hooks && git commit -m x', cfg],
+    ['git commit -m x', join(cfg, 'hooks')],
+    [`git -C ${join(cfg, 'scripts')} commit -m x`, h],
+    [`cd ${junction} && git commit -m x`, h],
+    ['git restore x', join(cfg, 'hooks')],
+    ['git switch y', join(cfg, 'hooks')],
+  ];
+  for (const [c, cwd] of blocked) assert.equal(run(c, cwd), 2, `${c} (cwd ${cwd})`);
+  // A linked worktree of claude-config, subdir included, keeps its commits, restores and switches.
+  for (const c of ['git commit -m x', 'git restore x', 'git switch y']) {
+    assert.equal(run(c, wt), 0, `worktree: ${c}`);
+    assert.equal(run(c, join(wt, 'hooks')), 0, `worktree subdir: ${c}`);
+  }
+});
+
+test('#368 review: a cd target with a leading $HOME/${HOME}/$USERPROFILE/$env:USERPROFILE resolves to home', () => {
+  const { h, cfg, wt } = cfgLayout();
+  const run = (command, tool = 'Bash') => spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: tool, tool_input: { command }, cwd: h }), home: h }).status;
+  const rel = (p) => p.slice(h.length).replace(/\\/g, '/');
+  for (const v of ['$HOME', '${HOME}', '$USERPROFILE']) {
+    assert.equal(run(`cd ${v}${rel(wt)} && git add -A`), 0, `${v}: a worktree sweep`);
+    assert.equal(run(`cd ${v}${rel(cfg)} && git restore x`), 2, `${v}: a main-checkout restore`);
+  }
+  assert.equal(run(`Set-Location $env:USERPROFILE${rel(wt)}; git add -A`, 'PowerShell'), 0, '$env:USERPROFILE: a worktree sweep');
+  assert.equal(run(`Set-Location $env:USERPROFILE${rel(cfg)}; git restore x`, 'PowerShell'), 2, '$env:USERPROFILE: a main-checkout restore');
+  // No other expansion: another variable, a later one, or a longer name stays unknown (rule 1 fails closed).
+  for (const c of [`cd $W${rel(wt)} && git add -A`, `cd $HOME/code/$X && git add -A`, `cd $HOMEDIR${rel(wt)} && git add -A`]) assert.equal(run(c), 2, c);
+});
+
 test('#171: the hook judges a cd by its payload tool', () => {
   const h = tmpHome();
   const cfg = join(h, 'cfg');
@@ -444,7 +498,8 @@ test('#368: rule 6 reads only literal cd, cwd and git -C paths; anything else le
   assert.equal(at('cd ~/code/web/site'), join(homedir(), 'code/web/site'));
   assert.equal(at('cd /pa; pushd /pb'), '/pb');
   assert.equal(at('Set-Location -LiteralPath /pb'), '/pb');
-  for (const cmd of ['cd $HOME/code', 'cd $d', 'W=/pa; cd $W', 'cd "$(git rev-parse --show-toplevel)"', 'cd `pwd`', 'cd -', 'cd /pa; pushd /pb; popd', 'Set-Location -ErrorAction Stop /pb']) {
+  assert.equal(at('cd $HOME/code'), join(homedir(), 'code'), 'a leading $HOME is the one variable read');
+  for (const cmd of ['cd $d', 'W=/pa; cd $W', 'cd "$(git rev-parse --show-toplevel)"', 'cd `pwd`', 'cd -', 'cd /pa; pushd /pb; popd', 'Set-Location -ErrorAction Stop /pb']) {
     assert.equal(at(cmd), UNKNOWN_DIR, cmd);
   }
   assert.equal(at('cd $d; cd /abs'), '/abs', 'a literal cd resolves it again');

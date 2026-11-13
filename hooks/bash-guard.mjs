@@ -96,7 +96,7 @@
 // checked nothing, and a silent allow is invisible — a loud block is not.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isMain } from '../scripts/lib.mjs';
@@ -441,14 +441,15 @@ export function staticCheck(raw, cwd = null, tool = null) {
   //    command (grep -A 3, tar -A) or inside quoted text is not a hit. The
   //    bare-`.` check wants `.` (or `./`) as a whole argument: `.env`,
   //    `.github/…` and `./src/x.ts` are specific paths, not the whole tree.
-  //    `git add -N` (intent to add) stages no content.
+  //    `git add -N .` (intent to add) stages no content; `-N -A` still sweeps
+  //    every tracked change, so only the bare `.` is exempt.
   const calls = gitCalls(cmd, cwd, tool);
   const where = ' in a shared checkout: it carries concurrent sessions\' in-flight files. Stage explicit paths, or run it in a worktree named by a literal cd or git -C path.';
   for (const { sub, args, repo } of calls) {
-    if (sub === 'add' && args.some((a) => a === '--intent-to-add' || /^-[a-zA-Z]*N[a-zA-Z]*$/.test(a))) continue;
+    const intent = args.some((a) => a === '--intent-to-add' || /^-[a-zA-Z]*N[a-zA-Z]*$/.test(a));
     let what = null;
     if (sub === 'add' && args.some((a) => a === '--all' || /^-[a-zA-Z]*A[a-zA-Z]*$/.test(a))) what = 'git add -A/--all';
-    else if (sub === 'add' && args.some((a) => a === '.' || a === './')) what = 'git add .';
+    else if (sub === 'add' && !intent && args.some((a) => a === '.' || a === './')) what = 'git add .';
     else if (sub === 'commit' && args.some((a) => a === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(a))) what = 'git commit -a/--all';
     if (what && sharedCheckout(repo)) return `${what} is banned${where}`;
   }
@@ -484,19 +485,32 @@ export function staticCheck(raw, cwd = null, tool = null) {
  *  repo). Failing closed, a dir the guard can't resolve (null, UNKNOWN_DIR)
  *  or place in any repo counts as shared: a cheap literal path proves it. */
 function sharedCheckout(repo) {
-  if (typeof repo !== 'string') return true;
-  for (let d = resolve(repo); ; d = dirname(d)) {
-    let git = null;
+  const top = typeof repo === 'string' ? toplevel(repo) : null;
+  if (!top) return true;
+  const rel = relative(workspaceRoot(), top.dir);
+  return top.git.isDirectory() && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/** The repo `dir` sits in: the first dir up from it holding a `.git`, with that
+ *  entry's stat (a directory in a main checkout, a file in a linked worktree),
+ *  or null when no dir up to the root holds one. */
+function toplevel(dir) {
+  for (let d = resolve(dir); ; d = dirname(d)) {
     try {
-      git = statSync(join(d, '.git'));
+      return { dir: d, git: statSync(join(d, '.git')) };
     } catch {
       // no .git here: look one level up
     }
-    if (git) {
-      const rel = relative(workspaceRoot(), d);
-      return git.isDirectory() && !rel.startsWith('..') && !isAbsolute(rel);
-    }
-    if (dirname(d) === d) return true;
+    if (dirname(d) === d) return null;
+  }
+}
+
+/** `p` with junctions and symlinks resolved, or as given when it doesn't exist. */
+function real(p) {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return resolve(p);
   }
 }
 
@@ -707,10 +721,14 @@ const GIT_OPT_WITH_ARG = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-pat
 /** The dir a cd to `p` from `dir` lands in, read only from a literal target
  *  (#368): a path, null (a relative target with no cwd: no info) or
  *  UNKNOWN_DIR (`cd -`, a target holding a variable or a substitution, or a
- *  relative target from an unknown dir). `~` expands. On Windows a Git Bash
- *  `/c/…` (or bare `/c`) is the drive path `C:/…`, which git -C can open. */
+ *  relative target from an unknown dir). `~` expands, and so does a leading
+ *  `$HOME`, `${HOME}`, `$USERPROFILE` or `$env:USERPROFILE` — no other
+ *  variable. On Windows a Git Bash `/c/…` (or bare `/c`) is the drive path
+ *  `C:/…`, which git -C can open. */
 const toDir = (dir, p) => {
-  if (p === '-' || /[$`]/.test(p)) return UNKNOWN_DIR;
+  if (p === '-') return UNKNOWN_DIR;
+  p = p.replace(/^(?:\$HOME|\$\{HOME\}|\$USERPROFILE|\$env:USERPROFILE)(?=[/\\]|$)/, '~');
+  if (/[$`]/.test(p)) return UNKNOWN_DIR;
   let e = expandHome(p);
   if (process.platform === 'win32') e = e.replace(/^\/([a-zA-Z])(?:\/|$)/, (_, d) => `${d.toUpperCase()}:/`);
   if (isAbsolute(e)) return e;
@@ -1779,7 +1797,10 @@ function callRule({ sub, args, repo }) {
   if (typeof repo !== 'string') return null;
   const cfgMain = process.env.CLAUDE_CONFIG_REPO || join(workspaceRoot(), 'claude-config');
   const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
-  if (!same(resolve(repo), resolve(cfgMain)) || /[/\\]\.worktrees[/\\]/.test(resolve(repo))) return null;
+  // The repo git would act on, through any junction: a subdir of the main
+  // checkout is the main checkout; a worktree under it is its own toplevel.
+  const top = toplevel(real(repo));
+  if (!top || !same(top.dir, real(cfgMain))) return null;
   const branch = currentBranch(repo);
   if (branch === null) return null; // not a repo / git unavailable — fail open
   if (isRestore) {
