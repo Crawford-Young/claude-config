@@ -14,7 +14,7 @@ node ~/code/claude-config/scripts/qa.mjs [repo] --list   # show what would run
 node ~/code/claude-config/scripts/qa.mjs [repo] --gate e2e
 ```
 
-Gates come from the repo itself (justfile `check` recipe, else package.json scripts — `bun run` when `bun.lock`/`bun.lockb` exists, else `pnpm` — else marker files such as claude-config's `scripts/test/*.test.mjs`). Each runs foreground and unpiped; full output goes to `~/.claude/qa-logs/`, the console gets `EXIT:<code>` per gate, failure lines on red, and all four coverage metrics on green.
+Gates come from the repo itself (justfile `check` recipe, else package.json scripts — `bun run` when `bun.lock`/`bun.lockb` exists, else `pnpm` — else marker files such as claude-config's `scripts/test/*.test.mjs`). Each runs foreground and unpiped; full output goes to `~/.claude/qa-logs/`, the console gets `EXIT:<code>` per gate, failure lines on red, and all four coverage metrics on green. A gate run holds a machine-wide lock (`~/.claude/qa-lock/`; `CLAUDE_QA_LOCK_DIR` gives a test a private one), so parallel worktrees queue: a waiter names the holder once, each gate log opens with the wait, and a dead or pid-reused holder is taken over (#384).
 
 ## Rules
 

@@ -21,6 +21,7 @@ const PATH_OVERRIDES = {
   CLAUDE_SESSIONS_DIR: ['.claude', 'sessions'],
   CLAUDE_PROJECTS_DIR: ['.claude', 'projects'],
   CLAUDE_USAGE_HISTORY_DIR: ['.claude', 'usage-history'],
+  CLAUDE_QA_LOCK_DIR: ['.claude', 'qa-lock'],
   CLAUDE_USAGE_THROTTLE_DIR: ['.claude', 'usage-throttle'],
   CLAUDE_SPEND_DIR: ['.claude', 'spend'],
   CLAUDE_ACTIVE_REPO_DIR: ['.claude', 'active-repo'],
