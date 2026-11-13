@@ -1070,6 +1070,16 @@ test('canaryVerdict (#374): current needs the Agent tool offered, solo needs Age
   assert.equal(v('solo', deferring, { version: '2.1.322', current: { ...ref, verdict: 'FAIL' } }), 'FAIL');
   assert.match(deferralGap(deferring, { version: '2.1.322', current: null }), /run --arm current .* first/);
   assert.equal(deferralGap(loaded(denied), { version: '2.1.322', current: null }), null, 'no loader: the list is the whole offer');
+  // #380: two failed `claude --version` reads (null on both sides) are unknown, not the same claude.
+  const unknownRef = { ...ref, version: null };
+  assert.match(deferralGap(deferring, { version: null, current: unknownRef }), /unknown version/, 'null === null is no match');
+  assert.equal(v('solo', deferring, { version: null, current: unknownRef }), 'FAIL', 'solo cannot pass on two unknown versions');
+  assert.match(deferralGap(deferring, { version: null, current: ref }), /unknown version/, 'unknown solo version, known current');
+  assert.notEqual(deferralGap(deferring, { version: '2.1.322', current: unknownRef }), null, 'known solo version, unknown current');
+  assert.equal(v('solo', deferring, { version: '2.1.322', current: unknownRef }), 'FAIL');
+  const noVersionKey = { arm: 'current', plant: false, verdict: 'PASS', tools: ['Agent', 'ToolSearch'] };
+  assert.notEqual(deferralGap(deferring, { version: undefined, current: noVersionKey }), null, 'a record with no version key and an undefined version');
+  assert.equal(deferralGap(deferring, { version: '2.1.322', current: ref }), null, 'a matching known version still clears the gap');
   // --plant-memory: the planted memory must load in a harness arm and must not in bare.
   const planted = (yes) => loaded(denied, { markers: { project: true, root: true, planted: yes }, memoryFiles: yes ? ['C:\\m\\MEMORY.md'] : [] });
   assert.equal(v('solo', planted(true), { plant: true }), 'PASS');

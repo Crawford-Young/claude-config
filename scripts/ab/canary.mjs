@@ -91,10 +91,11 @@ function offeredTools(bodies) {
 /** Why solo's missing Agent may prove nothing, or null. With a deferred-tool loader (ToolSearch) in the
  *  offer, a tool can be absent from the list and still loadable, so the absence counts only beside a
  *  passing current canary (`current`, its summary.json) from the same claude `version` that read Agent
- *  in its list the same way. */
+ *  in its list the same way. An unknown version (null/undefined, a failed `claude --version`) on either side
+ *  never matches: two failed reads are not the same claude. */
 export function deferralGap(a, { version, current }) {
   if (!a.tools.includes('ToolSearch')) return null;
-  if (current?.verdict === 'PASS' && current.tools?.includes('Agent') && current.version === version) return null;
+  if (version != null && current?.verdict === 'PASS' && current.tools?.includes('Agent') && current.version === version) return null;
   return `the offer has a deferred-tool loader (ToolSearch), so a missing Agent may only be deferred: run --arm current with the same --out first, on this claude (${version ?? 'unknown version'}), and it must pass with Agent in its list`;
 }
 

@@ -474,6 +474,29 @@ test('claudeLaunches finds a claude started from Bash or PowerShell, not a menti
   assert.deepEqual(claudeLaunches([text]), [...launches, '& "C:\\u\\.local\\bin\\claude.exe" -p x']);
 });
 
+test('#380: claudeLaunches also finds a claude started through a wrapper, and stays quiet on a wrapper around something else', () => {
+  const call = (name, command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `${name}:${command}`, name, input: { command } }] } });
+  const wrapped = [
+    ['Bash', 'bash -c "claude -p x"'],
+    ['Bash', "sh -c 'claude -p x'"],
+    ['Bash', 'nohup claude -p x &'],
+    ['Bash', 'timeout 60 claude -p x'],
+    ['PowerShell', 'Start-Process claude -ArgumentList "-p x"'],
+    ['PowerShell', 'Start-Process "C:\\u\\.local\\bin\\claude.exe" -ArgumentList "-p x"'],
+    ['PowerShell', 'Start-Process -FilePath claude -ArgumentList "-p x"'],
+  ];
+  const quiet = [
+    ['Bash', 'timeout 60 node claude.mjs'],
+    ['Bash', 'bash -c "echo claude"'],
+    ['Bash', "sh -c 'ls ~/.claude'"],
+    ['Bash', 'nohup node scripts/claude.mjs &'],
+    ['PowerShell', 'Start-Process notepad claude.txt'],
+    ['PowerShell', 'Start-Process node -ArgumentList "claude.mjs"'],
+  ];
+  for (const [name, command] of wrapped) assert.deepEqual(claudeLaunches([call(name, command)]), [command], `flags: ${command}`);
+  for (const [name, command] of quiet) assert.deepEqual(claudeLaunches([call(name, command)]), [], `quiet: ${command}`);
+});
+
 test('results.mjs without a blind key still writes the run-side table and says the grades are not joined', () => {
   const out = tempDir('ab-nokey-');
   buildOut(out);
