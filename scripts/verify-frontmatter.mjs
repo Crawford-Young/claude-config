@@ -99,8 +99,8 @@ for (const [label, root] of [
 
 /**
  * Every cap in ONE obvious place — see file header. `perDescriptionBytes` and
- * `totalDescriptionBytes` are rounded-up-to-256 versions of the measured resident max (271 B,
- * agents/reviewer.md) and resident sum (899 B across 4 agents, #66; held one step above the exact figure so it never flickers — all 14 skills are flagged,
+ * `totalDescriptionBytes` are rounded-up-to-256 versions of the measured resident max (233 B,
+ * agents/reviewer.md) and resident sum (905 B across 6 agents, #401; held one step above the exact figure so it never flickers — all 14 skills are flagged,
  * 2026-10-08, #64). `skillIndexBytes` is the ≤1 KB budget for skills/INDEX.md.
  * `claudeMd` keys are repo-relative paths under WORKSPACE_ROOT; values are each file's
  * measured byte count rounded up to the next 256 B, re-measured after the #65 chain trim.
