@@ -1,0 +1,15 @@
+{
+  "_note": "Storebound intro call screen. crop = square face crop inside the phone Photos-app screenshot.",
+  "name": "Gabe",
+  "crop": [175, 690, 1075, 1590],
+  "ring": [0.22, 2.42],
+  "captions": {
+    "center_y": 790,
+    "font_size": 41,
+    "lines": [
+      {"words": ["****", "****", "dude"], "times": [0.26, 0.70, 1.04], "end": 1.46},
+      {"words": ["I", "don't", "know"], "times": [1.46, 1.54, 1.62], "end": 1.74},
+      {"words": ["what", "to", "say"], "times": [1.74, 1.86, 2.00], "end": 9.0}
+    ]
+  }
+}
