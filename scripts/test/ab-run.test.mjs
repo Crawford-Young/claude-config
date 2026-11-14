@@ -12,7 +12,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isolatedEnv, spawnHarness, tempDir } from './_spawn.mjs';
 import { barrierEnv, childEnv, roundLayout } from '../ab/ab-lib.mjs';
-import { TOKEN_PLACEHOLDER } from '../ab/round.mjs';
+import { TOKEN_PLACEHOLDER, prepareRound } from '../ab/round.mjs';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 
 const RUN = join(dirname(fileURLToPath(import.meta.url)), '..', 'ab', 'run.mjs');
 const GRADE = join(dirname(RUN), 'grade.mjs');
@@ -248,6 +249,39 @@ test('#385: unit runs the current harness with the live unit and tester definiti
   for (const arm of ['current', 'bare', 'solo']) assert.equal(fx[arm].result.agentOverlay, null, arm);
   assert.match(fx.unit.r.stdout, /subagents: none spawned/);
   assert.deepEqual(fx.unit.result.subagents.notes, ['none spawned: this unit run measures the unit agent working alone, not a unit spawning workers']);
+});
+
+test('#401: the recorded overlay blobs hash the COPIED file in the round, not the overlay source', () => {
+  // cpSync makes the copy byte-identical, so no recorded blob can tell the two apart: watch which path
+  // reaches `git hash-object`. round.mjs binds spawnSync by name, so patch it and sync the ESM exports.
+  const cp = createRequire(import.meta.url)('node:child_process');
+  const real = cp.spawnSync;
+  const hashed = [];
+  cp.spawnSync = (cmd, args, ...rest) => {
+    if (cmd === 'git' && args?.includes('hash-object')) hashed.push(args.slice(args.indexOf('--') + 1));
+    return real(cmd, args, ...rest);
+  };
+  syncBuiltinESMExports();
+  const saved = { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, cfg: process.env.CLAUDE_CONFIG_DIR };
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = TOKEN;
+  process.env.CLAUDE_CONFIG_DIR = join(home, '.claude');
+  try {
+    const cc = join(code, 'claude-config');
+    const ticket = { path: 'claude-config', issue: 1, parent: fx.parent, harness: fx.parent, merge: fx.merge, body: '## Done when\n- [ ] x\n' };
+    const layout = roundLayout(ticket, 'direct-overlay', { tmp: join(home, 'td'), workspace: join(home, 'no-workspace') });
+    const from = join(home, 'overlay-src', 'unit.md');
+    put(from, 'OVERLAY-SRC\r\n');
+    const to = join(layout.config, 'agents', 'unit.md');
+    const out = prepareRound({ layout, ticket, arm: 'unit', source: cc, harnessSource: cc, overlay: [{ file: 'agents/unit.md', from, to }] }, { workspace: join(home, 'no-workspace') });
+    assert.deepEqual(hashed, [[to]], 'git hash-object was given the copied file alone');
+    assert.notEqual(to, from);
+    assert.equal(readFileSync(to, 'utf8'), 'OVERLAY-SRC\r\n', 'the copy exists with the source bytes');
+    assert.deepEqual(out.overlay, [{ file: 'agents/unit.md', blob: git(cc, 'hash-object', '--no-filters', '--', from) }]);
+  } finally {
+    cp.spawnSync = real;
+    syncBuiltinESMExports();
+    for (const [k, v] of [['CLAUDE_CODE_OAUTH_TOKEN', saved.token], ['CLAUDE_CONFIG_DIR', saved.cfg]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  }
 });
 
 test('#385: a unit round whose overlay source is missing fails before claude starts, naming the file', () => {

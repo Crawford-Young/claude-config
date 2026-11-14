@@ -1,6 +1,6 @@
 ---
 name: tester
-description: Failing tests first, test files only.
+description: Writes failing tests first for one task, test files only; dispatch before the implementer.
 tools: Read, Grep, Glob, Write, Edit, Bash
 model: sonnet
 effort: medium

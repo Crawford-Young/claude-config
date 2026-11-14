@@ -30,7 +30,7 @@ The deciding question: who holds the plan? (Source: https://code.claude.com/docs
 
 ### Spawning from inside an agent
 
-Every agent definition points here. Any agent may spawn the roles it needs, within the depth limit and any delegation cap its definition sets. First confirm `Agent` is in your tool list — absent → report `NEEDS_CONTEXT: no Agent tool in this dispatch`, do not plan around it. Spawn only when the situation genuinely calls for it (missing tools, context blowout, real parallelism); name each spawn per Agent names below and pick its model per Model routing; brief it with the Dispatch template. Questions for the user go up as `NEEDS_CONTEXT:` lines, since only the director asks.
+Every agent definition points here. Any agent may spawn the roles it needs, within the depth limit and any delegation cap its definition or its brief sets. First confirm `Agent` is in your tool list — absent → report `NEEDS_CONTEXT: no Agent tool in this dispatch`, do not plan around it. Spawn only when the situation genuinely calls for it (missing tools, context blowout, real parallelism); name each spawn per Agent names below and pick its model per Model routing; brief it with the Dispatch template. Questions for the user go up as `NEEDS_CONTEXT:` lines, since only the director asks.
 
 ### Agent names
 

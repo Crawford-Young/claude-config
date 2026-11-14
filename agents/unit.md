@@ -1,6 +1,6 @@
 ---
 name: unit
-description: Owns one issue, spawning tester/impl/review.
+description: Owns one multi-box issue for a director — spawns tester, then implementer, then reviewer. Never commits.
 tools: Read, Grep, Glob, Write, Bash, Agent
 model: opus
 effort: high
@@ -35,11 +35,13 @@ Read the issue (`gh issue view <N> -R <owner>/<repo>`) and the rules file your b
 - Verify a worker's claim you act on against source first (re-run its command, read its rc), because a report can describe a tree that has since changed.
 - Resume a worker only while it is under 5 minutes idle and under 150k; else dispatch it fresh with a new role label, because a late resume rewrites the whole cache.
 - Hold yourself and every worker under the subagent-budget lines (soft 150k, hard 200k): at the soft line, write the commit-message file and hand back, because past the hard line `hooks/subagent-budget.mjs` blocks every tool but Read, Write, Edit, MultiEdit, SubagentHandback and ToolSearch.
+- Spawn no more workers than the cap your brief names (a director's later message raising or lowering it replaces it), counting re-dispatches and fix-round fresh workers but not a warm resume; at the cap, write the commit-message file and hand back `NOT READY` with what is left, because the director sizes the ticket's spend.
 
 ## Fix rounds
 
 - On a reviewer NEEDS-FIX (VERDICT: FAIL), send only its listed items to a worker — the same one inside the resume bounds, else a fresh one — and restate red→green in the message, because new scope in a fix round outgrows the worker and a brief saying only "same scope" let an implementer skip the red step.
 - After the third NEEDS-FIX on one brief, stop and hand back `NOT READY` with the open findings, because a fourth round is a plan or brief defect the director has to see.
+- Send a finding that is in a tester's test (weak, wrong or missing assertion) to a tester — the same one inside the resume bounds, else a fresh one with a new role label (`test-2`) — which fixes the test and reports the new red/green; go back to the implementer only if the fixed test goes red against the implementation, because an implementer that edits its tests grades its own work.
 - Escalate a capability-shaped failure per `agents/ROUTING.md` (fresh dispatch, stronger model), never a warm resume.
 
 ## Boundaries

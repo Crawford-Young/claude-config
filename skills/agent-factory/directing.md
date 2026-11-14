@@ -8,7 +8,7 @@ The one director: you decompose, brief, spawn, ask the user, and own all git. Ev
 
 ## Decompose into units, one GitHub issue each
 
-One issue per unit: `## Goal` / `## Done when` (checkboxes) / `## Out of scope`. A unit resumes from its own commit bodies plus the issue's Done-when, never a roster file. Two candidates touching the same file are one unit, serial.
+"Unit" in plain text is whatever dispatch owns one ticket (an implementer or a `unit` agent); code-font `unit` is the agent type only. One issue per unit: `## Goal` / `## Done when` (checkboxes) / `## Out of scope`. A unit resumes from its own commit bodies plus the issue's Done-when, never a roster file. Two candidates touching the same file are one unit, serial.
 
 ## Allocate the singleton table up front
 
@@ -24,16 +24,16 @@ Assign every shared, exclusive resource before briefing: a distinct **dev-server
 - Cap each unit's final report at about 2k characters, detail in its commit-message file and gate logs, because a longer result is cut off and costs a SendMessage round-trip, and Claude Code refuses a subagent's `report-*.md` write (2026-10-15 to 10-19).
 - Post each review verdict, and the worktree's uncommitted state, to the issue as soon as it arrives, because a window can end without a handoff (3b14fba3's #243 PASS and #214 rounds were lost; the next window paid to review both again).
 
-## Hand a whole issue to a unit (#385)
+## Hand a whole issue to a `unit` (#385)
 
 An issue with several Done-when boxes goes to one `unit` agent (`agents/unit.md`), which spawns `tester` → implementer → `reviewer` under its own charge, so no single agent carries the whole ticket (the flat tree put 434k and 347k in single implementers, #381). Your part shrinks to four steps:
 
-- **Decompose** to issues, not briefs: one unit per issue, named `unit_issue_<repo>-<N>`, briefed with the issue number, its worktree, its singletons, the shared rules file, its commit-message file and a delegation cap (how many workers it may spawn before it must hand back). The unit writes the worker briefs. Elsewhere in this file "unit" is any dispatch that owns a ticket; here it is the `unit` agent type.
-- **Verify READY** against source before acting on it: re-run each Done-when command the hand-back lists and compare the rc, read `git status --short` in the worktree against the tree state it reports, and read the reviewer's verdict, because a report can describe a tree that has since changed. `NOT READY` or a mismatch goes back as listed items inside the resume bounds, else to a fresh unit (`unit-2`).
-- **Ask** the user everything the unit raised as `NEEDS_CONTEXT`, once, with AskUserQuestion.
-- **Ship**: you commit from the unit's commit-message file and run the ship question below. The unit never commits, pushes or opens a PR.
+- **Decompose** to issues, not briefs: one `unit` per issue, named `unit_issue_<repo>-<N>`, briefed with the issue number, its worktree, its singletons, the shared rules file, its commit-message file and a delegation cap (how many workers it may spawn before it must hand back). The `unit` writes the worker briefs.
+- **Verify READY** against source before acting on it: re-run each Done-when command the hand-back lists and compare the rc, read `git status --short` in the worktree against the tree state it reports, and read the reviewer's verdict, because a report can describe a tree that has since changed. `NOT READY` or a mismatch goes back as listed items inside the resume bounds, else to a fresh `unit` (`unit-2`).
+- **Ask** the user everything the `unit` raised as `NEEDS_CONTEXT`, once, with AskUserQuestion.
+- **Ship**: you commit from the `unit`'s commit-message file and run the ship question below. The `unit` never commits, pushes or opens a PR.
 
-Read each unit's and worker's peak context from `node scripts/audit.mjs --session <name> --with-agents` (the `**Agents per charge**` section, `peak ctx` column; "Runs over the hard line") and post it on the issue, so the tier's cost is on record. A one-box, one-file issue still goes straight to an implementer: a unit there only adds a hop.
+Read each `unit`'s and worker's peak context from `node scripts/audit.mjs --session <name> --with-agents` (the `**Agents per charge**` section, `peak ctx` column; "Runs over the hard line") and post it on the issue, so the tier's cost is on record. A one-box, one-file issue still goes straight to an implementer: a `unit` there only adds a hop.
 
 ## Ship
 
