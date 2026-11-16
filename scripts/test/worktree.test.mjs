@@ -59,6 +59,21 @@ test('new copies env files and cuts clean from origin/main; remove cleans up', (
   assert.doesNotMatch(list, /app-demo/);
 });
 
+test('remove unlocks a locked worktree so git no longer lists it afterwards (#352)', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'locked'], { encoding: 'utf8', env });
+  const wt = join(root, '.worktrees', 'app-locked');
+  sh(repo, 'git', ['worktree', 'lock', '--reason', 'claude session locked (pid 1)', wt]);
+  assert.match(sh(repo, 'git', ['worktree', 'list', '--porcelain']), /^locked/m, 'fixture is locked');
+
+  const r = spawnHarness(script, ['remove', wt], { env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!existsSync(wt), 'worktree dir removed');
+  assert.doesNotMatch(sh(repo, 'git', ['worktree', 'list', '--porcelain']), /app-locked/);
+});
+
 test('remove finishes a half-removed worktree: empty dir, no .git pointer', () => {
   const root = tempDir('wt-');
   const dir = join(root, '.worktrees', 'app-half');

@@ -313,6 +313,8 @@ async function cmdRemove() {
   stopServePorts(wtPath, dryRun);
   if (dryRun) return log(`would remove ${wtPath} (registered in ${repo})`);
 
+  // A locked entry (native `claude -w` locks its worktrees) survives remove and prune (#352).
+  git(repo, ['worktree', 'unlock', wtPath]);
   let r = git(repo, ['worktree', 'remove', wtPath]);
   if (r.code !== 0) r = git(repo, ['worktree', 'remove', '--force', wtPath]);
   if (r.code !== 0 || existsSync(wtPath)) {
@@ -327,6 +329,11 @@ async function cmdRemove() {
     }
   }
   gitOrDie(repo, ['worktree', 'prune']);
+  const norm = (p) => resolve(p).replace(/\\/g, '/').toLowerCase();
+  const stillListed = gitOrDie(repo, ['worktree', 'list', '--porcelain'])
+    .split('\n')
+    .some((l) => l.startsWith('worktree ') && norm(l.slice(9)) === norm(wtPath));
+  if (stillListed) die(`git still lists ${wtPath} after prune in ${repo} (check \`git worktree list --porcelain\` for a lock or other cause)`);
   log(`removed ${wtPath} (pruned in ${repo})`);
 }
 
