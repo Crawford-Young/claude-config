@@ -15,6 +15,8 @@
 // takes each repo's directory name. Every agent run under a kept window comes too, whatever its
 // own charge (audit.mjs --with-agents), listed per charge: a batch director (topic charge) gathers
 // with the agents it ran (issue charges), and its Time covers each kept window (#389).
+// A bare-day (YYYY-MM-DD) --since also scopes the audit to windows from that day on, so a director
+// name reused across batches gathers one batch (#422); a rev scopes only the repo activity.
 
 import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -106,6 +108,8 @@ export function debtSection(repo, touched, run = spawnSync) {
 /** Files touched by every commit since `since` — the unattributed fallback for a name with no issue number. */
 const whole = (repo, since) => [...new Set(git(repo, ['log', '--name-only', '--format=', `--since=${since}`]).out.split('\n').filter(Boolean))];
 
+const BARE_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
 const minutes = (ms) => `${Math.round(ms / 60e3)} min`;
 
 if (isMain(import.meta.url)) main();
@@ -122,6 +126,7 @@ function main() {
   }
 
   const auditArgs = [join(dirname(fileURLToPath(import.meta.url)), 'audit.mjs'), '--session', name, '--with-agents', '--json'];
+  if (BARE_DAY.test(args.since ?? '')) auditArgs.push('--since', args.since); // audit takes only a date, not a rev (#422)
   if (args.root) auditArgs.push('--root', args.root);
   if (args['idle-gap']) auditArgs.push('--idle-gap', args['idle-gap']);
   const audit = spawnSync(process.execPath, auditArgs, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -148,7 +153,7 @@ function main() {
     log('\n(no --since given and no priced window to date the repo activity from)');
     return;
   }
-  const since = /^\d{4}-\d{2}-\d{2}$/.test(day) ? `${day}T00:00:00Z` : day;
+  const since = BARE_DAY.test(day) ? `${day}T00:00:00Z` : day;
   log(`\n## Repo activity since ${day}`);
   const parsed = parseUnit(name);
   const attributed = new Map();
