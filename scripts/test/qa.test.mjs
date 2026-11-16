@@ -69,13 +69,69 @@ test('a node --test gate with no "tests N" (N>=1) line fails even on exit 0', ()
   assert.equal(gateVerdict({ name: 'lint', cmd: 'pnpm lint' }, 0, '').ok, true);
 });
 
+/** Every `run:` step of a workflow as one command: the line itself, or a `run: |` block's first line, minus a redirect or `||` tail. */
+function ciRunSteps(yml) {
+  const lines = yml.split(/\r?\n/);
+  const steps = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*(?:- )?run:\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    let cmd = m[1].trim();
+    if (/^[|>][+-]?$/.test(cmd)) cmd = (lines.slice(i + 1).find((l) => l.trim()) ?? '').trim();
+    steps.push(cmd.replace(/\s*(?:\|\||>).*$/, '').trim());
+  }
+  return steps;
+}
+const ciPath = join(dirname(qaScript), '..', '.github', 'workflows', 'ci.yml');
+const qaCmds = () => discoverGates(join(dirname(qaScript), '..')).map((g) => g.cmd);
+
 test('qa gates for this repo run exactly the commands ci.yml runs (#395)', () => {
-  const root = join(dirname(qaScript), '..');
-  const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-  // Commands CI runs: single-line `run: <cmd>` steps, plus the multi-line test step's node --test line.
-  const ciCmds = [...ci.matchAll(/^\s+(?:run: |)(node (?:--test|scripts\/)[^\n>]*?)\s*(?:>.*)?$/gm)].map((m) => m[1].trim());
+  const ciCmds = ciRunSteps(readFileSync(ciPath, 'utf8'));
   assert.ok(ciCmds.length >= 4, ciCmds.join(' | '));
-  assert.deepEqual(discoverGates(root).map((g) => g.cmd), ciCmds);
+  assert.deepEqual(qaCmds(), ciCmds);
+});
+
+test('the CI-parity extraction sees every kind of run step, so any CI change breaks parity (#413)', () => {
+  const ci = readFileSync(ciPath, 'utf8');
+  const gates = qaCmds();
+  const parity = (yml) => {
+    try {
+      assert.deepEqual(gates, ciRunSteps(yml));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assert.equal(parity(ci), true);
+  for (const step of ['npx prettier --check .', 'bash x.sh', 'pnpm test', 'node -e "1"']) {
+    assert.equal(parity(`${ci}\n      - name: extra\n        run: ${step}\n`), false, step);
+    assert.equal(parity(`${ci}\n      - name: extra\n        run: |\n          ${step}\n          echo done\n`), false, `block ${step}`);
+  }
+  const fm = 'node scripts/verify-frontmatter.mjs';
+  const hm = 'node scripts/harness-map.mjs check';
+  assert.ok(ci.includes(fm) && ci.includes(hm));
+  assert.equal(parity(`${ci}\n      - run: node scripts/new.mjs\n`), false, 'added node step');
+  assert.equal(parity(ci.replace(`      - name: Harness map matches the repo\n        run: ${hm}\n`, '')), false, 'removed node step');
+  assert.equal(parity(ci.replace(fm, '@@').replace(hm, fm).replace('@@', hm)), false, 'reordered node steps');
+});
+
+test('CLI: a red stamps gate prints its stale-stamp lines on the console (#413)', () => {
+  const line = 'agents/x.md:1 names Fable 4.0, older than Fable 5.2';
+  const stamps = `console.log(${JSON.stringify(line)});console.log('second stale line');process.exit(1);`;
+  const r = spawnHarness(qaScript, [repo({ '.git': '', 'scripts/audit.mjs': stamps })], { env: { CLAUDE_QA_LOCK_DIR: join(tempDir('qa-lock-'), 'lock') } });
+  const out = `${r.stdout}${r.stderr}`;
+  assert.equal(r.status, 1, out);
+  assert.match(out, /EXIT:1 stamps/);
+  assert.ok(out.includes(`  ${line}`), out);
+  assert.ok(out.includes('  second stale line'), out);
+});
+
+test('CLI: a red non-stamps gate still prints only its failure-looking lines (#413)', () => {
+  const body = "console.log('harmless info');console.log('boom: error here');process.exit(1);";
+  const r = spawnHarness(qaScript, [repo({ '.git': '', 'scripts/verify-frontmatter.mjs': body })], { env: { CLAUDE_QA_LOCK_DIR: join(tempDir('qa-lock-'), 'lock') } });
+  const out = `${r.stdout}${r.stderr}`;
+  assert.ok(out.includes('  boom: error here'), out);
+  assert.ok(!out.includes('harmless info'), out);
 });
 
 test('CLI --list prints the marker gates (main guard does not make the script a no-op)', () => {
