@@ -99,13 +99,150 @@ export function transcriptTokens(texts) {
 }
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
-// A command segment whose program is claude: at the start, or after ; & | ( $( or a newline, past any
-// VAR=value prefixes, PowerShell's call operator and a quoted or bare path; or npx of the package. Not
-// after a backtick: round 1's sed script named "`claude -n`" as a markdown code span. A launcher
-// wrapper may sit before the program: `bash|sh|zsh -c`, `nohup`, `timeout [-opts] DURATION`, and
-// PowerShell's `Start-Process [-FilePath]`; a wrapper around another program stays quiet.
-const CLAUDE_LAUNCH =
-  /(?:(?:^|[;&|(\n]|\$\()\s*(?:&\s*)?(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:(?:ba|z)?sh\s+-c|nohup|timeout\s+(?:-\S+\s+)*\S+|Start-Process(?:\s+-FilePath)?)\s+)*["']?(?:[^\s"';&|]*[\\/])?claude(?:\.exe)?["']?(?=\s|$|[;&|)])|\bnpx\s+(?:-\S+\s+)*@anthropic-ai\/claude-code\b)/i;
+// A command line splits into segments at each unquoted ; & | ( or newline (so $( and PowerShell's call
+// operator & open one too); an unquoted ) ends a segment and the words after it, up to the next
+// separator, are dropped (so `$(pwd)/bin/claude` is missed). Quotes are stripped from the word, and a
+// separator inside them opens no segment. A ' quotes up to the next ', with no escapes (bash's
+// 'it'\''s' is misread). A " quotes up to the next unescaped ", with bash's escapes \" \\ and \$ in a
+// Bash command; a PowerShell one has none (its `" is not handled). A $( inside " opens a command
+// substitution, whose body up to its matching ) is scanned as a command line. Outside quotes a
+// backslash is an ordinary character (Windows paths), and a # that starts a word comments out the
+// rest of its line. After an unquoted <<WORD, <<-WORD, <<'WORD' or <<"WORD", the heredoc body, from
+// the next unquoted newline through the line that is WORD (tabs stripped for <<-, a CRLF's \r
+// ignored), is data and skipped; inside (( )) or $(( )), << is a shift. A <<< here-string's word is an
+// argument. A backtick is an ordinary character: round 1's sed script named "`claude -n`" as a
+// markdown code span. A segment launches claude when a VAR=value word's value is a claude path (the
+// variable is how it gets run: C=~/.local/bin/claude.exe; "$C" -p x), or when its program word, past
+// any VAR=value words and launcher wrappers (chained), is a bare or pathed claude[.exe], or is npx,
+// value-less options (-y, --yes; one with a separate value, like --cache DIR, hides the package), then
+// @anthropic-ai/claude-code[@version]. The
+// wrappers are `env`, `sudo`, `exec`, `nohup`, `timeout [-k DUR|-s SIG|-flag...] DURATION` (other options taking a
+// separate argument, like --signal KILL, are not handled), PowerShell's `Start-Process [-FilePath]`, and
+// a shell `bash|sh|zsh|pwsh|powershell[.exe]` whose options (each -opt with at most one non-dash value)
+// end at -c, a flag cluster ending in c (like -lc) or -Command: the word after it is itself a command
+// line, checked the same way by that shell's rules (pwsh/powershell as PowerShell, the rest as Bash). A
+// wrapper around another program, or a shell without one, stays quiet.
+const SHELL = /^(?:(?:ba|z)?sh|pwsh|powershell)(?:\.exe)?$/i;
+const SHELL_COMMAND = /^-(?:\w*c|command)$/i;
+const NPX_CLAUDE = /^@anthropic-ai\/claude-code(?:@\S*)?$/i;
+
+/** The segments of a command line, each an array of its unquoted words (rule above); `ps` reads it as
+ *  PowerShell, whose double quotes take no backslash escapes. */
+function segments(command, ps) {
+  const segs = [];
+  const parens = []; // per open (: null, false for one of a (( pair, or the segment state a "$( was opened inside
+  let arith = 0; // the falses in parens: inside $(( )) or (( )), << is a shift
+  const heredocs = []; // [WORD, stripTabs] whose bodies start at the next unquoted newline
+  let words = [];
+  let word = null;
+  let quote = '';
+  let open = true;
+  let heredoc = null; // stripTabs of a << whose WORD is not read yet
+  const endWord = () => {
+    if (word !== null && heredoc !== null) {
+      heredocs.push([word, heredoc]);
+      heredoc = null;
+    } else if (word !== null && open) words.push(word);
+    word = null;
+  };
+  const endSegment = (opens) => {
+    endWord();
+    if (words.length) segs.push(words);
+    words = [];
+    open = opens;
+  };
+  /** From the newline at `at`, past every pending heredoc body; returns the terminator line's end. */
+  const skipHeredocs = (at) => {
+    for (const [tag, tabs] of heredocs.splice(0)) {
+      let line;
+      do {
+        const start = at + 1;
+        at = command.indexOf('\n', start);
+        if (at === -1) at = command.length;
+        line = command.slice(start, at).replace(/\r$/, '');
+      } while (at < command.length && (tabs ? line.replace(/^\t+/, '') : line) !== tag);
+    }
+    return at;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote === "'") {
+      if (ch === quote) quote = '';
+      else word += ch;
+    } else if (quote) {
+      if (!ps && ch === '\\' && /["\\$]/.test(command[i + 1])) word += command[++i];
+      else if (ch === '"') quote = '';
+      else if (ch === '$' && command[i + 1] === '(') {
+        parens.push({ words, word, open });
+        words = [];
+        word = null;
+        quote = '';
+        open = true;
+        i++;
+      } else word += ch;
+    } else if (ch === '#' && word === null) {
+      const nl = command.indexOf('\n', i); // a comment: on to its newline, which ends the segment
+      i = (nl === -1 ? command.length : nl) - 1;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      word ??= '';
+    } else if (ch === '\n') {
+      endSegment(true);
+      i = skipHeredocs(i);
+    } else if (command.startsWith('<<<', i)) {
+      endWord(); // a here-string: its word is an argument
+      i += 2;
+    } else if (!arith && command.startsWith('<<', i)) {
+      endWord();
+      i++;
+      heredoc = command[i + 1] === '-';
+      if (heredoc) i++;
+    } else if (';&|('.includes(ch)) {
+      if (ch === '(' && (command[i + 1] === '(' || command[i - 1] === '(')) {
+        parens.push(false);
+        arith++;
+      } else if (ch === '(') parens.push(null);
+      endSegment(true);
+    } else if (ch === ')') {
+      const outer = parens.pop();
+      if (outer === false) arith--;
+      endSegment(false);
+      if (outer) {
+        ({ words, word, open } = outer);
+        quote = '"';
+      }
+    } else if (/\s/.test(ch)) endWord();
+    else word = (word ?? '') + ch;
+  }
+  endSegment(true);
+  return segs;
+}
+
+const isClaude = (path) => /^claude(?:\.exe)?$/.test(path.split(/[\\/]/).pop());
+
+function launchesClaude(command, ps) {
+  return segments(command, ps).some((words) => {
+    for (let i = 0; ; ) {
+      const w = words[i]?.toLowerCase();
+      if (w === undefined) return false;
+      const assigned = /^[a-z_]\w*=(.*)$/s.exec(w);
+      if (assigned && isClaude(assigned[1])) return true;
+      if (assigned || ['env', 'sudo', 'exec', 'nohup'].includes(w)) i++;
+      else if (w === 'start-process') i += words[i + 1]?.toLowerCase() === '-filepath' ? 2 : 1;
+      else if (w === 'timeout') {
+        for (i++; words[i]?.startsWith('-'); ) i += /^-[ks]$/.test(words[i]) ? 2 : 1;
+        i++; // DURATION
+      } else if (w === 'npx') {
+        do i++;
+        while (words[i]?.startsWith('-'));
+        return NPX_CLAUDE.test(words[i] ?? '');
+      } else if (SHELL.test(w)) {
+        for (i++; words[i]?.startsWith('-') && !SHELL_COMMAND.test(words[i]); ) i += words[i + 1] && !words[i + 1].startsWith('-') ? 2 : 1;
+        return SHELL_COMMAND.test(words[i] ?? '') && launchesClaude(words[i + 1] ?? '', w.startsWith('p'));
+      } else return isClaude(w);
+    }
+  });
+}
 
 /** The shell commands in a run's transcripts that launch claude (Bash or PowerShell tool calls, each
  *  once by tool_use id). A nested `claude -p` or `--bg` runs outside the session: solo's tool deny
@@ -118,7 +255,7 @@ export function claudeLaunches(texts) {
     if (!o || typeof o !== 'object') return;
     if (o.type === 'tool_use' && SHELL_TOOLS.has(o.name) && typeof o.input?.command === 'string') {
       const key = o.id ?? o.input.command;
-      if (!seen.has(key) && CLAUDE_LAUNCH.test(o.input.command)) found.push(o.input.command);
+      if (!seen.has(key) && launchesClaude(o.input.command, o.name === 'PowerShell')) found.push(o.input.command);
       seen.add(key);
       return;
     }
