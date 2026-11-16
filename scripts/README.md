@@ -15,7 +15,7 @@ charge = <kind>_<target>
 
 | Script | Purpose |
 | --- | --- |
-| `worktree.mjs` | Create/remove/list feature worktrees — branch from `origin/main`, env copy per `.worktreeinclude`, Windows-safe removal that first stops the serve-port listener, unlocks a locked entry, and fails if git still lists the path after prune (#352); `prepush` runs commitlint over `origin/<base>..HEAD`; agents are spawned into the worktree it makes, so it prints no launch line (#360) |
+| `worktree.mjs` | Create/remove/list feature worktrees — branch from `origin/main`, env copy per `.worktreeinclude`, Windows-safe removal that first stops the serve-port listener, logs and unlocks a locked entry (naming git's lock reason), and fails if git still lists the path (compared by realpath) after prune (#352); `prepush` runs commitlint over `origin/<base>..HEAD`; agents are spawned into the worktree it makes, so it prints no launch line (#360) |
 | `session-name.mjs` | Prints an agent's bare name, `<role>_<kind>_<target>`: `<role> repo <repo>`, `<role> epic\|issue\|pr <repo> <N>`, or `<role> topic <words…>` (#360). Spend and reflect join on its charge (the name minus its role) |
 | `qa.mjs` | Run the repo's own gates (justfile, package.json, or marker files like `scripts/test/*.test.mjs`) foreground + unpiped; full logs to `~/.claude/qa-logs/`, compact honest summary to the console. One full run per machine (#384): a mkdir lock at `~/.claude/qa-lock/` records pid, OS start time, repo and session name; a waiter prints the holder once and logs its wait; a dead or reused pid is taken over; `CLAUDE_QA_LOCK_DIR` gives tests a private lock dir; `--list` takes no lock |
 | `land.mjs` | The claude-config commit lane — ephemeral worktree from `origin/main`, path-scoped diff, post-merge sync |

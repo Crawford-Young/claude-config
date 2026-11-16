@@ -22,7 +22,7 @@
 // worktree (registration gone, directory left behind) deletes it if empty, or lists
 // what remains if not.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -313,8 +313,19 @@ async function cmdRemove() {
   stopServePorts(wtPath, dryRun);
   if (dryRun) return log(`would remove ${wtPath} (registered in ${repo})`);
 
+  // Captured before the directory goes: realpath resolves 8.3 short names and junctions to the long path git prints.
+  let listedAs = wtPath;
+  try {
+    listedAs = realpathSync.native(wtPath);
+  } catch {
+    // keep the resolved path
+  }
   // A locked entry (native `claude -w` locks its worktrees) survives remove and prune (#352).
-  git(repo, ['worktree', 'unlock', wtPath]);
+  const reason = lockReason(gitOrDie(repo, ['worktree', 'list', '--porcelain']), listedAs);
+  if (reason !== null) {
+    log(`${wtPath} is locked${reason ? ` (${reason})` : ''}; unlocking`);
+    git(repo, ['worktree', 'unlock', wtPath]);
+  }
   let r = git(repo, ['worktree', 'remove', wtPath]);
   if (r.code !== 0) r = git(repo, ['worktree', 'remove', '--force', wtPath]);
   if (r.code !== 0 || existsSync(wtPath)) {
@@ -329,12 +340,33 @@ async function cmdRemove() {
     }
   }
   gitOrDie(repo, ['worktree', 'prune']);
-  const norm = (p) => resolve(p).replace(/\\/g, '/').toLowerCase();
-  const stillListed = gitOrDie(repo, ['worktree', 'list', '--porcelain'])
-    .split('\n')
-    .some((l) => l.startsWith('worktree ') && norm(l.slice(9)) === norm(wtPath));
-  if (stillListed) die(`git still lists ${wtPath} after prune in ${repo} (check \`git worktree list --porcelain\` for a lock or other cause)`);
+  if (listsPath(gitOrDie(repo, ['worktree', 'list', '--porcelain']), listedAs)) die(`git still lists ${wtPath} after prune in ${repo} (check \`git worktree list --porcelain\` for a lock or other cause)`);
   log(`removed ${wtPath} (pruned in ${repo})`);
+}
+
+const normPath = (p) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+/** Porcelain entries as `{ path, lines }`, tolerant of CRLF. */
+function porcelainEntries(porcelain) {
+  return porcelain
+    .split(/\r?\n\r?\n/)
+    .map((block) => block.split(/\r?\n/).filter(Boolean))
+    .filter((lines) => lines[0]?.startsWith('worktree '))
+    .map((lines) => ({ path: lines[0].slice(9), lines }));
+}
+
+/** True when `git worktree list --porcelain` output has an entry for `path` (separator and case blind, whole-path match). */
+export function listsPath(porcelain, path) {
+  const want = normPath(path);
+  return porcelainEntries(porcelain).some((e) => normPath(e.path) === want);
+}
+
+/** The lock reason for `path`'s entry ('' for a bare lock), or null when unlocked or not listed. */
+export function lockReason(porcelain, path) {
+  const want = normPath(path);
+  const entry = porcelainEntries(porcelain).find((e) => normPath(e.path) === want);
+  const line = entry?.lines.find((l) => l === 'locked' || l.startsWith('locked '));
+  return line === undefined ? null : line.slice(7);
 }
 
 /** Delete-failure message. The script can't see a session's tracked cwd, so it names the likely holder. */
