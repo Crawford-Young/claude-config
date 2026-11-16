@@ -27,9 +27,11 @@ test('marker files give claude-config-style repos their gates', () => {
     'scripts/test/a.test.mjs': '',
     'scripts/verify-frontmatter.mjs': '',
     'scripts/harness-map.mjs': '',
+    'scripts/audit.mjs': '',
   });
   const gates = discoverGates(r);
-  assert.deepEqual(gates.map((g) => g.name), ['test', 'frontmatter', 'harness-map']);
+  assert.deepEqual(gates.map((g) => g.name), ['test', 'frontmatter', 'harness-map', 'stamps']);
+  assert.equal(gates[3].cmd, 'node scripts/audit.mjs --stamps');
   assert.equal(gates[0].cmd, 'node --test "scripts/test/*.test.mjs"');
   assert.equal(gates[1].cmd, 'node scripts/verify-frontmatter.mjs');
   assert.equal(gates[2].cmd, 'node scripts/harness-map.mjs check');
@@ -65,6 +67,15 @@ test('a node --test gate with no "tests N" (N>=1) line fails even on exit 0', ()
   assert.equal(gateVerdict(g, 0, '✔ tests 0 edge cases (1ms)\nℹ tests 3\nℹ pass 3\n').ok, true);
   assert.equal(gateVerdict(g, 0, '# tests 4\n# pass 4\n').ok, true);
   assert.equal(gateVerdict({ name: 'lint', cmd: 'pnpm lint' }, 0, '').ok, true);
+});
+
+test('qa gates for this repo run exactly the commands ci.yml runs (#395)', () => {
+  const root = join(dirname(qaScript), '..');
+  const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  // Commands CI runs: single-line `run: <cmd>` steps, plus the multi-line test step's node --test line.
+  const ciCmds = [...ci.matchAll(/^\s+(?:run: |)(node (?:--test|scripts\/)[^\n>]*?)\s*(?:>.*)?$/gm)].map((m) => m[1].trim());
+  assert.ok(ciCmds.length >= 4, ciCmds.join(' | '));
+  assert.deepEqual(discoverGates(root).map((g) => g.cmd), ciCmds);
 });
 
 test('CLI --list prints the marker gates (main guard does not make the script a no-op)', () => {
