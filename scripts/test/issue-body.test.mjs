@@ -853,9 +853,9 @@ test('(#419 D1) a gh api graphql updateIssue body mutation is blocked; an unread
   for (const cmd of [
     `gh api graphql -f query='${GQL_UPDATE}'`,
     `gh api graphql -F query='${GQL_UPDATE}'`,
-    'gh api graphql -f query=@q.graphql',
+    'gh api graphql -F query=@q.graphql',
     'gh api graphql -f query=$Q',
-    'gh api graphql -f query=@missing.graphql',
+    'gh api graphql -F query=@missing.graphql',
     'gh api graphql --input q.json',
   ]) {
     const r = ruled(cmd, ONE, { cwd: t.dir });
@@ -996,13 +996,14 @@ test('(#419 D2) hook process: CLAUDE_ISSUE_BODY_REPO_STUB stands in for the repo
 });
 
 // D3: a box hidden in an HTML comment
-test('(#419 D3) a Done-when box wrapped in an HTML comment is reported lost', () => {
+test('(#419 D3, #430 C3) a Done-when box wrapped in an HTML comment blocks: as the added opener when the box lines survive, as the lost line when one changed', () => {
   const live = '## Done when\n- [ ] one\n- [ ] two';
-  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!--\n- [ ] two\n-->'), { line: '- [ ] two' }, 'multi-line');
-  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!--\n- [x] two\n-->'), { line: '- [ ] two' }, 'ticked inside a comment');
-  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!-- unclosed\n- [ ] two'), { line: '- [ ] two' }, 'an unclosed comment runs to the end');
-  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!-- - [ ] two -->'), { line: '- [ ] two' }, 'one line');
-  assert.deepEqual(change(live, '<!-- ## Done when\n- [ ] one -->\n- [ ] two'), { line: '## Done when' }, 'a comment opened on a heading line');
+  // GitHub renders each of these without box two (the comment drops it), so each must block.
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!--\n- [ ] two\n-->'), { opener: '<!--' }, 'multi-line: box two survives as a line, the opener is added');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!--\n- [x] two\n-->'), { opener: '<!--' }, 'ticked inside a comment: the tick matches, the opener is added');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!-- unclosed\n- [ ] two'), { opener: '<!-- unclosed' }, 'an unclosed comment: the opener line is named');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!-- - [ ] two -->'), { line: '- [ ] two' }, 'one line: the box line itself changed, so the line wins');
+  assert.deepEqual(change(live, '<!-- ## Done when\n- [ ] one -->\n- [ ] two'), { line: '## Done when' }, 'a comment opened on a heading line: the heading line changed');
 });
 
 test('(#419 D3) must still pass: a live body already holding a comment, kept, with a box ticked', () => {
@@ -1010,13 +1011,14 @@ test('(#419 D3) must still pass: a live body already holding a comment, kept, wi
   assert.equal(change(live, live.replace('- [ ] one', '- [x] one')), null);
 });
 
-test('(#419 D3 fix) a <!-- inside an inline code span or fence does not open a comment: a real wrap of the boxes is still lost', () => {
+test('(#419 D3 fix, #430 C3) a <!-- inside an inline code span or fence is no opener: a real wrap of the boxes still blocks, as the added opener', () => {
+  // GitHub: the code span / fence shows `<!--` as text; the added bare `<!--` hides both boxes (no boxes render after it).
   const span = 'Use `<!--` to open.';
   const live = `${span}\n## Done when\n- [ ] one\n- [ ] two`;
-  assert.deepEqual(change(live, `${span}\n## Done when\n<!--\n- [ ] one\n- [ ] two\n-->`), { line: '- [ ] one' }, 'inline code span in live');
+  assert.deepEqual(change(live, `${span}\n## Done when\n<!--\n- [ ] one\n- [ ] two\n-->`), { opener: '<!--' }, 'inline code span in live');
   const fenced = '```\n<!--\n```';
   const liveF = `${fenced}\n## Done when\n- [ ] one\n- [ ] two`;
-  assert.deepEqual(change(liveF, `${fenced}\n## Done when\n<!--\n- [ ] one\n- [ ] two\n-->`), { line: '- [ ] one' }, 'fenced block in live');
+  assert.deepEqual(change(liveF, `${fenced}\n## Done when\n<!--\n- [ ] one\n- [ ] two\n-->`), { opener: '<!--' }, 'fenced block in live');
 });
 
 test('(#419 D3 fix) must still pass: adding a line holding a code-span <!-- above every kept line', () => {
@@ -1025,12 +1027,15 @@ test('(#419 D3 fix) must still pass: adding a line holding a code-span <!-- abov
   assert.equal(change(live, `\`\`\`\n<!--\n\`\`\`\n${live}`), null, 'fenced block');
 });
 
-test('(#419 D3 fix2) a mid-line <!-- with no --> after it opens no comment; a closed one still hides', () => {
+test('(#419 D3 fix2, #430 C3 R2) an added mid-line <!-- blocks as an opener whether or not a --> follows; a closed one-line wrap loses the box line', () => {
   const live = '## Done when\n- [ ] one\n- [ ] two';
-  assert.equal(change(live, `use <!-- to start a comment\n${live}`), null, 'unclosed mid-line, added above');
-  assert.equal(change(live, `${live}\nuse <!-- to start a comment`), null, 'unclosed mid-line, added below');
+  // GitHub: `use <!-- to open` with no closer is visible text and both boxes show (r1-v0), but the contract fails closed on an added `<!--`.
+  assert.deepEqual(change(live, `use <!-- to start a comment\n${live}`), { opener: 'use <!-- to start a comment' }, 'unclosed mid-line, added above');
+  assert.deepEqual(change(live, `${live}\nuse <!-- to start a comment`), { opener: 'use <!-- to start a comment' }, 'unclosed mid-line, added below');
+  // GitHub: `text <!-- - [ ] two -->` hides box two (one box renders).
   assert.deepEqual(change(live, '## Done when\n- [ ] one\ntext <!-- - [ ] two -->'), { line: '- [ ] two' }, 'mid-line closed wrap');
-  assert.deepEqual(change(live, '## Done when\n- [ ] one\ntext <!-- start\n- [ ] two\n-->'), { line: '- [ ] two' }, 'mid-line comment closed on a later line');
+  // GitHub (R2): `text <!-- start` / box / `-->` shows BOTH boxes, so box two is not lost; the added opener is what blocks.
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\ntext <!-- start\n- [ ] two\n-->'), { opener: 'text <!-- start' }, 'mid-line comment closed on a later line');
 });
 
 // D4: GH_HOST
@@ -1091,4 +1096,424 @@ test('(#419 D5) off win32 a --body-file /tmp/... stays /tmp', { skip: process.pl
   } finally {
     rmSync(join('/tmp', name), { force: true });
   }
+});
+
+// ---- #430 Brief A: gh api / -R parsing ---------------------------------------------------------
+
+const GQL_Q = `-f query='${GQL_UPDATE}'`;
+
+test('(#430 A1) a graphql endpoint with a trailing slash still blocks a body mutation', () => {
+  for (const endpoint of ['graphql/', '/graphql/', 'https://api.github.com/graphql/']) {
+    const cmd = `gh api ${endpoint} ${GQL_Q}`;
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api|graphql/, cmd);
+  }
+});
+
+test('(#430 A2) a graphql endpoint with a query-string suffix still blocks a body mutation', () => {
+  for (const endpoint of ['graphql?x=1', 'https://api.github.com/graphql?x=1']) {
+    const cmd = `gh api ${endpoint} ${GQL_Q}`;
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api|graphql/, cmd);
+  }
+});
+
+test('(#430 A3) a graphql endpoint with no scheme still blocks a body mutation', () => {
+  for (const endpoint of ['api.github.com/graphql', 'ghe.example.com/api/graphql']) {
+    const cmd = `gh api ${endpoint} ${GQL_Q}`;
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api|graphql/, cmd);
+  }
+});
+
+test('(#430 A4) a /api/v3/graphql endpoint still blocks a body mutation', () => {
+  for (const endpoint of ['https://ghe.example.com/api/v3/graphql', '/api/v3/graphql', 'api/v3/graphql']) {
+    const cmd = `gh api ${endpoint} ${GQL_Q}`;
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api|graphql/, cmd);
+  }
+});
+
+test('(#430 A5) a REST body write through repositories/<id>/issues/<N> is blocked', () => {
+  for (const cmd of [
+    'gh api -X PATCH repositories/123/issues/5 -f body=x',
+    'gh api -X PATCH /repositories/123/issues/5 -f body=x',
+    'gh api -X PATCH https://api.github.com/repositories/123/issues/5 -f body=x',
+  ]) {
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+  }
+});
+
+test('(#430 A) must still pass: the same endpoint shapes with a read query or a non-body PATCH', () => {
+  const read = `-f query='{ repository(owner:"o",name:"r"){ issue(number:1){ body } } }'`;
+  for (const endpoint of ['graphql/', 'graphql?x=1', 'api.github.com/graphql', 'https://ghe.example.com/api/v3/graphql']) {
+    assert.equal(ruled(`gh api ${endpoint} ${read}`, ONE), null, endpoint);
+  }
+  assert.equal(ruled('gh api -X PATCH repositories/123/issues/5 -f state=closed', ONE), null);
+  assert.equal(ruled('gh api -X PATCH repositories/123/issues/5/comments -f body=x', ONE), null);
+});
+
+test('(#430 B1) gh api -f/--raw-field query=@file sends the string @file: no file is read', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), GQL_UPDATE);
+  for (const cmd of ['gh api graphql -f query=@q.graphql', 'gh api graphql --raw-field query=@q.graphql']) {
+    assert.equal(ruled(cmd, ONE, { cwd: t.dir }), null, cmd);
+  }
+});
+
+test('(#430 B1) must still block: -F/--field query=@file holding a body write, and an inline -f body write', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), GQL_UPDATE);
+  for (const cmd of ['gh api graphql -F query=@q.graphql', 'gh api graphql --field query=@q.graphql', `gh api graphql -f query='${GQL_UPDATE}'`]) {
+    const r = ruled(cmd, ONE, { cwd: t.dir });
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+  }
+});
+
+test('(#430 B2) a title-only updateIssue that selects body is not a body write', () => {
+  const cmd = `gh api graphql -f query='mutation { updateIssue(input:{id:"I_1", title:"t"}) { issue { body } } }'`;
+  assert.equal(ruled(cmd, ONE), null);
+});
+
+test('(#430 B2) must still block: body in the updateIssue arguments, or as an input[body] field', () => {
+  for (const cmd of [
+    `gh api graphql -f query='mutation { updateIssue(input:{id:"I_1", title:"t", body:"x"}) { issue { body } } }'`,
+    `gh api graphql -f query='mutation($b:String){ updateIssue(input:{id:"I_1", body:$b}) { issue { id } } }' -f b=x`,
+    `gh api graphql -f query='mutation($i:UpdateIssueInput!){ updateIssue(input:$i) { issue { id } } }' -f i[body]=x`,
+  ]) {
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+  }
+});
+
+test('(#430 B2) must still block: a body the mutation writes through a variable default, a comment, a comma or a block string', () => {
+  const t = tmp();
+  const DEFAULT = 'mutation($i: UpdateIssueInput = {id:"I_1", body:"x"}) { updateIssue(input:$i) { issue { id } } }';
+  const COMMENT = 'mutation { updateIssue(input:{id:"I_1" # )\n body:"x"}) { issue { id } } }';
+  writeFileSync(join(t.dir, 'q-default.graphql'), DEFAULT);
+  writeFileSync(join(t.dir, 'q-comment.graphql'), COMMENT);
+  for (const [id, cmd] of [
+    ['N1 default, inline', `gh api graphql -f query='${DEFAULT}'`],
+    ['N1 default, file', 'gh api graphql -F query=@q-default.graphql'],
+    ['N2 # ) comment in the arguments, inline', `gh api graphql -f query='${COMMENT}'`],
+    ['N2 # ) comment in the arguments, file', 'gh api graphql -F query=@q-comment.graphql'],
+    ['N3 comment between updateIssue and (', `gh api graphql -f query='mutation { updateIssue # c\n (input:{id:"I_1", body:"x"}) { issue { id } } }'`],
+    ['N4 comma before (', `gh api graphql -f query='mutation { updateIssue,(input:{id:"I_1", body:"x"}) { issue { id } } }'`],
+    ['N5 block string with a quote and a paren', `gh api graphql -f query='mutation { updateIssue(input:{id:"""I " ) """, body:"x"}) { issue { id } } }'`],
+  ]) {
+    const r = ruled(cmd, ONE, { cwd: t.dir });
+    assert.ok(r, id);
+    assert.match(r, /gh api/, id);
+  }
+});
+
+test('(#430 B3) -R <full URL> is read as its repo: an approval naming o/r applies', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, typedRec('rewrite o/r#12'));
+  assert.equal(withRepo(t, `gh issue edit 12 -R https://github.com/o/r ${REWRITE}`, tr, () => 'o/r'), null);
+  assert.match(readFileSync(t.state, 'utf8'), /issue-body o\/r#12/);
+});
+
+test('(#430 B3) a -R URL names its host, github.com included: gh uses the URL host over GH_HOST', () => {
+  // gh: `GH_HOST=ghe.example.com gh issue view 1 -R https://github.com/cli/cli` -> rc 0 (the URL's host wins); with `-R cli/cli` -> rc 1.
+  const tick = `--body "${TICKED_ONE}"`;
+  assert.equal(ruled(`GH_HOST=ghe.example.com gh issue edit 12 -R https://ghe.example.com/o/r ${tick}`, UNTICKED_ONE), null);
+  assert.equal(ruled(`GH_HOST=ghe.example.com gh issue edit 12 -R https://github.com/o/r ${tick}`, UNTICKED_ONE), null);
+  const r = ruled(`GH_HOST=ghe.example.com gh issue edit 12 -R o/r ${tick}`, UNTICKED_ONE);
+  assert.ok(r, 'a plain -R o/r takes GH_HOST: still blocks');
+  assert.match(r, /GH_HOST/);
+});
+
+test('(#430 B3) must still block: an approval naming a different repo than the -R URL', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, typedRec('rewrite other/repo#12'));
+  const r = withRepo(t, `gh issue edit 12 -R https://github.com/o/r ${REWRITE}`, tr, () => 'o/r');
+  assert.ok(r);
+  assert.match(r, /other\/repo/);
+  assert.match(r, /o\/r/);
+});
+
+test('(#430 B4) a jq stage later in the pipeline runs after gh reads the query file', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), '{ repository(owner:"o",name:"r"){ id } }');
+  for (const cmd of [
+    'gh api graphql -F query=@q.graphql | jq .data',
+    'gh api graphql -F query=@q.graphql 2>&1 | jq -r .data.repository.id',
+  ]) {
+    assert.equal(ruled(cmd, ONE, { cwd: t.dir }), null, cmd);
+  }
+});
+
+test('(#430 B4) must still block: a stage before gh writes the file the query reads', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), '{ repository(owner:"o",name:"r"){ id } }');
+  for (const cmd of [
+    'jq . in.json > q.graphql | gh api graphql -F query=@q.graphql',
+    'printf X > q.graphql && gh api graphql -F query=@q.graphql | jq .data',
+  ]) {
+    const r = ruled(cmd, ONE, { cwd: t.dir });
+    assert.ok(r, cmd);
+  }
+});
+
+test('(#430 B4) a later stage that redirects its output is not after gh reads: it may truncate the query file', () => {
+  // main 903d54e blocks `| jq -rn '"x"' > q.graphql`: the jq stage opens (truncates) the file while gh reads it.
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), '{ repository(owner:"o",name:"r"){ id } }');
+  for (const cmd of [
+    `gh api graphql -F query=@q.graphql | jq -rn '"x"' > q.graphql`,
+    'gh api graphql -F query=@q.graphql | jq .data >> q.graphql',
+    'gh api graphql -F query=@q.graphql | tail -1 > q.graphql',
+    'gh api graphql -F query=@q.graphql | head -1 > q.graphql',
+    'gh api graphql -F query=@q.graphql | jq .data > out.txt',
+    'gh api graphql -F query=@q.graphql | tail -1 > out.txt',
+  ]) {
+    const r = ruled(cmd, ONE, { cwd: t.dir });
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+  }
+});
+
+test('(#430 B4) must still pass: a later tail/head/jq stage whose only redirects are fd redirects', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), '{ repository(owner:"o",name:"r"){ id } }');
+  for (const cmd of [
+    'gh api graphql -F query=@q.graphql | jq .data',
+    'gh api graphql -F query=@q.graphql | tail -5',
+    'gh api graphql -F query=@q.graphql | tail -5 2>&1',
+    'gh api graphql -F query=@q.graphql | head -3 2>/dev/null',
+  ]) {
+    assert.equal(ruled(cmd, ONE, { cwd: t.dir }), null, cmd);
+  }
+});
+
+// ---- #430 Brief C: comments fail closed, boxes moved into a fence or <details> ---------------------
+// Renders cited below are GitHub's own (`gh api markdown -F text=@file -f mode=gfm`), 2026-11-16.
+
+const DW = '## Done when\n- [ ] one\n- [ ] two';
+
+test('(#430 C1) a box moved into a fenced block is lost, fence marker ``` or ~~~, ticked or not', () => {
+  // GitHub: `- [ ] two` inside a fence is literal <pre><code> text, no checkbox (only box one renders).
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n```\n- [ ] two\n```'), { line: '- [ ] two' });
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n~~~\n- [ ] two\n~~~'), { line: '- [ ] two' });
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n```\n- [x] two\n```'), { line: '- [ ] two' }, 'a tick inside the fence is no tick of the live box');
+});
+
+test('(#430 C1) must still pass: a live fenced box kept, with a box added elsewhere or ticked outside the fence', () => {
+  // GitHub: the fenced `- [ ] two` is literal text in live and next alike; the added `- [ ] three` renders as a box.
+  const live = '## Done when\n- [ ] one\n```\n- [ ] two\n```';
+  assert.equal(change(live, `${live}\n- [ ] three`), null, 'a box added after');
+  assert.equal(change(live, live.replace('- [ ] one', '- [x] one')), null, 'the box outside ticked');
+});
+
+test('(#430 C2) a box moved into a <details> block is lost, nested or with attributes', () => {
+  // GitHub: a box inside <details> still renders a checkbox (collapsed); blocking it is the fail-closed choice, not GitHub's render.
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n\n<details>\n<summary>s</summary>\n\n- [ ] two\n\n</details>'), { line: '- [ ] two' });
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n\n<details open>\n<summary>s</summary>\n\n- [ ] two\n\n</details>'), { line: '- [ ] two' }, '<details open>');
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n\n<details>\n<details>\n<summary>s</summary>\n\n</details>\n\n- [ ] two\n\n</details>'), { line: '- [ ] two' }, 'still inside after one of two nested closes');
+});
+
+test('(#430 C2) must still pass: a box after the details block closes, and a live box already inside <details>', () => {
+  // GitHub: after </details> (blank line before the box) the box renders outside the block; a box inside <details> renders as a checkbox.
+  const outside = '## Done when\n- [ ] one\n\n<details>\n<summary>s</summary>\n\n</details>\n\n- [ ] two';
+  assert.equal(change(DW, outside), null, 'two sits outside the closed block, as in live');
+  const live = '## Done when\n- [ ] one\n\n<details>\n<summary>s</summary>\n\n- [ ] two\n\n</details>';
+  assert.equal(change(live, `${live}\n\n- [ ] three`), null, 'a box added after the block');
+  assert.equal(change(live, live.replace('- [ ] two', '- [x] two')), null, 'the boxed inside ticked in place');
+  // A <details> line inside a fence is code, not a region: the box after the fence is untouched.
+  assert.equal(change('- [ ] two', '```\n<details>\n```\n- [ ] two'), null, 'fenced <details> opens no region');
+});
+
+test('(#430 C3) an added <!-- fails closed: a one-line comment and unclosed prose both block, naming the line', () => {
+  // GitHub (c3a): `<!-- note -->` renders nothing, both boxes show; (c3b): `use <!-- to open` is visible text, both boxes show. The contract blocks both.
+  assert.deepEqual(change(DW, `${DW}\n<!-- note -->`), { opener: '<!-- note -->' });
+  assert.deepEqual(change(DW, `${DW}\nuse <!-- to open`), { opener: 'use <!-- to open' });
+  assert.deepEqual(change(DW, `${DW}\nuse <!-- to open   `), { opener: 'use <!-- to open' }, 'trailing space trimmed');
+  assert.deepEqual(change(DW, `<!-- top note -->\n${DW}`), { opener: '<!-- top note -->' }, 'added above too');
+});
+
+test('(#430 C3) must still pass: a <!-- in an added code span or fenced block, and an added --> alone', () => {
+  // GitHub (c3c / c3d): the code span and the fenced `<!-- x -->` render as literal code; both boxes show. A bare `-->` is visible text (arrow).
+  assert.equal(change(DW, `${DW}\nUse \`<!--\` to open.`), null, 'code span');
+  assert.equal(change(DW, `${DW}\nUse \`\`<!--\`\` to open.`), null, 'double-backtick code span');
+  assert.equal(change(DW, `${DW}\n\`\`\`\n<!-- x -->\n\`\`\``), null, 'fenced');
+  assert.equal(change(DW, `${DW}\n~~~\n<!-- x -->\n~~~`), null, 'tilde fenced');
+  assert.equal(change(DW, `${DW}\n-->`), null, 'a closer alone is not an opener');
+});
+
+test('(#430 C3) must still pass: openers already in the live body, kept in place, while a box is ticked or added', () => {
+  // GitHub (c3e): a leading `<!-- note -->` renders nothing; all three boxes show.
+  const live = `<!-- note -->\n${DW}`;
+  assert.equal(change(live, `${live}\n- [ ] three`), null, 'a box added');
+  assert.equal(change(live, live.replace('- [ ] one', '- [x] one')), null, 'a box ticked');
+  const unclosed = `${DW}\n<!--`;
+  assert.equal(change(unclosed, unclosed.replace('- [ ] one', '- [x] one')), null, 'an unclosed opener at the end, kept');
+  const hid = '<!-- a\n- [ ] one\n-->\n- [ ] two';
+  assert.equal(change(hid, hid.replace('- [ ] one', '- [x] one')), null, 'a box inside a live comment ticked in place');
+});
+
+test('(#430 C3) a second opener added beside a kept one blocks: every opener must match a live line', () => {
+  // GitHub (twice): `<!-- b -->` / a repeated `<!-- note -->` renders nothing, the same as one; the kept opener is untouched.
+  const live = `<!-- a -->\n${DW}`;
+  assert.deepEqual(change(live, `<!-- a -->\n<!-- b -->\n${DW}`), { opener: '<!-- b -->' }, 'a different opener added');
+  assert.deepEqual(change('<!-- note -->\n- [ ] one', '<!-- note -->\n<!-- note -->\n- [ ] one'), { opener: '<!-- note -->' }, 'a copy of the live opener added: only one is matched');
+});
+
+test('(#430 C3) an opener moved out of a fence is a lost line, not a passing edit', () => {
+  // GitHub: live shows `<!-- x -->` as fenced text; the moved line renders nothing (the empty fence, box one only).
+  const live = '## Done when\n```\n<!-- x -->\n```\n- [ ] one';
+  assert.deepEqual(change(live, '## Done when\n```\n```\n<!-- x -->\n- [ ] one'), { line: '<!-- x -->' });
+});
+
+test('(#430 C3) a lost line is reported before an added opener', () => {
+  // GitHub (w_one): the wrap loses box two and adds an opener; the rewording is what the message names.
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n<!-- - [ ] two -->\nuse <!-- also'), { line: '- [ ] two' });
+});
+
+test('(#430 R1) an added <!-- gives the same result with no closer, a later -->, a code-span --> or a fenced <!-- x -->', () => {
+  // GitHub (r1-v0..v3): inline `<!--` is literal text in all four, both boxes show; a later closer changes nothing.
+  const open = 'use <!-- to open a comment';
+  const base = `## Done when\n- [ ] one\n${open}\n- [ ] two`;
+  const want = { opener: open };
+  assert.deepEqual(change(DW, base), want, 'no closer');
+  assert.deepEqual(change(DW, `${base}\n\nred --> green`), want, 'a later prose -->');
+  assert.deepEqual(change(DW, `${base}\n\nand a code span \`-->\` here`), want, 'a later code-span -->');
+  assert.deepEqual(change(DW, `${base}\n\n\`\`\`\n<!-- x -->\n\`\`\``), want, 'a later fenced <!-- x -->');
+});
+
+test('(#430 R1) must still pass: the same four layouts when the live body already holds that opener line', () => {
+  const open = 'use <!-- to open a comment';
+  const live = `## Done when\n- [ ] one\n${open}\n- [ ] two`;
+  for (const tail of ['', '\n\nred --> green', '\n\nand a code span `-->` here', '\n\n```\n<!-- x -->\n```']) {
+    const both = `${live}${tail}`;
+    assert.equal(change(both, both.replace('- [ ] two', '- [x] two')), null, JSON.stringify(tail));
+  }
+});
+
+test('(#430 R2) text <!-- start / box / --> does not lose the box: it blocks as the added opener only', () => {
+  // GitHub (r2-next): box one, then box two as its own item, then visible `-->`; both boxes render.
+  const r = change(DW, '## Done when\n- [ ] one\ntext <!-- start\n- [ ] two\n-->');
+  assert.deepEqual(r, { opener: 'text <!-- start' });
+  assert.equal(r.line, undefined, 'no box is claimed lost');
+});
+
+test('(#430 R3) a <!-- that hides the box after it, in a list item, a quote or a <div>, blocks as an added opener', () => {
+  // GitHub: r3a `- <!--` leaves an empty <li> and hides box two; r3b `> <!--` an empty blockquote, box two hidden; r3c `text <!--` in a <div> hides everything after.
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n- <!--\n- [ ] two'), { opener: '- <!--' }, 'list item');
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n> <!--\n- [ ] two'), { opener: '> <!--' }, 'quote');
+  assert.deepEqual(change(DW, '## Done when\n- [ ] one\n<div>\ntext <!--\n</div>\n\n- [ ] two'), { opener: 'text <!--' }, 'div');
+});
+
+test('(#430 R3) must still pass: the same layouts already in the live body, with a box added after them', () => {
+  // GitHub (r3a/b/c live): the live body already hides what follows; the edit adds nothing hidden.
+  for (const opener of ['- <!--', '> <!--', 'text <!--']) {
+    const live = `## Done when\n- [ ] one\n${opener}\n- [ ] two`;
+    assert.equal(change(live, `${live}\n\n- [ ] three`), null, opener);
+  }
+});
+
+test('(#430 R4) an indented <!-- is not code for this rule: added blocks, already live passes', () => {
+  // GitHub (r4-live / r4-next): `    <!-- example` is an indented code block (visible text), boxes show. The rule fails closed on an added one.
+  const live = '## Done when\n\n    <!-- example\n\n- [ ] one';
+  assert.equal(change(live, `${live}\n- [ ] two`), null, 'live already has it, a box added');
+  assert.deepEqual(change(DW, `${DW}\n\n    <!-- x`), { opener: '    <!-- x' }, 'added: the indent is kept in the named line');
+});
+
+test('(#430 R5) <!--> counts as an opener: added blocks, already live passes', () => {
+  // GitHub (r5-live / r5-next / r5added): `<!-->` closes itself, nothing is hidden and every box shows.
+  const live = `<!-->\n${DW}`;
+  assert.equal(change(live, `${live}\n- [ ] three`), null, 'live already has it, a box added');
+  assert.deepEqual(change(DW, live), { opener: '<!-->' }, 'added as the first line');
+});
+
+// ---- #430 fence reading follows GitHub's rules (CommonMark): opener, info string, closer ------------
+// Renders are `gh api markdown -F text=@file -f mode=gfm`, 2026-11-16. Live body for every case below:
+const FLIVE = '## Done when\n\n- [ ] one\n- [ ] two\n';
+
+test('(#430 F1) a fence opener indented four spaces is no fence: the <!-- after it is an added opener', () => {
+  // GitHub (4-space "    ```" then "<!--" then the boxes): the first line is an indented code block, <!-- opens an HTML comment
+  // that hides everything after it; the render is the code block only, no checkbox.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n    ```\n<!--\n- [ ] one\n- [ ] two\n'), { opener: '<!--' }, 'no closing fence line');
+  // GitHub (full body with a "```" line after the <!--): same render, no checkbox. That "```" opens a fence at column 0, so the boxes read as lost.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n    ```\n<!--\n```\n\n- [ ] one\n- [ ] two\n\nSome prose line\n'), { line: '- [ ] one' });
+});
+
+test('(#430 F1) a backtick opener whose info string holds a backtick is no fence', () => {
+  // GitHub: "```a`" renders as the paragraph <p>```a`</p> (no code block); the <!--  after it hides the rest, no checkbox.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n```a`\n<!--\n- [ ] one\n- [ ] two\n'), { opener: '<!--' }, 'no closing fence line');
+  assert.deepEqual(change(FLIVE, '## Done when\n\n```a`\n<!--\n```\n\n- [ ] one\n- [ ] two\n\nSome prose line\n'), { line: '- [ ] one' });
+});
+
+test('(#430 F2) a closer indented four spaces does not close the fence: the boxes after it stay lost', () => {
+  // GitHub: "    ```" inside a ``` fence is code text; the fence runs on and both boxes render as <pre> text.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n```\nx\n    ```\n- [ ] one\n- [ ] two\n\nSome prose line\n'), { line: '- [ ] one' });
+});
+
+test('(#430 F2) a closer of the other character or with trailing characters does not close the fence', () => {
+  // GitHub: "```~" inside a ``` fence is code text; both boxes render as <pre> text.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n```\nx\n```~\n- [ ] one\n- [ ] two\n\nSome prose line\n'), { line: '- [ ] one' }, 'mixed closer');
+  // GitHub: a ~~~ line inside a ``` fence is code text too.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n```\nx\n~~~\n- [ ] one\n- [ ] two\n'), { line: '- [ ] one' }, 'other fence character');
+});
+
+test('(#430 F2) a tab-indented closer does not close the fence', () => {
+  // GitHub: "\t```" inside a ``` fence is code text; both boxes render as <pre> text.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n```\nx\n\t```\n- [ ] one\n- [ ] two\n\nSome prose line\n'), { line: '- [ ] one' });
+});
+
+test('(#430 F3) must still fence: a three-space-indented opener holds a moved box and exempts a <!--', () => {
+  // GitHub (g_moved3): "   ```" / "- [ ] two" / "   ```" is a code block holding the box text, no checkbox.
+  assert.deepEqual(change('## Done when\n\n- [ ] two\n', '## Done when\n\n   ```\n- [ ] two\n   ```\n'), { line: '- [ ] two' });
+  // GitHub (h_3sp_comment): the fenced "<!-- x -->" is literal code and the box after it renders.
+  assert.equal(change('## Done when\n\n- [ ] one\n', '## Done when\n\n   ```\n<!-- x -->\n   ```\n\n- [ ] one\n'), null);
+});
+
+test('(#430 F3) must still close: a closer with trailing spaces or tabs, a longer closer, and a three-space closer', () => {
+  // GitHub (d_trail, e_long): "```  " and "````" close a ``` fence; both boxes render as checkboxes after it.
+  assert.equal(change(FLIVE, '## Done when\n\n```\nx\n```  \n- [ ] one\n- [ ] two\n'), null, 'trailing spaces');
+  assert.equal(change(FLIVE, '## Done when\n\n```\nx\n```\t\n- [ ] one\n- [ ] two\n'), null, 'trailing tab');
+  assert.equal(change(FLIVE, '## Done when\n\n```\nx\n````\n- [ ] one\n- [ ] two\n'), null, 'longer closer');
+  // GitHub (c_3sp): "   ```" closes the fence the same way (three spaces of indent are allowed on a closer).
+  assert.equal(change(FLIVE, '## Done when\n\n```\nx\n   ```\n- [ ] one\n- [ ] two\n'), null, 'three-space closer');
+});
+
+test('(#430 F3) must still fence: a tilde opener whose info string holds a backtick', () => {
+  // GitHub (f_tilde): "~~~a`b" opens a fence (lang a`b); both boxes render as <pre> text.
+  assert.deepEqual(change(FLIVE, '## Done when\n\n~~~a`b\n- [ ] one\n- [ ] two\n~~~\n'), { line: '- [ ] one' });
+});
+
+// The block message: ruled() runs the hook's rule on a `gh issue edit` whose body adds `<!--`.
+const OPENER_EDIT = `gh issue edit 12 --body "${DW}\nuse <!-- to open"`;
+
+test('(#430 C3) the block message for an added opener names <!--, the issue and the line, and points at a comment', () => {
+  // GitHub (c3b): `use <!-- to open` is visible text, but the guard blocks every added opener.
+  const r = ruled(OPENER_EDIT, DW);
+  assert.ok(r);
+  assert.match(r, /<!--/);
+  assert.match(r, /#?12\b/);
+  assert.ok(r.includes('use <!-- to open'), 'names the line');
+  assert.match(r, /gh issue comment/);
+  assert.match(r, /approv/i);
+});
+
+test('(#430 C3) an approving prompt naming the issue allows the opener edit once; another issue number does not', () => {
+  const t = tmp();
+  const run = (tr) => guard.issueBodyReason(OPENER_EDIT, t.dir, tr, t.state, undefined, null, { liveBody: liveSync(DW) });
+  assert.ok(run(transcriptOf(t.dir, typedRec('rewrite #13'))), 'an approval for #13 does not apply');
+  const tr = transcriptOf(t.dir, typedRec('rewrite #12'));
+  assert.equal(run(tr), null);
+  assert.ok(run(tr), 'spent after one use');
+});
+
+test('(#430 C3) must still pass: an edit that only ticks a box beside a live opener, through the rule', () => {
+  const live = `<!-- note -->\n${DW}`;
+  assert.equal(ruled(`gh issue edit 12 --body "${live.replace('- [ ] one', '- [x] one')}"`, live), null);
 });

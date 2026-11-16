@@ -15,7 +15,7 @@ can't parse (malformed JSON) fails closed too, since nothing was checked.
 
 | Script | Event (matcher) | Does |
 |---|---|---|
-| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all/.` and `git commit -a` in any flag order, in a shared checkout (a main checkout under the workspace root; a linked worktree, a repo outside the workspace and `git add -N` pass, and a dir the guard can't resolve or place in a repo counts as shared, #368); staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward (one fixed message: run the gate unpiped, redirect it to a log and `echo rc=$?`, #368); PS `Set-Content`/`Out-File`/`Add-Content` and the `sc`/`ac` aliases (mojibake); branch switches, file restores and commits on main in the claude-config main checkout (`land.mjs` commits from its own worktree); `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent; an approval whose first gated call is a lone canonical `git push <remote> <branch>`, `gh pr create` or `gh pr merge` covers that branch's whole ship, #305). A PowerShell `if`/`elseif`/`while` condition is read as a command, so a gated verb inside one is gated (#214). Every rule matches a command by name, its basename less `.exe` in any case (`C:/…/git.exe`, `GIT`), read through `env`/`timeout`/`nohup`/`time` and their options, so `timeout 60 git push` is gated (#239), and through bash's `command`/`exec`/`builtin` with their options, stacked, and `env -S`/`--split-string`'s string, so `command git push` and `env -S 'git push'` are gated too (a lookup, `command -v`/`-V`, and a bare `exec >log` redirect run nothing, #420); a shell's line is parsed as commands past `bash -c`/`sh -c` (`-c` alone or in a flag cluster: `bash -lc`), `powershell`/`pwsh` `-Command`/`-c`, and `eval`/`iex`. These are the shapes real sessions use: #291 cut the readers for every other prefix (`sudo`, `nice`, `strace`, `watch`…), runner (`xargs`, `find -exec`, `parallel`) and shell (`cmd /c`, `zsh`, busybox, `-EncodedCommand`), which only guard development ever ran. Static, so best-effort — a script file is out of sight. Also blocks a `node`/`bun` `-e`/`--eval`/`-p`/`--print` script or a `deno eval` script holding a substitution its shell runs before the runtime starts — in bash an unescaped backtick or `$(` outside single quotes, in PowerShell a `$(` (a backtick is its escape char) — as a JS template literal in a double-quoted `node -e` did during #249: single-quote the script or Write it to a file (#258; read through prefixes, groups and a shell's `-c` line). Also blocks a `gh issue edit --body/--body-file` that drops or rewords a line of the issue's live body (ticking a box and adding lines pass) or whose body it can't read, unless the user's approval names the issue and allows one rewrite (rule 13, #388; the message points at `gh issue comment`). |
+| `bash-guard.mjs` | PreToolUse (`Bash\|PowerShell`) | Blocks: `git add -A/--all/.` and `git commit -a` in any flag order, in a shared checkout (a main checkout under the workspace root; a linked worktree, a repo outside the workspace and `git add -N` pass, and a dir the guard can't resolve or place in a repo counts as shared, #368); staging/committing `.env` files (`.env.example` allowed); gate commands (by command word, incl. `cargo test/clippy/fmt --check` and `just` gate recipes) piped onward (one fixed message: run the gate unpiped, redirect it to a log and `echo rc=$?`, #368); PS `Set-Content`/`Out-File`/`Add-Content` and the `sc`/`ac` aliases (mojibake); branch switches, file restores and commits on main in the claude-config main checkout (`land.mjs` commits from its own worktree); `git push`/`gh pr create`/`gh pr merge` without an approving AskUserQuestion answer or typed user prompt in the transcript (`git push --dry-run` and remote branch deletes — `--delete`/`-d`, all-`:branch` refspecs — exempt; more than one gated verb in one command is blocked unspent; an approval whose first gated call is a lone canonical `git push <remote> <branch>`, `gh pr create` or `gh pr merge` covers that branch's whole ship, #305). A PowerShell `if`/`elseif`/`while` condition is read as a command, so a gated verb inside one is gated (#214). Every rule matches a command by name, its basename less `.exe` in any case (`C:/…/git.exe`, `GIT`), read through `env`/`timeout`/`nohup`/`time` and their options, so `timeout 60 git push` is gated (#239), and through bash's `command`/`exec`/`builtin` with their options, stacked, and `env -S`/`--split-string`'s string, so `command git push` and `env -S 'git push'` are gated too (a lookup, `command -v`/`-V`, and a bare `exec >log` redirect run nothing, #420); a shell's line is parsed as commands past `bash -c`/`sh -c` (`-c` alone or in a flag cluster: `bash -lc`), `powershell`/`pwsh` `-Command`/`-c`, and `eval`/`iex`. These are the shapes real sessions use: #291 cut the readers for every other prefix (`sudo`, `nice`, `strace`, `watch`…), runner (`xargs`, `find -exec`, `parallel`) and shell (`cmd /c`, `zsh`, busybox, `-EncodedCommand`), which only guard development ever ran. Static, so best-effort — a script file is out of sight. Also blocks a `node`/`bun` `-e`/`--eval`/`-p`/`--print` script or a `deno eval` script holding a substitution its shell runs before the runtime starts — in bash an unescaped backtick or `$(` outside single quotes, in PowerShell a `$(` (a backtick is its escape char) — as a JS template literal in a double-quoted `node -e` did during #249: single-quote the script or Write it to a file (#258; read through prefixes, groups and a shell's `-c` line). Also blocks a `gh issue edit --body/--body-file` that drops or rewords a line of the issue's live body (ticking a box passes, and so do added lines unless one holds a `<!--` outside a code span or fence, which blocks as a rewrite; a box moved into a fence or `<details>` is lost) or whose body it can't read, unless the user's approval names the issue and allows one rewrite (rule 13, #388; the message points at `gh issue comment`). |
 | `browser-gate.mjs` | PreToolUse (`mcp__claude-in-chrome__.*`) | A visible browser needs consent: the latest AskUserQuestion answer must match `/\b(browser\|chrome\|launch\|playwright\|headed)\b/i` without the push gate's refusal words. Granted **per session** — `session_id` recorded in `~/.claude/browser-gate-sessions.json` (`CLAUDE_BROWSER_GATE_STATE` overrides), later calls pass. `tabs_context_mcp` / `list_connected_browsers` are never gated. Shared logic (`browserGateReason`, `latestAnswer`) lives in `_hooklib.mjs`; only this gate calls `browserGateReason` (bash-guard no longer gates headed Playwright). Fails closed. |
 | `agent-model-guard.mjs` | PreToolUse (`Agent`) | A model-omitted dispatch on a frontmatter-less type gets `model: sonnet` via `updatedInput` (with `permissionDecision: allow`, which is the only documented pairing; ledger line `FILL`) when the session model is known and not billed. Otherwise it blocks (#74). Also blocks `fable\|mythos` dispatches without a live clearance marker; blocks forks on a live (or undeterminable) fable/mythos session. Ledger: `~/.claude/fable-dispatch.log`. Fails closed. |
 | `agent-name-guard.mjs` | PreToolUse (`Agent`) | In company context only (main session: a `custom-title.json` title in the new grammar, role + charge, or a legacy `director-*`; subagent caller: its `meta.json` name, else description, is a new-grammar name, a legacy tree name, or a legacy typed name with a role; elsewhere every spawn passes, named or not), a spawn's name (`name`, else `description`) must be lowercase in the new grammar `<role>_<kind>_<target>` (lib's `parseAgentName`, built by `session-name.mjs <role> <kind> <target…>`) or a legacy tree name with a worker, for in-flight batches. Blocks a missing or off-grammar name; no subtree, scope or leaf rules (#360). A block holds beside agent-model-guard's allow + `updatedInput` (deny wins, as the Agent SDK hooks page documents; unverified live for the CLI). Fails open: naming isn't a safety boundary (#272). |
@@ -155,18 +155,34 @@ fixed false verdict; change them only with a test:
 - **Issue-body edits (rule 13, #388, `hooks/issue-body.mjs`)** — a `gh issue edit` with `-b`/`--body`/
   `-F`/`--body-file` (attached short forms too) is compared with the issue's
   live body (`gh issue view <N> --json body`, `-R`/an issue URL's repo or the
-  cwd's). An issue body is only ticked or added to: every non-blank live line
-  must survive, in order, unchanged or as a task item ticked `- [ ]` →
+  cwd's; a `-R` URL such as `https://github.com/o/r` is read as its repo,
+  `o/r`, and names its host, github.com included: gh takes a URL's host over
+  `GH_HOST`). An issue body is only ticked or added to: every non-blank live
+  line must survive, in order, unchanged or as a task item ticked `- [ ]` →
   `- [x]` (bulleted or ordered; a ticked box may change case); added lines
   pass anywhere. Un-ticking, re-indenting, reordering and rewording are a
-  rewrite. A line of the new body inside an HTML comment (`<!-- … -->`, one
-  line or several; an unclosed `<!--` runs to the end) matches no live line
-  outside one, so hiding a box in a comment loses it (#419). A body the guard can't read counts as a rewrite too (fail-closed):
+  rewrite. A live line matches only a line in the same context: inside or
+  outside a fenced code block (```` ``` ```` or `~~~`, fence lines
+  included; read as GitHub does: an opener or closer has at most 3 spaces
+  of indent, a backtick opener's info string holds no backtick, and a
+  closer is the opener's character only, at least as many, then only
+  spaces or tabs), and inside or outside a `<details …>` … `</details>` block
+  (nesting counts), so a box moved into a fence or a `<details>` block is
+  lost (#430). HTML comments fail closed (#430): the guard does not read
+  what a comment hides. A line of the new body holding a `<!--` outside a
+  fence and outside an inline code span (a backtick run to the next equal
+  run on its line; a four-space indent is no code block here) must be one
+  matched to a live line, wherever any `-->` sits; else the edit blocks,
+  naming that line, with a rewrite's approval as the remedy. Openers the
+  live body already holds, kept in order, pass; a `-->` alone is not
+  checked; a lost live line is reported first. A body the guard can't read
+  counts as a rewrite too (fail-closed):
   stdin, a substitution or variable, a live body gh can't fetch, a `GH_REPO`
   in the command with no `-R`/URL naming the repo, a `GH_HOST` with no
   `-R host/owner/repo`/URL naming the host, a `--body-file` unless the
   edit runs once (the other steps bar `cd`/`pushd` and a trailing redirect,
-  `tail` or `head` are later top-level pipelines, with no loop, function or
+  `tail`, `head` or `jq` stage that redirects no output to a file — an fd
+  dup such as `2>&1`, or `>/dev/null`, may stay — are later top-level pipelines, with no loop, function or
   background `&` that could rerun it; an earlier step may write the file), and
   an unreadable target. A `"$(cat <<'EOF' … EOF\n)"` heredoc body is read as its text; an
   unquoted `#…` word starts a shell comment and ends the call's words; a
@@ -174,11 +190,17 @@ fixed false verdict; change them only with a test:
   backslash-newline is dropped, and on Windows a Bash `/tmp/…` path is read
   from Git Bash's `/tmp` mount (`os.tmpdir()`), PowerShell's as written. A
   `gh api` write of an issue body is blocked outright, with no approval path
-  (#419): a REST `repos/<owner>/<repo>/issues/<N>` endpoint (no further
-  segment) with a `body=` field (`-f`/`-F`/`--field`/`--raw-field`) or
-  `--input` and a method other than GET, or a graphql `updateIssue` mutation
-  with `body` in its query or a field key; a graphql query it can't read (a
-  variable, an unreadable `query=@file`, `--input`) counts. The reason points
+  (#419): a REST `repos/<owner>/<repo>/issues/<N>` or `repositories/<id>/issues/<N>`
+  endpoint (no further segment) with a `body=` field (`-f`/`-F`/`--field`/`--raw-field`) or
+  `--input` and a method other than GET, or a graphql query naming
+  `updateIssue` with `body` in a field key or anywhere but that field's
+  selection set (cut only where its argument list is read to the end:
+  strings, block strings and `#` comments skipped; a variable default
+  counts), sent to
+  any endpoint ending in a `graphql` segment (a trailing `/`, a `?query`, no
+  scheme, `/api/v3/graphql`); a graphql query it can't read (a variable, an
+  unreadable `-F query=@file`, `--input`) counts. `-f`/`--raw-field`
+  `query=@file` is the literal text `@file`, no file read. The reason points
   at `gh issue edit <N> --body-file <file>`, which rule 13 checks. A
   rewrite needs the push gate's approval mechanism with its own wording: an
   AskUserQuestion answer or typed prompt naming the issue (`#N`) with an act

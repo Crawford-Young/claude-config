@@ -63,8 +63,9 @@
 //      Read off parsed calls.
 //  13. gh issue edit -b/--body/-F/--body-file that drops or rewords a
 //      non-blank line of the issue's live body (read with `gh issue view`),
-//      in order; ticking a box (`- [ ]` → `- [x]`) and adding lines pass
-//      (#388). A body the guard can't read — stdin, a missing file, a
+//      in order; ticking a box (`- [ ]` → `- [x]`) passes, and so do added
+//      lines unless one holds a `<!--` outside a code span or fence, which
+//      blocks as a rewrite (#388, #430). A body the guard can't read — stdin, a missing file, a
 //      substitution or variable, a live body gh can't fetch — counts as a
 //      rewrite. A rewrite needs rule 8's approval mechanism with its own
 //      wording: an answer or typed prompt naming the issue (`#N`) with a
@@ -1908,9 +1909,9 @@ function bodySpend(uuid, n, verb, file, toolUseId, transcriptPath) {
 const samePath = (a, b) => (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
 
 /** 13. A `gh issue edit --body/--body-file` that drops or rewords a non-blank
- *  line of the issue's live body (bodyChange), or whose live or new body
+ *  line of the issue's live body or adds a `<!--` (bodyChange), or whose live or new body
  *  can't be read, needs the user's approval naming the issue; ticking a box
- *  and adding lines pass. The approval is the push gate's (latestApproval
+ *  and adding lines with no `<!--` pass. The approval is the push gate's (latestApproval
  *  with rule 13's predicates), applies only in its own repo (the one it
  *  names, else gh's in its record's dir; unequal or unresolvable blocks),
  *  and is spent once per issue in its own state file —
@@ -1918,7 +1919,8 @@ const samePath = (a, b) => (process.platform === 'win32' ? resolve(a).toLowerCas
  *  every other check has passed (a blocked command never spends). The live
  *  body is read only for a body edit; `deps.liveBody` replaces gh's read
  *  and `deps.repoOf` gh's repo lookup (tests). A body file is read only when every other step runs after gh
- *  reads it — a trailing tail/head stage, or a later pipeline with no loop,
+ *  reads it — a trailing tail/head/jq stage that redirects no output to a
+ *  file, or a later pipeline with no loop,
  *  function or background job in the command (location changes don't
  *  count): an earlier or concurrent step may write it first. In bash a
  *  "$(cat <<'EOF' … EOF\n)" body (HEREDOC_SUB) is read as its heredoc's text.
@@ -1927,7 +1929,7 @@ const samePath = (a, b) => (process.platform === 'win32' ? resolve(a).toLowerCas
  *  opens it, and the reason points at `gh issue edit --body-file`. */
 export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyStateFile(), toolUseId = undefined, tool = null, deps = {}) {
   const liveBody = deps.liveBody ?? liveIssueBody;
-  const held = []; // each body edit that needs approval: { n, line } or { n, why }
+  const held = []; // each body edit that needs approval: { n, line }, { n, opener } or { n, why }
   // Each heredoc body becomes a quoted placeholder word, read back below.
   const heredocs = [];
   let text = raw;
@@ -1955,12 +1957,26 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
   };
   // The file `file` (a `what`) that call `c` reads, as `{ text }` or `{ why }`.
   // Read only when every other step runs once gh has read it — a trailing
-  // tail/head stage, a later pipeline (`&& echo done`), or a group's lone `}`
-  // (it runs nothing): any other step may write it first.
+  // tail/head/jq stage that redirects no output to a file, a later pipeline
+  // (`&& echo done`), or a group's lone `}` (it runs nothing): any other step
+  // may write it first. A stage starts beside gh, so its `>`, `>>`, `>|`, `&>`
+  // or `N>file` may truncate the file before gh reads it; an fd dup (`2>&1`,
+  // `>&2`) and `>/dev/null` write no file.
+  const writesFile = (o) => {
+    const rw = words(o.text, true).map((w) => w.replace(/"(?:[^"\\]|\\[\s\S])*"|'[^']*'/g, '""'));
+    return rw.some((w, i) => {
+      const at = w.indexOf('>');
+      if (at < 0) return false;
+      const to = w.slice(at).replace(/^>[>|]?/, '') || (rw[i + 1] ?? '');
+      return !/^(?:&(?:\d+|-)|\/dev\/null)$/.test(to);
+    });
+  };
   const readFile = (c, file, what) => {
     const at = all.indexOf(c);
     const after = (o, i) =>
-      (o.cmd === '}' && o.words.length === 1) || (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head)$/i.test(o.cmd)) || (i > at && o.top !== c.top && !repeats);
+      (o.cmd === '}' && o.words.length === 1) ||
+      (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head|jq)$/i.test(o.cmd) && !writesFile(o)) ||
+      (i > at && o.top !== c.top && !repeats);
     if (!all.every((o, i) => o === c || after(o, i))) return { why: `its ${what} ${file} is read before the command's other steps run, which may write it — run the edit in a Bash call of its own` };
     const path = toDir(c.dir, gitBashTmp(file, c.tool));
     try {
@@ -2034,7 +2050,11 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
   if (!held.length) return null;
   const issue = (h) => (h.n ? `#${h.n}` : 'an issue');
   const what = (h) =>
-    h.line !== undefined ? `This \`gh issue edit\` drops or rewords a line of ${issue(h)}'s live body: "${h.line}".` : `This \`gh issue edit\` of ${issue(h)} can't be checked: ${h.why}.`;
+    h.line !== undefined
+      ? `This \`gh issue edit\` drops or rewords a line of ${issue(h)}'s live body: "${h.line}".`
+      : h.opener !== undefined
+        ? `This \`gh issue edit\` adds an HTML comment opener (\`<!--\`) to ${issue(h)}'s body outside a code span or fence, which may hide the lines after it: "${h.opener}".`
+        : `This \`gh issue edit\` of ${issue(h)} can't be checked: ${h.why}.`;
   if (held.length > 1) {
     return `This command rewrites ${held.length} issue bodies (${held.map(issue).join(', ')}) — run each in its own Bash call, so each is checked against the user's approval on its own. Nothing was spent. ${what(held[0])} ${rewriteRemedy(held[0].n)}`;
   }
