@@ -159,25 +159,50 @@ fixed false verdict; change them only with a test:
   must survive, in order, unchanged or as a task item ticked `- [ ]` →
   `- [x]` (bulleted or ordered; a ticked box may change case); added lines
   pass anywhere. Un-ticking, re-indenting, reordering and rewording are a
-  rewrite. A body the guard can't read counts as a rewrite too (fail-closed):
+  rewrite. A line of the new body inside an HTML comment (`<!-- … -->`, one
+  line or several; an unclosed `<!--` runs to the end) matches no live line
+  outside one, so hiding a box in a comment loses it (#419). A body the guard can't read counts as a rewrite too (fail-closed):
   stdin, a substitution or variable, a live body gh can't fetch, a `GH_REPO`
-  in the command with no `-R`/URL naming the repo, a `--body-file` unless the
+  in the command with no `-R`/URL naming the repo, a `GH_HOST` with no
+  `-R host/owner/repo`/URL naming the host, a `--body-file` unless the
   edit runs once (the other steps bar `cd`/`pushd` and a trailing redirect,
   `tail` or `head` are later top-level pipelines, with no loop, function or
   background `&` that could rerun it; an earlier step may write the file), and
   an unreadable target. A `"$(cat <<'EOF' … EOF\n)"` heredoc body is read as its text; an
-  unquoted `#…` word starts a shell comment and ends the call's words. A
+  unquoted `#…` word starts a shell comment and ends the call's words; a
+  `{ …; }` group's closing `}` is no step; in bash a double-quoted
+  backslash-newline is dropped, and on Windows a Bash `/tmp/…` path is read
+  from Git Bash's `/tmp` mount (`os.tmpdir()`), PowerShell's as written. A
+  `gh api` write of an issue body is blocked outright, with no approval path
+  (#419): a REST `repos/<owner>/<repo>/issues/<N>` endpoint (no further
+  segment) with a `body=` field (`-f`/`-F`/`--field`/`--raw-field`) or
+  `--input` and a method other than GET, or a graphql `updateIssue` mutation
+  with `body` in its query or a field key; a graphql query it can't read (a
+  variable, an unreadable `query=@file`, `--input`) counts. The reason points
+  at `gh issue edit <N> --body-file <file>`, which rule 13 checks. A
   rewrite needs the push gate's approval mechanism with its own wording: an
   AskUserQuestion answer or typed prompt naming the issue (`#N`) with an act
   word before it in the same clause ("Rewrite #12", "Rewrite the body of
   #12"; "Rewrite #13, keep #12" doesn't approve #12). `rewrite`/`reword`
   suffice; `edit`/`update`/`change`/`replace`/`fix`/`correct` also need
-  `body`, `spec` or `done-when` in the text. Each approval allows one
+  `body`, `spec` or `done-when` in the text. An approval applies only in
+  its own repo (#419): the one it names beside the number (`owner/repo#N`,
+  typed or answered, or an issue URL), else the repo gh resolves in the
+  approving record's `cwd`. The edit's repo is its `-R`/URL's, else gh's in
+  its dir. The two must be equal (case-insensitive; off github.com a repo is
+  `host/owner/repo`); unequal blocks, naming both and `rewrite owner/repo#N`,
+  and a side gh can't resolve (or a `GH_REPO`/`GH_HOST` the target doesn't
+  override) blocks as uncheckable. With no repo named on either side and the
+  edit in the record's dir, gh is not asked. Each approval allows one
   rewrite per issue, spent in `~/.claude/issue-body-approvals.json`
-  (`CLAUDE_ISSUE_BODY_STATE` overrides); a command with more than one
+  (`CLAUDE_ISSUE_BODY_STATE` overrides) as `issue-body <owner/repo>#N`
+  (lowercase), or `issue-body #N` when the lookup was skipped (same dir, no
+  repo named on either side; an unresolved repo blocks); either
+  form spends that approval's rewrite of #N. A command with more than one
   rewrite is blocked unspent. `CLAUDE_ISSUE_BODY_STUB` names a file read as
-  the live body instead of gh (tests and hook-process probes; never the
-  network). The block message points at `gh issue comment` for a correction.
+  the live body instead of gh, and `CLAUDE_ISSUE_BODY_REPO_STUB` a repo
+  answered instead of `gh repo view` (tests and hook-process probes; never
+  the network). The block message points at `gh issue comment` for a correction.
 
 ## settings.json wiring
 

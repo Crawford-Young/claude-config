@@ -661,6 +661,20 @@ test('--body-edits finding 4: several issue numbers in one edit are several targ
   assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 2 });
 });
 
+test('--body-edits (#419 D6): -l and -a are not gh issue edit flags, so the number after them is a target', () => {
+  for (const flag of ['-l', '-a']) {
+    const out = edits(config({ 's.jsonl': shell(`gh issue edit ${flag} 12 --body x`) }));
+    assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 }, flag);
+  }
+  const two = edits(config({ 's.jsonl': [...shell('gh issue edit -l 12 --body x'), ...shell('gh issue edit -a 13 --body x')] }));
+  assert.equal(tally(two)['Issue targets'], 2);
+});
+
+test('--body-edits (#419 D6) must still pass: --add-label and --add-assignee values are not targets', () => {
+  const out = edits(config({ 's.jsonl': shell('gh issue edit 5 --add-label 12 --add-assignee 13 --body x') }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 });
+});
+
 test('--body-edits finding 5: attached short forms -bfoo and -Ffile.md count as body edits', () => {
   const rows = [...shell('gh issue edit 5 -bfoo'), ...shell('gh issue edit 6 -Ffile.md')];
   const out = edits(config({ 's.jsonl': rows }));

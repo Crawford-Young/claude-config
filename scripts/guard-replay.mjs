@@ -561,7 +561,7 @@ function windowLine(files, first, last, calls) {
 
 const BODY_FLAG = /^(?:(?:-b|-F|--body|--body-file)(?:=|$)|-[bF].)/;
 /** gh issue edit flags that take a separate value, so the value is not the issue target. */
-const EDIT_VALUE_FLAGS = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-R', '--repo', '-a', '--add-assignee', '-l', '--add-label', '-m', '--milestone', '--add-project', '--remove-assignee', '--remove-label', '--remove-project', '--type', '--parent', '--add-blocked-by', '--remove-blocked-by', '--add-blocking', '--remove-blocking', '--add-sub-issue', '--remove-sub-issue']);
+const EDIT_VALUE_FLAGS = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-R', '--repo', '--add-assignee', '--add-label', '-m', '--milestone', '--add-project', '--remove-assignee', '--remove-label', '--remove-project', '--type', '--parent', '--add-blocked-by', '--remove-blocked-by', '--add-blocking', '--remove-blocking', '--add-sub-issue', '--remove-sub-issue']);
 
 /** A ref-shaped token: `5`, `#5`, an `…/issues/5` URL or a `$var` placeholder; a redirection or flag is not a target. */
 const REF_TOKEN = /^(?:#?\d+|\S*\/issues\/\d+|\$\w+|\$\{\w+\})$/;

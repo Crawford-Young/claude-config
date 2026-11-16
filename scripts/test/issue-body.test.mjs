@@ -3,12 +3,13 @@
 // rewords a line of the issue's live body. Never touches the network: deps.liveBody is injected.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnHarness, tempDir } from './_spawn.mjs';
 import * as guard from '../../hooks/bash-guard.mjs';
-import { bodyChange, issueBodyStateFile } from '../../hooks/issue-body.mjs';
+import { bodyChange, issueBodyStateFile, literal } from '../../hooks/issue-body.mjs';
 
 const LIVE = ['## Goal', 'Ship the guard.', '', '## Done when', '- [ ] first box', '- [ ] second box', '', '## Out of scope', 'Nothing else.'].join('\n');
 
@@ -346,7 +347,8 @@ test('an approving answer naming the issue allows exactly one rewrite, then bloc
 test('an answer naming the issue by URL path approves', () => {
   const t = tmp();
   const tr = transcriptOf(t.dir, answerRec({ q: 'Rewrite https://github.com/acme/widgets/issues/12' }));
-  assert.equal(gate(t, tr), null);
+  // #419 D2: the URL names acme/widgets, so the edit's own repo (resolved from its dir) must be the same.
+  assert.equal(guard.issueBodyReason(edit, t.dir, tr, t.state, undefined, null, { liveBody: liveSync(ONE), repoOf: () => 'acme/widgets' }), null);
 });
 
 test('an answer naming a different issue does not approve', () => {
@@ -758,13 +760,13 @@ test('a body-file edit followed by a separate command passes when it only ticks 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'bash-guard.mjs');
 const LIVE_STUB = '## Goal\nShip it.\n\n## Done when\n- [ ] one\n- [ ] two\n';
 
-function hookRun(command, { tool = 'Bash', transcript, home, id = 'toolu_e2e' } = {}) {
+function hookRun(command, { tool = 'Bash', transcript, home, id = 'toolu_e2e', env } = {}) {
   const h = home ?? tempDir('ib-home-');
   mkdirSync(join(h, '.claude'), { recursive: true });
   writeFileSync(join(h, '.claude', 'issue-body-stub.md'), LIVE_STUB);
   const cwd = tempDir('ib-cwd-');
   const payload = { tool_name: tool, tool_input: { command }, cwd, transcript_path: transcript ?? join(cwd, 'none.jsonl'), tool_use_id: id };
-  const r = spawnHarness(HOOK, [], { home: h, input: JSON.stringify(payload) });
+  const r = spawnHarness(HOOK, [], { home: h, input: JSON.stringify(payload), env });
   return { rc: r.status, err: r.stderr || '', home: h, state: join(h, '.claude', 'issue-body-approvals.json') };
 }
 
@@ -816,5 +818,269 @@ test('a value flag with an issue number still blocks a rewording of the one issu
     const r = reason(`gh issue edit 12 ${flag} --body "${REWORD}"`, ONE);
     assert.ok(r, flag);
     assert.doesNotMatch(r, /can't read which issue/, flag);
+  }
+});
+
+// ---- #419: rule 13 gaps (D1-D5) ----------------------------------------------------------------
+
+// D1: gh api body writes
+const API_BLOCKED = [
+  'gh api repos/o/r/issues/12 -f body=x',
+  'gh api -X PATCH repos/o/r/issues/12 -f body=x',
+  'gh api --method PATCH repos/o/r/issues/12 -F body=x',
+  'gh api /repos/o/r/issues/12 -X PATCH --field body=x',
+  'gh api repos/o/r/issues/12 --raw-field body=x',
+  'gh api -X PATCH repos/o/r/issues/12 -F body=@b.md',
+  'gh api -X PATCH "repos/o/r/issues/12" -f body=x',
+  'gh api -X PATCH repos/{owner}/{repo}/issues/12 -f body=x',
+  'gh api -X PATCH repos/$OWNER/$REPO/issues/$N -f body=x',
+  'gh api -X PATCH repos/o/r/issues/12 --input p.json',
+];
+const GQL_UPDATE = 'mutation { updateIssue(input:{id:"I",body:"x"}) { issue { id } } }';
+
+test('(#419 D1) a gh api write of an issue body is blocked, naming gh api and the gh issue edit --body-file route', () => {
+  for (const cmd of API_BLOCKED) {
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+    assert.match(r, /gh issue edit .*--body-file/, cmd);
+  }
+});
+
+test('(#419 D1) a gh api graphql updateIssue body mutation is blocked; an unreadable query blocks as uncheckable', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'q.graphql'), GQL_UPDATE);
+  for (const cmd of [
+    `gh api graphql -f query='${GQL_UPDATE}'`,
+    `gh api graphql -F query='${GQL_UPDATE}'`,
+    'gh api graphql -f query=@q.graphql',
+    'gh api graphql -f query=$Q',
+    'gh api graphql -f query=@missing.graphql',
+    'gh api graphql --input q.json',
+  ]) {
+    const r = ruled(cmd, ONE, { cwd: t.dir });
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+  }
+});
+
+test('(#419 D1) must still pass: comments, GET, non-body PATCH, graphql reads and addComment', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'read.graphql'), '{ repository(owner:"o",name:"r"){ issue(number:1){ body } } }');
+  for (const cmd of [
+    'gh api repos/o/r/issues/12/comments -f body=x',
+    'gh api repos/o/r/issues/12',
+    'gh api -X GET repos/o/r/issues/12',
+    'gh api -X PATCH repos/o/r/issues/12 -f state=closed',
+    'gh api -X PATCH repos/o/r/issues/12 -f title=x',
+    `gh api graphql -f query='{ repository(owner:"o",name:"r"){ issue(number:1){ body } } }'`,
+    'gh api graphql -f query=@read.graphql',
+    `gh api graphql -f query='mutation { addComment(input:{subjectId:"I",body:"x"}) { clientMutationId } }'`,
+  ]) {
+    assert.equal(ruled(cmd, ONE, { cwd: t.dir }), null, cmd);
+  }
+});
+
+test('(#419 D1 fix) a graphql updateIssue body mutation sent to a full-URL endpoint is blocked like bare graphql', () => {
+  for (const endpoint of ['graphql', '/graphql', 'https://api.github.com/graphql', 'https://ghe.example.com/api/graphql']) {
+    const cmd = `gh api ${endpoint} -f query='${GQL_UPDATE}'`;
+    const r = ruled(cmd, ONE);
+    assert.ok(r, cmd);
+    assert.match(r, /gh api/, cmd);
+  }
+});
+
+test('(#419 D1 fix) must still pass: a graphql read query sent to a full-URL endpoint', () => {
+  for (const endpoint of ['https://api.github.com/graphql', 'https://ghe.example.com/api/graphql']) {
+    const cmd = `gh api ${endpoint} -f query='{ repository(owner:"o",name:"r"){ issue(number:1){ body } } }'`;
+    assert.equal(ruled(cmd, ONE), null, cmd);
+  }
+});
+
+// D2: approval scoped to its repo
+const ELSE = 'C:/elsewhere/a';
+const byDir = (map) => (d) => map(String(d).replace(/\\/g, '/'));
+const withRepo = (t, cmd, tr, repoOf) => guard.issueBodyReason(cmd, t.dir, tr, t.state, undefined, null, { liveBody: liveSync(ONE), repoOf });
+const REWRITE = `--body "${REWORD}"`;
+
+test('(#419 D2) an approval naming another repo does not apply: blocked, both repos named, how to approve the other', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, typedRec('rewrite other/repo#12'));
+  const r = withRepo(t, `gh issue edit 12 -R o/r ${REWRITE}`, tr, () => 'o/r');
+  assert.ok(r);
+  assert.match(r, /other\/repo/);
+  assert.match(r, /o\/r/);
+  assert.match(r, /rewrite o\/r#12/);
+  const url = transcriptOf(t.dir, answerRec({ q: 'Rewrite https://github.com/other/repo/issues/12' }));
+  const u = withRepo(t, `gh issue edit 12 -R o/r ${REWRITE}`, url, () => 'o/r');
+  assert.ok(u, 'an issue URL names its repo too');
+  assert.match(u, /other\/repo/);
+});
+
+test('(#419 D2) owner/repo#N approves #N in that repo, typed or answered, and is spent once under a per-repo key', () => {
+  for (const make of [() => typedRec('rewrite other/repo#12'), () => answerRec({ q: 'Yes, rewrite other/repo#12' })]) {
+    const t = tmp();
+    const tr = transcriptOf(t.dir, make());
+    const cmd = `gh issue edit 12 -R Other/Repo ${REWRITE}`;
+    assert.equal(withRepo(t, cmd, tr, () => 'o/r'), null);
+    assert.match(readFileSync(t.state, 'utf8'), /issue-body other\/repo#12/);
+    assert.ok(withRepo(t, cmd, tr, () => 'o/r'), 'spent');
+  }
+});
+
+test('(#419 D2) a bare approval applies only to the repo of the record cwd: another dir resolving elsewhere blocks, naming both', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, typedRec('rewrite #12', { cwd: ELSE }));
+  const r = withRepo(t, `gh issue edit 12 ${REWRITE}`, tr, byDir((d) => (d === ELSE ? 'a/x' : 'b/y')));
+  assert.ok(r);
+  assert.match(r, /a\/x/);
+  assert.match(r, /b\/y/);
+  assert.match(r, /rewrite b\/y#12/);
+});
+
+test('(#419 D2) a bare approval in another dir of the same repo applies, repos compared case-insensitively', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, typedRec('rewrite #12', { cwd: ELSE }));
+  assert.equal(withRepo(t, `gh issue edit 12 ${REWRITE}`, tr, byDir((d) => (d === ELSE ? 'A/X' : 'a/x'))), null);
+});
+
+test('(#419 D2) a repo that cannot be resolved on either side blocks as uncheckable', () => {
+  for (const repoOf of [() => null, byDir((d) => (d === ELSE ? 'a/x' : null)), byDir((d) => (d === ELSE ? null : 'a/x')), () => { throw new Error('gh down'); }]) {
+    const t = tmp();
+    const tr = transcriptOf(t.dir, typedRec('rewrite #12', { cwd: ELSE }));
+    assert.ok(withRepo(t, `gh issue edit 12 ${REWRITE}`, tr, repoOf));
+  }
+});
+
+test('(#419 D2) must still pass: bare approval in the same dir needs no repo lookup; bare approval with -R of the cwd repo applies', () => {
+  const t = tmp();
+  const boom = () => {
+    throw new Error('repoOf must not run: neither side names a repo and the dir is the record cwd');
+  };
+  assert.equal(withRepo(t, `gh issue edit 12 ${REWRITE}`, transcriptOf(t.dir, typedRec('rewrite #12', { cwd: t.dir })), boom), null);
+  const u = tmp();
+  assert.equal(withRepo(u, `gh issue edit 12 ${REWRITE}`, transcriptOf(u.dir, typedRec('rewrite #12')), boom), null, 'record without a cwd is the hook cwd');
+  const v = tmp();
+  assert.equal(withRepo(v, `gh issue edit 12 -R O/R ${REWRITE}`, transcriptOf(v.dir, typedRec('rewrite #12')), () => 'o/r'), null);
+});
+
+test('(#419 D2) the spend key is issue-body <lowercase owner/repo>#<N>', () => {
+  const v = tmp();
+  assert.equal(withRepo(v, `gh issue edit 12 -R O/R ${REWRITE}`, transcriptOf(v.dir, typedRec('rewrite #12')), () => 'o/r'), null);
+  assert.match(readFileSync(v.state, 'utf8'), /issue-body o\/r#12/);
+});
+
+test('(#419 D2) a bare approval does not cover -R of a different repo than its own', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, typedRec('rewrite #12'));
+  const r = withRepo(t, `gh issue edit 12 -R x/y ${REWRITE}`, tr, () => 'o/r');
+  assert.ok(r);
+  assert.match(r, /o\/r/);
+  assert.match(r, /x\/y/);
+});
+
+test('(#419 D2) hook process: CLAUDE_ISSUE_BODY_REPO_STUB stands in for the repo gh resolves', () => {
+  const ticked = '## Goal\nShip it.\n\n## Done when\n- [x] one\n- [ ] two';
+  const reworded = '## Goal\nShip it now.\n\n## Done when\n- [ ] one\n- [ ] two';
+  const env = { CLAUDE_ISSUE_BODY_REPO_STUB: 'o/r' };
+  const run = (prompt, flags, id) => {
+    const t = tmp();
+    return hookRun(`gh issue edit 12 ${flags} --body "${reworded}"`, { transcript: transcriptOf(t.dir, typedRec(prompt)), env, id });
+  };
+  assert.equal(run('rewrite #12', '-R O/R', 'toolu_a').rc, 0, 'bare approval, -R is the stubbed repo');
+  const other = run('rewrite #12', '-R x/y', 'toolu_b');
+  assert.equal(other.rc, 2, 'bare approval, -R is another repo than the stub');
+  assert.match(other.err, /x\/y/);
+  assert.equal(run('rewrite other/repo#12', '-R o/r', 'toolu_c').rc, 2, 'approval names another repo');
+  assert.equal(hookRun(`gh issue edit 12 --body "${ticked}"`, { env }).rc, 0, 'a tick needs no approval');
+});
+
+// D3: a box hidden in an HTML comment
+test('(#419 D3) a Done-when box wrapped in an HTML comment is reported lost', () => {
+  const live = '## Done when\n- [ ] one\n- [ ] two';
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!--\n- [ ] two\n-->'), { line: '- [ ] two' }, 'multi-line');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!--\n- [x] two\n-->'), { line: '- [ ] two' }, 'ticked inside a comment');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!-- unclosed\n- [ ] two'), { line: '- [ ] two' }, 'an unclosed comment runs to the end');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\n<!-- - [ ] two -->'), { line: '- [ ] two' }, 'one line');
+  assert.deepEqual(change(live, '<!-- ## Done when\n- [ ] one -->\n- [ ] two'), { line: '## Done when' }, 'a comment opened on a heading line');
+});
+
+test('(#419 D3) must still pass: a live body already holding a comment, kept, with a box ticked', () => {
+  const live = '<!-- note\nkeep this -->\n## Done when\n- [ ] one\n<!-- one-line note -->';
+  assert.equal(change(live, live.replace('- [ ] one', '- [x] one')), null);
+});
+
+test('(#419 D3 fix) a <!-- inside an inline code span or fence does not open a comment: a real wrap of the boxes is still lost', () => {
+  const span = 'Use `<!--` to open.';
+  const live = `${span}\n## Done when\n- [ ] one\n- [ ] two`;
+  assert.deepEqual(change(live, `${span}\n## Done when\n<!--\n- [ ] one\n- [ ] two\n-->`), { line: '- [ ] one' }, 'inline code span in live');
+  const fenced = '```\n<!--\n```';
+  const liveF = `${fenced}\n## Done when\n- [ ] one\n- [ ] two`;
+  assert.deepEqual(change(liveF, `${fenced}\n## Done when\n<!--\n- [ ] one\n- [ ] two\n-->`), { line: '- [ ] one' }, 'fenced block in live');
+});
+
+test('(#419 D3 fix) must still pass: adding a line holding a code-span <!-- above every kept line', () => {
+  const live = '## Done when\n- [ ] one\n- [ ] two';
+  assert.equal(change(live, `Use \`<!--\` to open.\n${live}`), null, 'inline code span');
+  assert.equal(change(live, `\`\`\`\n<!--\n\`\`\`\n${live}`), null, 'fenced block');
+});
+
+// D4: GH_HOST
+test('(#419 D4) a GH_HOST in the command blocks as uncheckable unless the target names its host', () => {
+  const tick = `--body "${TICKED_ONE}"`;
+  for (const [cmd, tool] of [
+    [`GH_HOST=ghe.example.com gh issue edit 12 ${tick}`, null],
+    [`export GH_HOST=ghe.example.com; gh issue edit 12 ${tick}`, null],
+    [`$env:GH_HOST='ghe.example.com'; gh issue edit 12 ${tick}`, 'PowerShell'],
+    [`GH_HOST=ghe.example.com gh issue edit 12 -R o/r ${tick}`, null],
+  ]) {
+    const r = ruled(cmd, UNTICKED_ONE, { tool });
+    assert.ok(r, cmd);
+    assert.match(r, /GH_HOST/, cmd);
+    assert.match(r, /host/i, cmd);
+  }
+  for (const cmd of [
+    `GH_HOST=ghe.example.com gh issue edit 12 -R ghe.example.com/o/r ${tick}`,
+    `GH_HOST=ghe.example.com gh issue edit https://ghe.example.com/o/r/issues/12 ${tick}`,
+  ]) {
+    assert.equal(ruled(cmd, UNTICKED_ONE), null, cmd);
+  }
+});
+
+// D5: three false blocks
+test('(#419 D5) a brace group around the edit still reads its body file', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'b.md'), `${UNTICKED_ONE}\n- [ ] added line`);
+  assert.equal(ruled('{ gh issue edit 12 -F b.md; }', UNTICKED_ONE, { cwd: t.dir }), null);
+});
+
+test('(#419 D5) bash drops a double-quoted backslash-newline; PowerShell keeps it', () => {
+  const raw = '"ab\\\nc"';
+  assert.equal(literal(raw), 'abc');
+  assert.equal(literal(raw, 'PowerShell'), 'ab\\\nc');
+  assert.equal(ruled(`gh issue edit 12 --body ${raw}`, 'abc'), null, 'the body is abc');
+});
+
+const tmpName = () => `ib419-${process.pid}-${Date.now()}.md`;
+
+test('(#419 D5) win32 Bash: a --body-file /tmp/... is read from the os.tmpdir() mount, PowerShell\'s is not', { skip: process.platform !== 'win32' }, () => {
+  const name = tmpName();
+  const file = join(tmpdir(), name);
+  writeFileSync(file, TICKED_ONE);
+  try {
+    assert.equal(ruled(`gh issue edit 12 --body-file /tmp/${name}`, UNTICKED_ONE), null);
+    assert.ok(ruled(`gh issue edit 12 --body-file /tmp/${name}`, UNTICKED_ONE, { tool: 'PowerShell' }), 'PowerShell /tmp is unchanged');
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test('(#419 D5) off win32 a --body-file /tmp/... stays /tmp', { skip: process.platform === 'win32' }, () => {
+  const name = tmpName();
+  writeFileSync(join('/tmp', name), TICKED_ONE);
+  try {
+    assert.equal(ruled(`gh issue edit 12 --body-file /tmp/${name}`, UNTICKED_ONE), null);
+  } finally {
+    rmSync(join('/tmp', name), { force: true });
   }
 });
