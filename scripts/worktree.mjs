@@ -83,7 +83,7 @@ function cmdNew() {
   if (args.install) {
     const [bin, ...installArgs] = installCommand(wtPath);
     const r = spawnSync(bin, installArgs, { cwd: wtPath, stdio: 'inherit', shell: true });
-    if (r.status !== 0) log(`WARNING: ${bin} install failed — run it manually before gates.`);
+    if (r.status !== 0) log(`WARNING: \`${[bin, ...installArgs].join(' ')}\` failed — run it manually before gates.`);
   }
 
   const husky = huskyStubs(repo, wtPath);
