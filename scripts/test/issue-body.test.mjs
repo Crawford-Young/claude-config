@@ -1025,6 +1025,14 @@ test('(#419 D3 fix) must still pass: adding a line holding a code-span <!-- abov
   assert.equal(change(live, `\`\`\`\n<!--\n\`\`\`\n${live}`), null, 'fenced block');
 });
 
+test('(#419 D3 fix2) a mid-line <!-- with no --> after it opens no comment; a closed one still hides', () => {
+  const live = '## Done when\n- [ ] one\n- [ ] two';
+  assert.equal(change(live, `use <!-- to start a comment\n${live}`), null, 'unclosed mid-line, added above');
+  assert.equal(change(live, `${live}\nuse <!-- to start a comment`), null, 'unclosed mid-line, added below');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\ntext <!-- - [ ] two -->'), { line: '- [ ] two' }, 'mid-line closed wrap');
+  assert.deepEqual(change(live, '## Done when\n- [ ] one\ntext <!-- start\n- [ ] two\n-->'), { line: '- [ ] two' }, 'mid-line comment closed on a later line');
+});
+
 // D4: GH_HOST
 test('(#419 D4) a GH_HOST in the command blocks as uncheckable unless the target names its host', () => {
   const tick = `--body "${TICKED_ONE}"`;

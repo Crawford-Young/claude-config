@@ -38,12 +38,15 @@ export function bodyChange(live, next) {
 
 /** Each line as `{ text, hid }`: `hid` when it starts inside an HTML comment,
  *  or opens one first thing (`<!--` past its indent). A comment runs to the
- *  first `-->` after its `<!--`, across lines; an unclosed one to the end. A
- *  `<!--` inside an inline code span or a fenced code block opens nothing. */
+ *  first `-->` after its `<!--`, across lines; one that starts its line and is
+ *  never closed runs to the end, but a mid-line `<!--` with no `-->` after it
+ *  is plain text. A `<!--` inside an inline code span or a fenced code block opens nothing. */
 function hidden(lines) {
   let open = false;
   let fence = null;
-  return lines.map((text) => {
+  // A `-->` after offset `at` of line `n`, or on a later line.
+  const closes = (n, at) => lines[n].indexOf('-->', at) >= 0 || lines.slice(n + 1).some((l) => l.includes('-->'));
+  return lines.map((text, n) => {
     if (!open) {
       const f = /^\s*(`{3,}|~{3,})/.exec(text);
       if (fence) {
@@ -56,6 +59,7 @@ function hidden(lines) {
       }
     }
     const hid = open || text.trimStart().startsWith('<!--');
+    const first = open ? -1 : text.length - text.trimStart().length;
     for (let at = 0; ; ) {
       if (open) {
         const i = text.indexOf('-->', at);
@@ -70,7 +74,7 @@ function hidden(lines) {
       if (!f) break;
       if (f[0] === '<!--') {
         at = f.index + 4;
-        open = true;
+        open = first === f.index || closes(n, at);
       } else {
         const close = text.indexOf(f[0], f.index + f[0].length);
         at = close < 0 ? f.index + f[0].length : close + f[0].length;
