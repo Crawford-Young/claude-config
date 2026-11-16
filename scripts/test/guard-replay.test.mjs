@@ -803,6 +803,15 @@ test('--prefixes marks a prefixed call guarded on a gated verb, a body edit or a
   assert.deepEqual(byPrefix(out), { command: 1, exec: 0, builtin: 0, env: 4 });
 });
 
+test('--prefixes counts a guarded verb only when a prefix runs it in the same simple command', () => {
+  const guardedOf = (cmd) => pTally(prefixes(config({ 's.jsonl': shell(cmd) })))['On a guarded verb'];
+  assert.equal(guardedOf('command git push origin x'), 1);
+  assert.equal(guardedOf('env -i A=1 gh pr merge 1'), 1);
+  assert.equal(guardedOf('command -v gh && gh pr create'), 0, 'the guarded verb is not behind the prefix');
+  assert.equal(guardedOf('env | grep X; git push'), 0);
+  assert.equal(guardedOf('command -v git'), 0);
+});
+
 test('--prefixes does not count an unprefixed guarded call as guarded-prefixed', () => {
   const out = prefixes(config({ 's.jsonl': [...shell('git push origin x'), ...shell('gh issue edit 1 --body x'), ...shell('env ls')] }));
   assert.deepEqual(pTally(out), P(1, 1, 0, 1));

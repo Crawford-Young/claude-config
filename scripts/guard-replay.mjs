@@ -694,6 +694,12 @@ function guarded(g, command, tool, cwd) {
   );
 }
 
+/** Is a guarded action the command a prefix runs, in that same simple command (pipeline stage)?
+ *  `command git push` is; `command -v gh && gh pr create` is not: the push sits in another stage. */
+function prefixedGuarded(g, command, tool, cwd) {
+  return g.clauses(g.scrub(command)).some((stage) => g.prefixCommands(stage).some((p) => PREFIXES.includes(p)) && guarded(g, stage, tool, cwd));
+}
+
 /** Every prefixed Bash/PowerShell call across the files; each tool_use id once. */
 function scanPrefixes(paths, g) {
   const seen = new Set();
@@ -724,7 +730,7 @@ function scanPrefixes(paths, g) {
         if (!used.length) continue;
         sessions.add(p);
         for (const w of new Set(used)) by[w]++;
-        hits.push({ command: c.input.command, tool: c.name, guarded: guarded(g, c.input.command, c.name, o.cwd ?? null) });
+        hits.push({ command: c.input.command, tool: c.name, guarded: prefixedGuarded(g, c.input.command, c.name, o.cwd ?? null) });
       }
     }
   }
