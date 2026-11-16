@@ -152,7 +152,7 @@ fixed false verdict; change them only with a test:
   missing/unreadable transcript or no approving record
   blocks with a message telling the model to ask via AskUserQuestion and
   retry. A non-gated command never reads the transcript.
-- **Issue-body edits (rule 13, #388)** — a `gh issue edit` with `-b`/`--body`/
+- **Issue-body edits (rule 13, #388, `hooks/issue-body.mjs`)** — a `gh issue edit` with `-b`/`--body`/
   `-F`/`--body-file` (attached short forms too) is compared with the issue's
   live body (`gh issue view <N> --json body`, `-R`/an issue URL's repo or the
   cwd's). An issue body is only ticked or added to: every non-blank live line
@@ -162,9 +162,10 @@ fixed false verdict; change them only with a test:
   rewrite. A body the guard can't read counts as a rewrite too (fail-closed):
   stdin, a substitution or variable, a live body gh can't fetch, a `GH_REPO`
   in the command with no `-R`/URL naming the repo, a `--body-file` unless the
-  edit is the command's only step (bar `cd`/`pushd` and a trailing redirect,
-  `tail` or `head`; an earlier step may write the file), and an unreadable
-  target. A `"$(cat <<'EOF' … EOF\n)"` heredoc body is read as its text; an
+  edit runs once (the other steps bar `cd`/`pushd` and a trailing redirect,
+  `tail` or `head` are later top-level pipelines, with no loop, function or
+  background `&` that could rerun it; an earlier step may write the file), and
+  an unreadable target. A `"$(cat <<'EOF' … EOF\n)"` heredoc body is read as its text; an
   unquoted `#…` word starts a shell comment and ends the call's words. A
   rewrite needs the push gate's approval mechanism with its own wording: an
   AskUserQuestion answer or typed prompt naming the issue (`#N`) with an act

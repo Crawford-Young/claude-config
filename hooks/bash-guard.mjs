@@ -69,7 +69,8 @@
 //      rewrite. A rewrite needs rule 8's approval mechanism with its own
 //      wording: an answer or typed prompt naming the issue (`#N`) with a
 //      rewrite act; each approval allows one rewrite per issue, spent in its
-//      own state file (issue-body.mjs holds the logic). A command with more
+//      own state file once every other check has passed (issue-body.mjs
+//      holds the logic). A command with more
 //      than one body edit needing approval is blocked outright. The block
 //      message points at `gh issue comment` for a correction.
 //
@@ -849,6 +850,7 @@ function walkCommands(raw, scope) {
     const job = pipeSeps[pi + 1] === '&';
     const before = scope.dir;
     const pipe = {};
+    const start = out.length;
     const blocks = [];
     const segs = clauses(p, false, null, blocks);
     for (const [seg, c] of segs.entries()) {
@@ -954,6 +956,9 @@ function walkCommands(raw, scope) {
       }
       out.push({ cmd, words: w, text: c, dir: scope.dir, tool: scope.tool, pipe, seg });
     }
+    // Every call this pipeline ran, nested ones too: an outer walk overwrites
+    // this, so `top` ends as the outermost pipeline the call runs in.
+    for (const o of out.slice(start)) o.top = pipe;
     if (job) {
       closeSubshells();
       scope.dir = before;
@@ -1658,12 +1663,9 @@ function trimState(state) {
   }
 }
 
-/** Has `verb` already been spent against approval `uuid`? Records it spent on
- *  first use, with the spending call's `toolUseId`. A prior spend whose call's
- *  tool_result errored is refunded first — the push never happened. Self-trims
- *  to the newest 200 approval uuids. */
-function spend(uuid, verb, file, toolUseId, transcriptPath) {
-  const state = readState(file);
+/** Approval `uuid`'s spent verbs in `state`, `verb` refunded when the call
+ *  that spent it errored; with the side-table and `verb`'s key in it. */
+function spends(state, uuid, verb, transcriptPath) {
   const ids = state[IDS_KEY] || {};
   const idKey = `${uuid}|${verb}`;
   let entry = state[uuid] || [];
@@ -1671,6 +1673,16 @@ function spend(uuid, verb, file, toolUseId, transcriptPath) {
     entry = entry.filter((v) => v !== verb);
     delete ids[idKey];
   }
+  return { entry, ids, idKey };
+}
+
+/** Has `verb` already been spent against approval `uuid`? Records it spent on
+ *  first use, with the spending call's `toolUseId`. A prior spend whose call's
+ *  tool_result errored is refunded first — the push never happened. Self-trims
+ *  to the newest 200 approval uuids. */
+function spend(uuid, verb, file, toolUseId, transcriptPath) {
+  const state = readState(file);
+  const { entry, ids, idKey } = spends(state, uuid, verb, transcriptPath);
   if (entry.includes(verb)) return true;
   state[uuid] = [...entry, verb];
   if (toolUseId) ids[idKey] = toolUseId;
@@ -1790,6 +1802,9 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
 
 // Wraps a heredoc body's placeholder in issueBodyReason's text.
 const HEREDOC_MARK = '\u0001';
+// Unquoted text that can run a step again or alongside: a loop or function
+// keyword, a `f()` definition, a ForEach, or a background `&` (not `&&`, `2>&1`, `&>`).
+const RUNS_AGAIN = /(?:^|[\s;&|({])(?:for|foreach|while|until|do|function|filter|ForEach-Object)(?![\w-])|\w\s*\(\s*\)|%\s*\{|\.ForEach\s*\(|(?<![&>|<])&(?![&>])/i;
 
 const rewriteRemedy = (n) =>
   `An issue body is only ticked or added to: put the correction in a comment instead (\`gh issue comment ${n ?? '<N>'} --body-file <file>\`). A rewrite needs the user's approval naming the issue (#${n ?? '<N>'}) — an AskUserQuestion answer ("rewrite #${n ?? '<N>'}") or a prompt they type themselves — which allows one rewrite; a message from an agent, a hook or a tool never approves.`;
@@ -1798,11 +1813,14 @@ const rewriteRemedy = (n) =>
  *  line of the issue's live body (bodyChange), or whose live or new body
  *  can't be read, needs the user's approval naming the issue; ticking a box
  *  and adding lines pass. The approval is the push gate's (latestApproval
- *  with rule 13's predicates), spent once per issue in its own state file.
- *  The live body is read only for a body edit; `deps.liveBody` replaces
- *  gh's read (tests). A body file is read only when the edit is the
- *  command's one step (bar location changes and a trailing tail/head): an
- *  earlier step may write it before gh reads it. In bash a
+ *  with rule 13's predicates), spent once per issue in its own state file —
+ *  or, given a `deps.pending` array, pushed onto it as a spend to run once
+ *  every other check has passed (a blocked command never spends). The live
+ *  body is read only for a body edit; `deps.liveBody` replaces gh's read
+ *  (tests). A body file is read only when every other step runs after gh
+ *  reads it — a trailing tail/head stage, or a later pipeline with no loop,
+ *  function or background job in the command (location changes don't
+ *  count): an earlier or concurrent step may write it first. In bash a
  *  "$(cat <<'EOF' … EOF\n)" body (HEREDOC_SUB) is read as its heredoc's text. */
 export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyStateFile(), toolUseId = undefined, tool = null, deps = {}) {
   const liveBody = deps.liveBody ?? liveIssueBody;
@@ -1819,6 +1837,9 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
     }
   }
   const all = commands(stripHeredocs(text), newScope(cwd, tool));
+  // A loop, function or background job may run a later step before (or
+  // beside) a body file's read: then no step runs safely after it.
+  const repeats = RUNS_AGAIN.test(stripHeredocs(text).replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
   // gh reads GH_REPO's repo over the cwd's; the guard doesn't follow it.
   const ghRepo = /\bGH_REPO\b/.test(raw);
   for (const c of all) {
@@ -1846,8 +1867,11 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
     }
     if (edit.body.file !== undefined) {
       const path = toDir(c.dir, edit.body.file);
-      const lone = all.every((o) => o === c || (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head)$/i.test(o.cmd)));
-      if (!lone) why = `its body file ${edit.body.file} is read before the command's other steps run, which may write it — run the edit in a Bash call of its own`;
+      // A trailing tail/head stage, or a later pipeline (`&& echo done`), runs
+      // once gh has read the file; any other step may write it first.
+      const at = all.indexOf(c);
+      const after = (o, i) => (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head)$/i.test(o.cmd)) || (i > at && o.top !== c.top && !repeats);
+      if (!all.every((o, i) => o === c || after(o, i))) why = `its body file ${edit.body.file} is read before the command's other steps run, which may write it — run the edit in a Bash call of its own`;
       else {
         try {
           next = readFileSync(typeof path === 'string' ? path : '', 'utf8');
@@ -1893,7 +1917,11 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
     return `${base} The transcript could not be read.`;
   }
   if (!record) return `${base} Neither the user's latest typed prompt nor their latest AskUserQuestion answer approves a rewrite of #${h.n} (a newer reply that doesn't approve overrides an older one that did).`;
-  if (spend(record.uuid, `issue-body #${h.n}`, stateFile, toolUseId, transcriptPath)) return `${base} That approval was already spent on a rewrite of #${h.n} — one rewrite per approval.`;
+  const verb = `issue-body #${h.n}`;
+  const spent = `${base} That approval was already spent on a rewrite of #${h.n} — one rewrite per approval.`;
+  if (!deps.pending) return spend(record.uuid, verb, stateFile, toolUseId, transcriptPath) ? spent : null;
+  if (spends(readState(stateFile), record.uuid, verb, transcriptPath).entry.includes(verb)) return spent;
+  deps.pending.push(() => (spend(record.uuid, verb, stateFile, toolUseId, transcriptPath) ? spent : null));
   return null;
 }
 
@@ -1953,11 +1981,13 @@ function guard(payload) {
   const cmd = payload?.tool_input?.command || '';
   const cwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
   const tool = payload?.tool_name;
-  // Push last: a blocked command never spends a push approval.
+  // Push last: a blocked command never spends a push approval. Rule 13
+  // decides here but spends at the end, once every check has passed.
+  const pending = [];
   const reason =
     staticCheck(cmd, cwd, tool) ||
     branchRules(cmd, cwd, tool) ||
-    issueBodyReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool) ||
+    issueBodyReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool, { pending }) ||
     pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool);
   if (reason) block(reason);
   // Last, so a command another rule blocks never spends the clearance.
@@ -1970,6 +2000,10 @@ function guard(payload) {
         `A shell-launched claude on "${billed}" is usage-billed and needs per-run user clearance: ask the user to reply with "FABLE OK" (grants one billed act for 30 minutes), then re-run.`,
       );
     }
+  }
+  for (const settle of pending) {
+    const spent = settle();
+    if (spent) block(spent);
   }
 }
 

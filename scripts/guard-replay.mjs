@@ -555,7 +555,7 @@ function windowLine(files, first, last, calls) {
 
 const BODY_FLAG = /^(?:(?:-b|-F|--body|--body-file)(?:=|$)|-[bF].)/;
 /** gh issue edit flags that take a separate value, so the value is not the issue target. */
-const EDIT_VALUE_FLAGS = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-R', '--repo', '-a', '--add-assignee', '-l', '--add-label', '-m', '--milestone', '--add-project', '--remove-assignee', '--remove-label', '--remove-milestone', '--remove-project']);
+const EDIT_VALUE_FLAGS = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-R', '--repo', '-a', '--add-assignee', '-l', '--add-label', '-m', '--milestone', '--add-project', '--remove-assignee', '--remove-label', '--remove-project', '--type', '--parent', '--add-blocked-by', '--remove-blocked-by', '--add-blocking', '--remove-blocking', '--add-sub-issue', '--remove-sub-issue']);
 
 /** A ref-shaped token: `5`, `#5`, an `…/issues/5` URL or a `$var` placeholder; a redirection or flag is not a target. */
 const REF_TOKEN = /^(?:#?\d+|\S*\/issues\/\d+|\$\w+|\$\{\w+\})$/;
@@ -585,6 +585,33 @@ function editTargets(args) {
   return refs;
 }
 
+/** `command` less its shell comments: an unquoted `#` opening a word runs to
+ *  the line's end, as in bash and PowerShell (rule 13 reads it the same way).
+ *  The escape is `\` in bash, `` ` `` in PowerShell. */
+function stripComments(command, tool) {
+  const esc = tool === 'PowerShell' ? '`' : '\\';
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === esc && quote !== "'") {
+      out += command.slice(i, i + 2);
+      i++;
+    } else if (quote) {
+      if (ch === quote) quote = null;
+      out += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      out += ch;
+    } else if (ch === '#' && (i === 0 || /[\s;&|()<>]/.test(command[i - 1]))) {
+      const eol = command.indexOf('\n', i);
+      if (eol < 0) break;
+      i = eol - 1;
+    } else out += ch;
+  }
+  return out;
+}
+
 /** Every `gh issue edit --body/--body-file` call across the files, by transcript. */
 function scanBodyEdits(paths, g) {
   const seen = new Set();
@@ -610,7 +637,7 @@ function scanBodyEdits(paths, g) {
         if (c?.type !== 'tool_use' || (c.id !== undefined && seen.has(c.id)) || (c.name !== 'Bash' && c.name !== 'PowerShell') || typeof c.input?.command !== 'string') continue;
         if (c.id !== undefined) seen.add(c.id);
         calls++;
-        const hits = g.ghCalls(g.scrub(c.input.command), o.cwd ?? null, c.name).filter((x) => x.sub === 'issue' && x.action === 'edit' && x.args.some((a) => BODY_FLAG.test(a)));
+        const hits = g.ghCalls(stripComments(g.scrub(c.input.command), c.name), o.cwd ?? null, c.name).filter((x) => x.sub === 'issue' && x.action === 'edit' && x.args.some((a) => BODY_FLAG.test(a)));
         if (!hits.length) continue;
         sessions.add(p);
         for (const h of hits) edits.push({ command: c.input.command, tool: c.name, targets: editTargets(h.args) });

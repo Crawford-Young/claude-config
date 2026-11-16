@@ -62,7 +62,7 @@ export function literal(raw, tool = null) {
 }
 
 // `gh issue edit`'s options that take a value (the rest are switches).
-const VALUE = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-m', '--milestone', '-R', '--repo', '--add-assignee', '--remove-assignee', '--add-label', '--remove-label', '--add-project', '--remove-project']);
+const VALUE = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-m', '--milestone', '-R', '--repo', '--add-assignee', '--remove-assignee', '--add-label', '--remove-label', '--add-project', '--remove-project', '--type', '--parent', '--add-blocked-by', '--remove-blocked-by', '--add-blocking', '--remove-blocking', '--add-sub-issue', '--remove-sub-issue']);
 const SHORT_VALUE = /^(-[bFtmR])=?(.+)$/s;
 // A redirect (`2>&1`, `>out`, `<<'EOF'`), and one whose target is the next word (`>`, `2>>`, `<<`).
 const REDIRECT = /^(?:\d*|&)[<>]/;
@@ -86,7 +86,8 @@ function target(word) {
  *  `{ number, repo }` per issue named, null for a word the guard can't read
  *  as one (an empty list names none); `-R`/`--repo` beats a URL's repo.
  *  `body` is `{ text }`, `{ file }`, or `{ why }` when it can't be read.
- *  gh takes the last body flag. An unquoted word starting `#` opens a shell
+ *  gh takes the last body flag; a body flag with no value word is an empty
+ *  body (or an unread file), never no edit. An unquoted word starting `#` opens a shell
  *  comment: it and every word after it are no part of the call. */
 export function bodyEdit(args, raw, tool = null) {
   const comment = raw === null ? -1 : raw.findIndex((r) => r.startsWith('#'));
@@ -126,6 +127,9 @@ export function bodyEdit(args, raw, tool = null) {
     if (a.startsWith('--') && eq > 0 && VALUE.has(a.slice(0, eq))) value(a.slice(0, eq), i, eq + 1);
     else if (VALUE.has(a)) {
       if (i + 1 < args.length) value(a, ++i, 0);
+      // No value word: the parse drops a trailing empty one (`--body ''`), so it reads as an empty body.
+      else if (a === '-b' || a === '--body') body = { text: '' };
+      else if (a === '-F' || a === '--body-file') body = { why: 'its --body-file names no file' };
     } else if (short && !a.startsWith('--')) value(short[1], i, a.length - short[2].length);
     else if (!a.startsWith('-') && positional++ >= 2) words.push(a);
   }

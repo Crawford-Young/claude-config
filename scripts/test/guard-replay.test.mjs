@@ -692,9 +692,9 @@ test('--body-edits R1: a $n placeholder still counts as a target', () => {
   assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 });
 });
 
-test('--body-edits R3: #5, 5 and an issue URL with -R o/r are one target', () => {
+test("--body-edits R3: a quoted '#5', 5 and an issue URL with -R o/r are one target", () => {
   const rows = [
-    ...shell('gh issue edit #5 -R o/r --body x'),
+    ...shell("gh issue edit '#5' -R o/r --body x"),
     ...shell('gh issue edit 5 -R o/r --body x'),
     ...shell('gh issue edit https://github.com/o/r/issues/5 -R o/r --body x'),
   ];
@@ -702,8 +702,29 @@ test('--body-edits R3: #5, 5 and an issue URL with -R o/r are one target', () =>
   assert.deepEqual(tally(out), { 'Body-edit calls': 3, 'Unique commands': 3, Sessions: 1, 'Issue targets': 1 });
 });
 
+test('--body-edits R3: an unquoted #5 starts a shell comment, so it is no target (as in bash and rule 13)', () => {
+  const out = edits(config({ 's.jsonl': shell('gh issue edit #5 --body x') }));
+  assert.equal(tally(out)['Issue targets'], 0);
+  const tail = edits(config({ 's.jsonl': shell('gh issue edit 7 --body x # tick #9') }));
+  assert.deepEqual(tally(tail), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 });
+});
+
 test('--body-edits R3: an attached -Ro/r keys the same target as -R o/r', () => {
   const rows = [...shell('gh issue edit 5 -Ro/r --body x'), ...shell('gh issue edit 5 -R o/r --body x')];
   const out = edits(config({ 's.jsonl': rows }));
   assert.deepEqual(tally(out), { 'Body-edit calls': 2, 'Unique commands': 2, Sessions: 1, 'Issue targets': 1 });
+});
+
+// ---- --body-edits: target counts follow gh's flag arity (#388 review) ----
+
+test('--body-edits: a relationship or type flag value is not an issue target', () => {
+  for (const flag of ['--type bug', '--parent 99', '--add-blocked-by 13', '--remove-blocked-by 13', '--add-blocking 13', '--remove-blocking 13', '--add-sub-issue 13', '--remove-sub-issue 13']) {
+    const out = edits(config({ 's.jsonl': shell(`gh issue edit 12 ${flag} --body x`) }));
+    assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 }, flag);
+  }
+});
+
+test('--body-edits: --remove-milestone is a switch, so the number after it is a target', () => {
+  const out = edits(config({ 's.jsonl': [...shell('gh issue edit --remove-milestone 12 --body x'), ...shell('gh issue edit 13 --remove-milestone --body x')] }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 2, 'Unique commands': 2, Sessions: 1, 'Issue targets': 2 });
 });

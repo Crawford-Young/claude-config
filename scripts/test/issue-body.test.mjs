@@ -4,8 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tempDir } from './_spawn.mjs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnHarness, tempDir } from './_spawn.mjs';
 import * as guard from '../../hooks/bash-guard.mjs';
 import { bodyChange, issueBodyStateFile } from '../../hooks/issue-body.mjs';
 
@@ -686,4 +687,102 @@ test('G16: recasing an already-ticked box passes, un-ticking and rewording do no
   assert.equal(change('1. [X] done', '1. [x] done'), null);
   assert.equal(change('- [X] done', '- [ ] done').line, '- [X] done');
   assert.equal(change('- [X] done', '- [x] done changed').line, '- [X] done');
+});
+
+// ---- review gaps: empty last-word body, spend ordering, trailing commands, end to end -------------
+
+test('a body flag with no value word blocks (fail closed), however the empty body is spelled', () => {
+  for (const [cmd, tool] of [
+    ["gh issue edit 12 --body ''", null],
+    ['gh issue edit 12 --body ""', null],
+    ["gh issue edit 12 -b ''", null],
+    ["gh issue edit 12 --body ''", 'PowerShell'],
+    ['gh issue edit 12 --body', null],
+  ]) {
+    const t = tmp();
+    const r = guard.issueBodyReason(cmd, t.dir, join(t.dir, 'none.jsonl'), t.state, undefined, tool, { liveBody: liveSync(ONE) });
+    assert.ok(r, `${tool ?? 'Bash'}: ${cmd} must block`);
+    assert.match(r, /12/);
+    assert.match(r, /gh issue comment/, 'points at the comment remedy');
+  }
+});
+
+test('an empty body, as the last word, is spent against an approval like any rewrite', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, answerRec({ q: 'Yes, rewrite #12' }));
+  assert.equal(gate(t, tr, "gh issue edit 12 --body ''"), null, 'approved once');
+  assert.match(gate(t, tr, "gh issue edit 12 --body ''") || '', /spent|already/i);
+});
+
+test('a body-file edit followed by a separate command passes when it only ticks a box', () => {
+  const t = tmp();
+  writeFileSync(join(t.dir, 'b.md'), TICKED_ONE);
+  for (const tail of ['&& echo done', '; echo done', '|| true']) {
+    assert.equal(ruled(`gh issue edit 12 --body-file b.md ${tail}`, UNTICKED_ONE, { cwd: t.dir }), null, tail);
+  }
+});
+
+// The hook process end to end: bash-guard.mjs fed a PreToolUse payload on stdin.
+const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'hooks', 'bash-guard.mjs');
+const LIVE_STUB = '## Goal\nShip it.\n\n## Done when\n- [ ] one\n- [ ] two\n';
+
+function hookRun(command, { tool = 'Bash', transcript, home, id = 'toolu_e2e' } = {}) {
+  const h = home ?? tempDir('ib-home-');
+  mkdirSync(join(h, '.claude'), { recursive: true });
+  writeFileSync(join(h, '.claude', 'issue-body-stub.md'), LIVE_STUB);
+  const cwd = tempDir('ib-cwd-');
+  const payload = { tool_name: tool, tool_input: { command }, cwd, transcript_path: transcript ?? join(cwd, 'none.jsonl'), tool_use_id: id };
+  const r = spawnHarness(HOOK, [], { home: h, input: JSON.stringify(payload) });
+  return { rc: r.status, err: r.stderr || '', home: h, state: join(h, '.claude', 'issue-body-approvals.json') };
+}
+
+test('hook process: a reworded --body exits 2 and a box tick exits 0, against the stubbed live body', () => {
+  const reworded = '## Goal\nShip it now.\n\n## Done when\n- [ ] one\n- [ ] two';
+  const ticked = '## Goal\nShip it.\n\n## Done when\n- [x] one\n- [ ] two';
+  const bad = hookRun(`gh issue edit 12 --body "${reworded}"`);
+  assert.equal(bad.rc, 2, bad.err);
+  assert.match(bad.err, /Ship it\./);
+  assert.equal(hookRun(`gh issue edit 12 --body "${ticked}"`).rc, 0);
+  assert.equal(hookRun("gh issue edit 12 --body ''").rc, 2, 'an empty body blocks');
+});
+
+test('hook process: a command another rule blocks spends no body approval', () => {
+  const t = tmp();
+  const tr = transcriptOf(t.dir, answerRec({ q: 'Yes, rewrite #12' }));
+  const reworded = '## Goal\nShip it now.\n\n## Done when\n- [ ] one\n- [ ] two';
+  const first = hookRun(`gh issue edit 12 --body "${reworded}" && git push origin feat`, { transcript: tr, id: 'toolu_blocked' });
+  assert.equal(first.rc, 2, 'the push gate blocks it (no push approval)');
+  const spent = existsSync(first.state) ? readFileSync(first.state, 'utf8') : '';
+  assert.ok(!spent.includes('issue-body #12'), `the #12 approval is still unspent, state: ${spent}`);
+  const retry = hookRun(`gh issue edit 12 --body "${reworded}"`, { transcript: tr, home: first.home, id: 'toolu_retry' });
+  assert.equal(retry.rc, 0, retry.err);
+});
+
+// ---- gh issue edit value flags the parser must know (#388 review) ----
+
+const VALUE_FLAGS = ['--type bug', '--parent 99', '--add-blocked-by 13', '--remove-blocked-by 13', '--add-blocking 13', '--remove-blocking 13', '--add-sub-issue 13', '--remove-sub-issue 13'];
+
+test('a value flag with an issue number does not hide the edited issue: a box tick passes', () => {
+  for (const flag of VALUE_FLAGS) {
+    for (const cmd of [`gh issue edit 12 ${flag} --body "- [x] one"`, `gh issue edit ${flag} 12 --body "- [x] one"`]) {
+      assert.equal(reason(cmd, '- [ ] one'), null, cmd);
+    }
+  }
+});
+
+test('a value flag with an issue number does not count as a second rewritten issue', () => {
+  for (const flag of VALUE_FLAGS) {
+    const t = tmp();
+    const tr = transcriptOf(t.dir, answerRec({ q: 'Yes, rewrite #12' }));
+    const cmd = `gh issue edit 12 ${flag} --body "${REWORD}"`;
+    assert.equal(gate(t, tr, cmd), null, cmd);
+  }
+});
+
+test('a value flag with an issue number still blocks a rewording of the one issue', () => {
+  for (const flag of VALUE_FLAGS) {
+    const r = reason(`gh issue edit 12 ${flag} --body "${REWORD}"`, ONE);
+    assert.ok(r, flag);
+    assert.doesNotMatch(r, /can't read which issue/, flag);
+  }
 });

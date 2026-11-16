@@ -668,7 +668,7 @@
    "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106); --by-rule counts the live bash-guard blocks per rule (#368); --body-edits counts past gh issue edit body calls and their issue targets (#388).",
    "rules": [
     "Run before a guard or approval-parser PR",
-    "Report only, exit 0; local transcripts, never CI"
+    "Report only: exit 0 with the verdicts, exit 1 with a stderr line only when the script itself fails; local transcripts, never CI"
    ]
   },
   {
@@ -736,6 +736,14 @@
    "label": "push-gate-approvals.json",
    "file": "~/.claude/push-gate-approvals.json",
    "summary": "Per push approval (keyed by transcript record uuid): the verbs it has spent (#75), or the repo#branch it is bound to with its calls' tool_use_ids, create and merge (#305). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
+   "external": true
+  },
+  {
+   "id": "store:issue-body-approvals",
+   "kind": "store",
+   "label": "issue-body-approvals.json",
+   "file": "~/.claude/issue-body-approvals.json",
+   "summary": "Per issue-body rewrite approval (keyed by transcript record uuid): the `issue-body #N` verbs it has spent (#388), one rewrite per approval. CLAUDE_ISSUE_BODY_STATE overrides the path.",
    "external": true
   },
   {
@@ -1469,6 +1477,12 @@
    "to": "store:push-gate-approvals",
    "kind": "writes",
    "label": "rule 8: spends the approval per verb"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "store:issue-body-approvals",
+   "kind": "writes",
+   "label": "rule 13: spends the approval per issue"
   },
   {
    "from": "store:settings-json",
