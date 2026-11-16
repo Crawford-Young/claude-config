@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isolatedEnv, spawnHarness, tempDir } from './_spawn.mjs';
-import { acquireSuiteLock, discoverGates, gateVerdict, holderState, lockDir, procStart, releaseOnExit } from '../qa.mjs';
+import { acquireSuiteLock, discoverGates, failLines, gateVerdict, holderState, lockDir, procStart, releaseOnExit } from '../qa.mjs';
 
 const qaScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'qa.mjs');
 
@@ -69,26 +69,53 @@ test('a node --test gate with no "tests N" (N>=1) line fails even on exit 0', ()
   assert.equal(gateVerdict({ name: 'lint', cmd: 'pnpm lint' }, 0, '').ok, true);
 });
 
-/** Every `run:` step of a workflow as one command: the line itself, or a `run: |` block's first line, minus a redirect or `||` tail. */
+/** Every `run:` step of a workflow: `cmd` is the line itself, or a `run: |` block's first line, minus a redirect or `||` tail; `block` is every non-blank line of a `run: |` block, trimmed (null for a one-line step). */
 function ciRunSteps(yml) {
   const lines = yml.split(/\r?\n/);
   const steps = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = /^\s*(?:- )?run:\s*(.*)$/.exec(lines[i]);
+    const m = /^(\s*(?:- )?)run:\s*(.*)$/.exec(lines[i]);
     if (!m) continue;
-    let cmd = m[1].trim();
-    if (/^[|>][+-]?$/.test(cmd)) cmd = (lines.slice(i + 1).find((l) => l.trim()) ?? '').trim();
-    steps.push(cmd.replace(/\s*(?:\|\||>).*$/, '').trim());
+    let cmd = m[2].trim();
+    let block = null;
+    if (/^[|>][+-]?$/.test(cmd)) {
+      const keyIndent = m[1].length;
+      block = [];
+      for (const l of lines.slice(i + 1)) {
+        if (l.trim() && l.length - l.trimStart().length <= keyIndent) break;
+        if (l.trim()) block.push(l.trim());
+      }
+      cmd = block[0] ?? '';
+    }
+    steps.push({ cmd: cmd.replace(/\s*(?:\|\||>).*$/, '').trim(), block });
   }
   return steps;
+}
+/** ci.yml's "Test suite" block, line for line: qa.mjs runs only its first command; the `tests N` guard is gateVerdict's job. */
+const TEST_SUITE_BLOCK = [
+  'node --test "scripts/test/*.test.mjs" > test-output.txt 2>&1 || {',
+  'cat test-output.txt',
+  'exit 1',
+  '}',
+  'cat test-output.txt',
+  "grep -qE '^ℹ tests [1-9]' test-output.txt || {",
+  'echo "::error::No tests ran — the glob matched nothing."',
+  'exit 1',
+  '}',
+];
+/** Parity of qa's gate commands with a workflow: the same commands in order, and the multi-line block unchanged. */
+function assertCiParity(yml, gates) {
+  const steps = ciRunSteps(yml);
+  assert.deepEqual(gates, steps.map((s) => s.cmd), 'ci.yml run steps differ from qa.mjs gates: change both together');
+  assert.deepEqual(steps.filter((s) => s.block).map((s) => s.block), [TEST_SUITE_BLOCK], 'a ci.yml `run: |` block changed: update TEST_SUITE_BLOCK in qa.test.mjs (and qa.mjs if a command changed)');
 }
 const ciPath = join(dirname(qaScript), '..', '.github', 'workflows', 'ci.yml');
 const qaCmds = () => discoverGates(join(dirname(qaScript), '..')).map((g) => g.cmd);
 
 test('qa gates for this repo run exactly the commands ci.yml runs (#395)', () => {
-  const ciCmds = ciRunSteps(readFileSync(ciPath, 'utf8'));
-  assert.ok(ciCmds.length >= 4, ciCmds.join(' | '));
-  assert.deepEqual(qaCmds(), ciCmds);
+  const ci = readFileSync(ciPath, 'utf8');
+  assert.ok(ciRunSteps(ci).length >= 4);
+  assertCiParity(ci, qaCmds());
 });
 
 test('the CI-parity extraction sees every kind of run step, so any CI change breaks parity (#413)', () => {
@@ -96,7 +123,7 @@ test('the CI-parity extraction sees every kind of run step, so any CI change bre
   const gates = qaCmds();
   const parity = (yml) => {
     try {
-      assert.deepEqual(gates, ciRunSteps(yml));
+      assertCiParity(yml, gates);
       return true;
     } catch {
       return false;
@@ -115,15 +142,73 @@ test('the CI-parity extraction sees every kind of run step, so any CI change bre
   assert.equal(parity(ci.replace(fm, '@@').replace(hm, fm).replace('@@', hm)), false, 'reordered node steps');
 });
 
-test('CLI: a red stamps gate prints its stale-stamp lines on the console (#413)', () => {
-  const line = 'agents/x.md:1 names Fable 4.0, older than Fable 5.2';
-  const stamps = `console.log(${JSON.stringify(line)});console.log('second stale line');process.exit(1);`;
-  const r = spawnHarness(qaScript, [repo({ '.git': '', 'scripts/audit.mjs': stamps })], { env: { CLAUDE_QA_LOCK_DIR: join(tempDir('qa-lock-'), 'lock') } });
-  const out = `${r.stdout}${r.stderr}`;
-  assert.equal(r.status, 1, out);
+test('the CI-parity test notices a change inside the multi-line "Test suite" block (#425)', () => {
+  const ci = readFileSync(ciPath, 'utf8');
+  const gates = qaCmds();
+  const parity = (yml) => {
+    try {
+      assertCiParity(yml, gates);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const guard = ci.split(/\r?\n/).find((l) => l.includes('grep -qE'));
+  assert.ok(guard, 'ci.yml has the grep -qE guard');
+  const indent = guard.match(/^\s*/)[0];
+  assert.equal(parity(ci), true);
+  assert.equal(parity(ci.replace(guard, `${indent}npx x\n${guard}`)), false, 'npx x added inside the block');
+  assert.equal(parity(ci.replace(guard, `${guard}\n${indent}npx x`)), false, 'npx x appended inside the block');
+  assert.equal(parity(ci.replace(`${guard}\n`, '')), false, 'guard line removed');
+  assert.equal(parity(ci.replace(guard, guard.replace('grep -qE', 'grep -q'))), false, 'guard weakened');
+  // a sibling key of `run:` (same indent) ends the block: it is not a command line
+  const all = ci.split(/\r?\n/);
+  const end = all.indexOf(`${indent}}`, all.indexOf(guard));
+  assert.ok(end > 0, 'the block closes with a } line');
+  const withEnv = [...all.slice(0, end + 1), `${indent.slice(2)}env:`, `${indent}CI: 1`, ...all.slice(end + 1)].join('\n');
+  assert.equal(parity(withEnv), true, 'env: after the block');
+});
+
+test('the pre-#413 extraction cannot see an added step, so the mutation case needs the all-steps one (#425)', () => {
+  const legacy = (yml) => [...yml.matchAll(/^\s+(?:run: |)(node (?:--test|scripts\/)[^\n>]*?)\s*(?:>.*)?$/gm)].map((m) => m[1].trim());
+  const ci = readFileSync(ciPath, 'utf8');
+  const added = `${ci}\n      - run: node scripts/new.mjs\n`;
+  assert.deepEqual(legacy(added), legacy(ci), 'the old extraction reads the added node step as no change');
+  assert.notDeepEqual(ciRunSteps(added).map((s) => s.cmd), qaCmds());
+});
+
+test('CLI: the real audit.mjs --stamps on a stale-stamp repo goes red and its finding reaches the console (#425)', () => {
+  const real = pathToFileURL(join(dirname(qaScript), 'audit.mjs')).href;
+  // The fixture's audit.mjs aims the real script at the fixture as --repo and imports it, so qa's own gate command runs the real stamp check.
+  const shim = `process.argv.push('--repo', process.cwd());
+await import(${JSON.stringify(real)});
+`;
+  const fixture = (stamp) => repo({ '.git': '', 'scripts/audit.mjs': shim, 'agents/ROUTING.md': `rule (verified: 2026-08, ${stamp})\n` });
+  const run = (r) => spawnHarness(qaScript, [r], { env: { CLAUDE_QA_LOCK_DIR: join(tempDir('qa-lock-'), 'lock') } });
+  const stale = run(fixture('Opus 4.7'));
+  const out = `${stale.stdout}${stale.stderr}`;
+  assert.equal(stale.status, 1, out);
   assert.match(out, /EXIT:1 stamps/);
-  assert.ok(out.includes(`  ${line}`), out);
-  assert.ok(out.includes('  second stale line'), out);
+  const finding = /^ {2}agents\/ROUTING\.md:1 names Opus 4\.7, older than the current opus (\S+) in prices\.json/m.exec(out);
+  assert.ok(finding, out);
+  // The fresh stamp is the generation the finding names, so a newer opus in prices.json does not break this test.
+  const clean = run(fixture(`Opus ${finding[1]}`));
+  assert.equal(clean.status, 0, `${clean.stdout}${clean.stderr}`);
+});
+
+test('failLines: the stamps gate keeps every non-blank line, other gates only failure-looking ones, both capped at 40 (#425)', () => {
+  const stamps = { name: 'stamps' };
+  assert.deepEqual(failLines(stamps, 'a.md:1 names X 1\n\n  \nb.md:2 names Y 2\n'), ['a.md:1 names X 1', 'b.md:2 names Y 2']);
+  const other = { name: 'test' };
+  assert.deepEqual(failLines(other, 'ok line\nboom: Error here\n✕ case\n× case2\n✗ case3\nFAILED x\nfine\n'), ['boom: Error here', '✕ case', '× case2', '✗ case3', 'FAILED x']);
+  assert.deepEqual(failLines(other, 'all good\n'), []);
+  // a crashed audit prints a stack trace, not findings: the stamps gate still shows it (non-stamp noise), capped
+  const crash = ['file:///x/audit.mjs:9', 'throw new Error("boom")', ...Array.from({ length: 60 }, (_, i) => `    at frame${i}`)].join('\n');
+  const shown = failLines(stamps, crash);
+  assert.equal(shown.length, 40);
+  assert.equal(shown[0], 'file:///x/audit.mjs:9');
+  assert.equal(shown[39], '    at frame37');
+  assert.equal(failLines(other, Array.from({ length: 60 }, (_, i) => `error ${i}`).join('\n')).length, 40);
 });
 
 test('CLI: a red non-stamps gate still prints only its failure-looking lines (#413)', () => {
