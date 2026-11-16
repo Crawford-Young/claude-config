@@ -104,9 +104,26 @@ export function isBunRepo(dir) {
   return ['bun.lock', 'bun.lockb'].some((f) => existsSync(join(dir, f)));
 }
 
-/** [bin, ...args] that installs dependencies in dir: bun in a Bun repo, else pnpm. */
+/** pnpm 10 used for repos that rely on the `pnpm` package.json field, which pnpm 11 ignores (#363). */
+export const PNPM_10_FALLBACK = '10.33.0';
+
+/**
+ * [bin, ...args] that installs dependencies in dir: bun in a Bun repo; pnpm 10 via npx for a
+ * repo with a `pnpm` field and no pnpm-11 `packageManager` (corepack would otherwise resolve
+ * pnpm 11 and silently drop `pnpm.overrides`); else plain pnpm.
+ */
 export function installCommand(dir) {
-  return [isBunRepo(dir) ? 'bun' : 'pnpm', 'install'];
+  if (isBunRepo(dir)) return ['bun', 'install'];
+  let pkg = {};
+  try {
+    pkg = JSON.parse(readIfExists(join(dir, 'package.json')) || '{}') ?? {};
+  } catch {
+    // unreadable package.json: plain pnpm
+  }
+  if (pkg.pnpm == null) return ['pnpm', 'install'];
+  const m = /^pnpm@((\d+)\.[^+\s]*)/.exec(String(pkg.packageManager ?? ''));
+  if (m && Number(m[2]) >= 11) return ['pnpm', 'install'];
+  return ['npx', '-y', `pnpm@${m ? m[1] : PNPM_10_FALLBACK}`, 'install'];
 }
 
 /** Env-file names to copy into a new worktree when no .worktreeinclude exists. */
