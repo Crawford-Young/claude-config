@@ -24,7 +24,7 @@
 
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   DEFAULT_ENV_FILES,
@@ -32,6 +32,7 @@ import {
   die,
   git,
   gitOrDie,
+  isRepo,
   log,
   installCommand,
   isMain,
@@ -47,8 +48,22 @@ import {
 const args = parseArgs(process.argv.slice(2));
 const cmd = args._[0];
 
+/** A repo argument: an absolute or ./ ../ path resolves against the cwd; a bare name
+ *  (`claude-config`, `web/site`) against the workspace root, then its web/games/apps
+ *  folders, so no cwd is required (#423). */
+function repoArg(p) {
+  if (p && !isAbsolute(p) && !/^\.{1,2}([\\/]|$)/.test(p)) {
+    const root = workspaceRoot();
+    for (const base of [root, ...['web', 'games', 'apps'].map((d) => join(root, d))]) {
+      if (isRepo(join(base, p))) return join(base, p);
+    }
+    if (!isRepo(resolve(p))) die(`not a git repository: ${p} (looked under ${root}, its web/games/apps folders, and the cwd)`);
+  }
+  return resolveRepo(p);
+}
+
 function cmdNew() {
-  const repo = resolveRepo(args._[1]);
+  const repo = repoArg(args._[1]);
   const slug = args._[2];
   if (!slug) die('usage: worktree.mjs new <repo> <slug> [--branch <name>] [--install]');
 
@@ -377,7 +392,7 @@ function holderMessage(wtPath, e) {
 function cmdList() {
   const targets = [];
   if (args._[1]) {
-    targets.push(resolveRepo(args._[1]));
+    targets.push(repoArg(args._[1]));
   } else {
     const root = workspaceRoot();
     for (const domain of ['web', 'games', 'apps']) {

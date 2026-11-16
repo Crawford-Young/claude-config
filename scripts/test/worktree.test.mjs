@@ -59,6 +59,40 @@ test('new copies env files and cuts clean from origin/main; remove cleans up', (
   assert.doesNotMatch(list, /app-demo/);
 });
 
+test('new resolves a bare repo name against the workspace root from any cwd; ./ and absolute paths stay cwd-relative (#423)', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  const elsewhere = tempDir('wt-elsewhere-');
+  const wtOf = (slug) => join(root, '.worktrees', `app-${slug}`);
+
+  // Two cwds: inside the repo itself, and an unrelated directory outside the workspace.
+  for (const [slug, cwd] of [['inrepo', repo], ['outside', elsewhere]]) {
+    const r = spawnHarness(script, ['new', 'app', slug], { cwd, env });
+    assert.equal(r.status, 0, `cwd ${cwd}: ${r.stderr}`);
+    assert.ok(existsSync(wtOf(slug)), `worktree for ${slug} under the workspace root`);
+  }
+
+  // A repo under a domain folder is found by bare name too.
+  mkdirSync(join(root, 'web'));
+  sh(root, 'git', ['clone', join(root, 'origin.git'), join(root, 'web', 'site')]);
+  const d = spawnHarness(script, ['new', 'site', 'dom'], { cwd: elsewhere, env });
+  assert.equal(d.status, 0, d.stderr);
+  assert.ok(existsSync(join(root, '.worktrees', 'site-dom')), 'domain-folder repo found');
+
+  // Explicit paths keep resolving against the cwd.
+  const rel = spawnHarness(script, ['new', './app', 'rel'], { cwd: root, env });
+  assert.equal(rel.status, 0, rel.stderr);
+  assert.ok(existsSync(wtOf('rel')));
+  const abs = spawnHarness(script, ['new', repo, 'abs'], { cwd: elsewhere, env });
+  assert.equal(abs.status, 0, abs.stderr);
+  assert.ok(existsSync(wtOf('abs')));
+
+  const missing = spawnHarness(script, ['new', 'nope', 'x'], { cwd: elsewhere, env });
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /not a git repository/);
+});
+
 test('remove unlocks a locked worktree so git no longer lists it afterwards (#352)', () => {
   const root = tempDir('wt-');
   const repo = makeRepoWithOrigin(root);
