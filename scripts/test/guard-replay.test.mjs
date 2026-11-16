@@ -541,3 +541,169 @@ test('--by-rule replays the current static rules over every unique command, bloc
   const cfg = config({ 's.jsonl': [...shell('pnpm test | tail -3'), ...shell('pnpm test | tail -3'), ...shell('ls')] });
   assert.match(run(cfg, '--by-rule', repoRoot), /^\| 3 \| [^|]+ \| 0 \| 0 \| 0 \| 0 \| 1 \|$/m);
 });
+
+// ---- --body-edits (#388): count past `gh issue edit --body/--body-file` calls ----
+// Pinned output (markdown, stdout, rc 0):
+//   # Past issue-body edits
+//   Window: <first> → <last> (<n> days); <n> transcript files (<m> main, <s> subagent); <n> Bash/PowerShell calls
+//   - Body-edit calls: N
+//   - Unique commands: N
+//   - Sessions: N
+//   - Issue targets: N
+//   --full adds `## Every unique command (N)` then each command redacted and indented 4 spaces.
+
+const edits = (cfg, ...args) => run(cfg, '--body-edits', repoRoot, ...args);
+const tally = (out) => Object.fromEntries([...out.matchAll(/^- (Body-edit calls|Unique commands|Sessions|Issue targets): (\d+)$/gm)].map((m) => [m[1], Number(m[2])]));
+
+test('--body-edits counts every body-edit flag shape, across bash -c and the PowerShell tool', () => {
+  const rows = [
+    ...shell('gh issue edit 1 --body "new text"'),
+    ...shell('gh issue edit 2 --body-file notes.md'),
+    ...shell('gh issue edit 3 -F notes.md'),
+    ...shell('gh issue edit 4 -b "short"'),
+    ...shell('gh issue edit 5 --body=inline'),
+    ...shell('gh issue edit 6 --body-file=notes.md'),
+    ...shell('bash -c "gh issue edit 7 --body x"'),
+    ...shell('gh issue edit 8 --body x', { tool: 'PowerShell' }),
+  ];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.match(out, /^# Past issue-body edits$/m);
+  assert.match(out, /^Window: 2026-10-01 → 2026-10-01 \(1 days?\); 1 transcript files \(1 main, 0 subagent\); 8 Bash\/PowerShell calls$/m);
+  assert.deepEqual(tally(out), { 'Body-edit calls': 8, 'Unique commands': 8, Sessions: 1, 'Issue targets': 8 });
+});
+
+test('--body-edits counts a repeated command twice but lists it once, and counts sessions and targets distinctly', () => {
+  const same = 'gh issue edit 5 --body-file notes.md';
+  const other = 'gh issue edit 7 -R o/r -F f.md';
+  const cfg = config({
+    'a.jsonl': [...shell(same), ...shell(same)],
+    'b.jsonl': [...shell(other)],
+  });
+  const out = edits(cfg);
+  assert.match(out, /; 2 transcript files \(2 main, 0 subagent\); 3 Bash\/PowerShell calls$/m);
+  assert.deepEqual(tally(out), { 'Body-edit calls': 3, 'Unique commands': 2, Sessions: 2, 'Issue targets': 2 });
+});
+
+test('--body-edits leaves out edits without a body flag, comments, PR edits and mentions inside other commands', () => {
+  const rows = [
+    ...shell('gh issue edit 5 --add-label x'),
+    ...shell('gh issue comment 5 --body x'),
+    ...shell('gh pr edit 5 --body x'),
+    ...shell('grep "gh issue edit --body" notes.md'),
+    ...shell('gh issue view 5 --json body'),
+  ];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 0, 'Unique commands': 0, Sessions: 0, 'Issue targets': 0 });
+});
+
+test('--body-edits counts only the body edits among other commands in the same transcript', () => {
+  const rows = [...shell('gh issue edit 5 --add-label x'), ...shell('gh issue edit 5 --body x'), ...shell('ls')];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.match(out, /; 3 Bash\/PowerShell calls$/m);
+  assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 });
+});
+
+test('--body-edits reads every transcript by default, not the last 7 days, and honours --files', () => {
+  const old = shell('gh issue edit 5 --body x', { t: '2026-01-01T10:00:00.000Z' });
+  const cfg = config({ 'old.jsonl': old });
+  utimesSync(join(cfg, 'projects', 'p', 'old.jsonl'), new Date('2026-01-02'), new Date('2026-01-02'));
+  assert.equal(tally(edits(cfg))['Body-edit calls'], 1);
+  const two = config({ 'a.jsonl': shell('gh issue edit 5 --body x'), 'b.jsonl': shell('gh issue edit 6 --body y') });
+  utimesSync(join(two, 'projects', 'p', 'a.jsonl'), new Date('2026-01-02'), new Date('2026-01-02'));
+  const narrowed = edits(two, '--files', '1');
+  assert.match(narrowed, /; 1 transcript files /);
+  assert.equal(tally(narrowed)['Body-edit calls'], 1);
+});
+
+test('--body-edits lists each unique command only under --full, redacted and indented', () => {
+  const cfg = config({ 's.jsonl': [...shell('gh issue edit 5 --body x'), ...shell('gh issue edit 5 --body x'), ...shell('gh issue edit 6 --body-file n.md')] });
+  const plain = edits(cfg);
+  assert.doesNotMatch(plain, /^## Every unique command/m);
+  const full = edits(cfg, '--full');
+  assert.match(full, /^## Every unique command \(2\)$/m);
+  assert.match(full, /^ {4}gh issue edit 5 --body x$/m);
+  assert.match(full, /^ {4}gh issue edit 6 --body-file n\.md$/m);
+  assert.equal(full.match(/^ {4}gh issue edit 5 --body x$/gm).length, 1, 'listed once');
+  const secret = config({ 's.jsonl': shell('GH_TOKEN=hunter2secret gh issue edit 5 --body x') });
+  assert.doesNotMatch(edits(secret, '--full'), /hunter2secret/);
+  assert.equal(tally(edits(secret))['Body-edit calls'], 1, 'an env prefix still counts');
+});
+
+// ---- --body-edits fix round 1 (#388 review findings) ----
+
+test('--body-edits finding 1: a global -R before the subcommand does not collapse distinct targets', () => {
+  const rows = [...shell('gh -R o/r issue edit 5 --body x'), ...shell('gh -R o/r issue edit 6 --body x'), ...shell('gh -R o/r issue edit 7 --body x')];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 3, 'Unique commands': 3, Sessions: 1, 'Issue targets': 3 });
+});
+
+test('--body-edits finding 1: -R between `issue` and `edit` targets the same issue as -R after the number', () => {
+  const rows = [...shell('gh issue -R o/r edit 5 --body x'), ...shell('gh issue edit 5 -R o/r --body x')];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 2, 'Unique commands': 2, Sessions: 1, 'Issue targets': 1 });
+});
+
+test('--body-edits finding 2: a checkout argument without hooks/bash-guard.mjs fails loudly instead of reporting on the script own checkout', () => {
+  const cfg = config({ 's.jsonl': shell('gh issue edit 5 --body x') });
+  let failed = null;
+  let out = '';
+  try {
+    out = execHarness(script, ['--body-edits', 'C:/nonexistent/checkout'], { env: { CLAUDE_CONFIG_DIR: cfg } });
+  } catch (e) {
+    failed = e;
+  }
+  assert.ok(failed, `expected a non-zero exit for a missing checkout, got a report:\n${out}`);
+  assert.match(failed.stderr, /\S/, 'an error is written to stderr');
+});
+
+test('--body-edits finding 4: several issue numbers in one edit are several targets', () => {
+  const out = edits(config({ 's.jsonl': shell('gh issue edit 5 6 --body x') }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 2 });
+});
+
+test('--body-edits finding 5: attached short forms -bfoo and -Ffile.md count as body edits', () => {
+  const rows = [...shell('gh issue edit 5 -bfoo'), ...shell('gh issue edit 6 -Ffile.md')];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 2, 'Unique commands': 2, Sessions: 1, 'Issue targets': 2 });
+});
+
+test('--body-edits finding 6: two tool_use records without an id each count', () => {
+  const noId = (command) => ({ type: 'assistant', timestamp: '2026-10-01T10:00:00.000Z', cwd: SHARED, message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] } });
+  const out = edits(config({ 's.jsonl': [noId('gh issue edit 5 --body x'), noId('gh issue edit 5 --body x')] }));
+  assert.equal(tally(out)['Body-edit calls'], 2);
+});
+
+// ---- --body-edits fix round 2 (#388 R1, R3) ----
+
+for (const [label, command] of [
+  ['>/dev/null', 'gh issue edit 5 --body x >/dev/null'],
+  ['> /dev/null 2>&1', 'gh issue edit 5 --body x > /dev/null 2>&1'],
+  ['2>&1', 'gh issue edit 5 --body x 2>&1'],
+  ['< in.txt', 'gh issue edit 5 --body x < in.txt'],
+]) {
+  test(`--body-edits R1: a redirection (${label}) is not an issue target`, () => {
+    const out = edits(config({ 's.jsonl': shell(command) }));
+    assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 });
+  });
+}
+
+test('--body-edits R1: a $n placeholder still counts as a target', () => {
+  const out = edits(config({ 's.jsonl': shell('gh issue edit $n --body x >/dev/null') }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 1, 'Unique commands': 1, Sessions: 1, 'Issue targets': 1 });
+});
+
+test('--body-edits R3: #5, 5 and an issue URL with -R o/r are one target', () => {
+  const rows = [
+    ...shell('gh issue edit #5 -R o/r --body x'),
+    ...shell('gh issue edit 5 -R o/r --body x'),
+    ...shell('gh issue edit https://github.com/o/r/issues/5 -R o/r --body x'),
+  ];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 3, 'Unique commands': 3, Sessions: 1, 'Issue targets': 1 });
+});
+
+test('--body-edits R3: an attached -Ro/r keys the same target as -R o/r', () => {
+  const rows = [...shell('gh issue edit 5 -Ro/r --body x'), ...shell('gh issue edit 5 -R o/r --body x')];
+  const out = edits(config({ 's.jsonl': rows }));
+  assert.deepEqual(tally(out), { 'Body-edit calls': 2, 'Unique commands': 2, Sessions: 1, 'Issue targets': 1 });
+});

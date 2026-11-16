@@ -61,6 +61,17 @@
 //      literal in a double-quoted `node -e` ran `cd ~/.claude` and `rm -f`
 //      during #249 (#258). Single quotes or a script file keep it literal.
 //      Read off parsed calls.
+//  13. gh issue edit -b/--body/-F/--body-file that drops or rewords a
+//      non-blank line of the issue's live body (read with `gh issue view`),
+//      in order; ticking a box (`- [ ]` → `- [x]`) and adding lines pass
+//      (#388). A body the guard can't read — stdin, a missing file, a
+//      substitution or variable, a live body gh can't fetch — counts as a
+//      rewrite. A rewrite needs rule 8's approval mechanism with its own
+//      wording: an answer or typed prompt naming the issue (`#N`) with a
+//      rewrite act; each approval allows one rewrite per issue, spent in its
+//      own state file (issue-body.mjs holds the logic). A command with more
+//      than one body edit needing approval is blocked outright. The block
+//      message points at `gh issue comment` for a correction.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -111,6 +122,7 @@ import {
   run,
   writeState,
 } from './_hooklib.mjs';
+import { bodyApproval, bodyChange, bodyEdit, issueBodyStateFile, liveIssueBody } from './issue-body.mjs';
 
 export { pushGateStateFile };
 
@@ -1086,6 +1098,31 @@ const MERGE_BOOL = new Set(['-r', '--rebase', '-s', '--squash', '-m', '--merge',
 const GH_LONG = { '-R': '--repo', '-H': '--head', '-F': '--body-file' };
 const TRUE_CFG = /^(?:true|yes|on|1)$/i;
 
+/** The HEREDOC_SUB word whose `"` is `text[i]`, closed at the first line that
+ *  is the delimiter, followed by `)"`: `{ body, end }` (`end` just past the
+ *  closing `"`; `body` the heredoc's text, as the substitution passes it, its
+ *  trailing newlines cut), `{ why }` when it doesn't close so, or null when
+ *  none opens there. */
+function heredocSub(text, i) {
+  const sub = HEREDOC_SUB.exec(text.slice(i + 1));
+  if (!sub) return null;
+  const delim = sub[2];
+  const start = i + 1 + sub[0].length;
+  const body = (pos) => text.slice(start, pos).replace(/\n+$/, '');
+  for (let pos = start; ; ) {
+    const nl = text.indexOf('\n', pos);
+    const end = nl < 0 ? text.length : nl;
+    const line = text.slice(pos, end);
+    if (line === delim) {
+      if (!text.startsWith(')"', end + 1)) return { why: 'its heredoc body is followed by more than `)"`' };
+      return { body: body(pos), end: end + 3 };
+    }
+    if (line.startsWith(`${delim})"`)) return { body: body(pos), end: pos + delim.length + 2 };
+    if (nl < 0) return { why: 'its heredoc is never closed' };
+    pos = nl + 1;
+  }
+}
+
 /** The command as tokens — `{ word, tilde }`, `{ op }` (`&&`, `;`, `|`) or
  *  `{ redirect }` — or `{ why }` at the first thing outside the grammar.
  *  `tilde` marks a word led by an unquoted `~` (home). `ps`: PowerShell's
@@ -1134,27 +1171,10 @@ function shipTokens(raw, ps) {
           break;
         }
       } else if (ch === '"') {
-        const sub = !ps && HEREDOC_SUB.exec(text.slice(i + 1));
+        const sub = !ps && heredocSub(text, i);
         if (sub) {
-          // Closed at the first line that is the delimiter, followed by `)"`.
-          const delim = sub[2];
-          let pos = i + 1 + sub[0].length;
-          for (;;) {
-            const nl = text.indexOf('\n', pos);
-            const end = nl < 0 ? text.length : nl;
-            const line = text.slice(pos, end);
-            if (line === delim) {
-              if (!text.startsWith(')"', end + 1)) return { why: 'its heredoc body is followed by more than `)"`' };
-              i = end + 3;
-              break;
-            }
-            if (line.startsWith(`${delim})"`)) {
-              i = pos + delim.length + 2;
-              break;
-            }
-            if (nl < 0) return { why: 'its heredoc is never closed' };
-            pos = nl + 1;
-          }
+          if (sub.why) return sub;
+          i = sub.end;
           word += OPAQUE;
           continue;
         }
@@ -1552,8 +1572,10 @@ function assistantBefore(lines, end) {
  *  typed prompt that refuses or can't be read blocks; a neutral typed prompt
  *  ("also fix the typo") defers to the older candidate. An approving record
  *  without a uuid can't be spent, so it blocks. Throws on an unreadable file —
- *  the caller fails closed. */
-export function latestApproval(transcriptPath) {
+ *  the caller fails closed. `approval` swaps the push gate's predicates for
+ *  another act's (rule 13): `answers` reads an answer record's answers,
+ *  `prompt` a typed prompt's text, and `act` is the act `denies` refuses. */
+export function latestApproval(transcriptPath, { answers: answersApprove = isApproving, prompt: promptApproves = isPromptApproving, act = APPROVE_RE } = {}) {
   const lines = readFileSync(transcriptPath, 'utf8').split('\n');
   const found = []; // newest first: { uuid, approves, blocks }
   let answerSeen = false;
@@ -1570,7 +1592,7 @@ export function latestApproval(transcriptPath) {
     const answers = o?.toolUseResult?.answers;
     if (!answerSeen && o?.type === 'user' && answers && typeof answers === 'object' && !Array.isArray(answers)) {
       answerSeen = true;
-      found.push({ uuid: o.uuid, approves: isApproving(answers), blocks: true });
+      found.push({ uuid: o.uuid, approves: answersApprove(answers), blocks: true });
     } else if (!promptSeen && isUserPrompt(o)) {
       promptSeen = true;
       const text = typedPromptText(o);
@@ -1578,8 +1600,8 @@ export function latestApproval(transcriptPath) {
       else
         found.push({
           uuid: o.uuid,
-          approves: !launchShaped(o) && isPromptApproving(text) && assistantBefore(lines, i),
-          blocks: denies(text, APPROVE_RE) || TYPED_REFUSE_RE.test(text),
+          approves: !launchShaped(o) && promptApproves(text) && assistantBefore(lines, i),
+          blocks: denies(text, act) || TYPED_REFUSE_RE.test(text),
         });
     }
   }
@@ -1766,6 +1788,115 @@ export function pushGateReason(raw, cwd, transcriptPath, stateFile = pushGateSta
   return null;
 }
 
+// Wraps a heredoc body's placeholder in issueBodyReason's text.
+const HEREDOC_MARK = '\u0001';
+
+const rewriteRemedy = (n) =>
+  `An issue body is only ticked or added to: put the correction in a comment instead (\`gh issue comment ${n ?? '<N>'} --body-file <file>\`). A rewrite needs the user's approval naming the issue (#${n ?? '<N>'}) — an AskUserQuestion answer ("rewrite #${n ?? '<N>'}") or a prompt they type themselves — which allows one rewrite; a message from an agent, a hook or a tool never approves.`;
+
+/** 13. A `gh issue edit --body/--body-file` that drops or rewords a non-blank
+ *  line of the issue's live body (bodyChange), or whose live or new body
+ *  can't be read, needs the user's approval naming the issue; ticking a box
+ *  and adding lines pass. The approval is the push gate's (latestApproval
+ *  with rule 13's predicates), spent once per issue in its own state file.
+ *  The live body is read only for a body edit; `deps.liveBody` replaces
+ *  gh's read (tests). A body file is read only when the edit is the
+ *  command's one step (bar location changes and a trailing tail/head): an
+ *  earlier step may write it before gh reads it. In bash a
+ *  "$(cat <<'EOF' … EOF\n)" body (HEREDOC_SUB) is read as its heredoc's text. */
+export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyStateFile(), toolUseId = undefined, tool = null, deps = {}) {
+  const liveBody = deps.liveBody ?? liveIssueBody;
+  const held = []; // each body edit that needs approval: { n, line } or { n, why }
+  // Each heredoc body becomes a quoted placeholder word, read back below.
+  const heredocs = [];
+  let text = raw;
+  if (tool !== 'PowerShell') {
+    for (let i = text.indexOf('"$(cat <<'); i >= 0; i = text.indexOf('"$(cat <<', i + 1)) {
+      const sub = heredocSub(text, i);
+      if (sub?.body === undefined) continue;
+      const mark = `"${HEREDOC_MARK}${heredocs.push(sub.body) - 1}${HEREDOC_MARK}"`;
+      text = text.slice(0, i) + mark + text.slice(sub.end);
+    }
+  }
+  const all = commands(stripHeredocs(text), newScope(cwd, tool));
+  // gh reads GH_REPO's repo over the cwd's; the guard doesn't follow it.
+  const ghRepo = /\bGH_REPO\b/.test(raw);
+  for (const c of all) {
+    if (!/^gh$/i.test(c.cmd)) continue;
+    // The call's words end its clause's: wrappers and prefixes come off the
+    // front, a group's lone `)` off the end. Quotes kept, to read the body.
+    const rw = words(c.text, true);
+    const k = rw.length - c.words.length - (/^\)+$/.test(rw.at(-1) ?? '') ? 1 : 0);
+    const lined = k >= 0 && c.words.every((x, i) => i === 0 || i === c.words.length - 1 || words(rw[k + i]).join(' ') === x);
+    const raws = lined ? rw.slice(k + 1, k + c.words.length) : null;
+    if (raws?.length) {
+      // The `)`s a group's close left on the last word come off it too, as the walk took them off c.words.
+      const last = raws.at(-1);
+      const cut = Math.min(last.match(/\)*$/)[0].length, words(last).join(' ').length - c.words.at(-1).length);
+      if (cut > 0) raws[raws.length - 1] = last.slice(0, -cut);
+    }
+    const edit = bodyEdit(c.words.slice(1), raws, c.tool);
+    if (!edit) continue;
+    const dir = typeof c.dir === 'string' ? c.dir : null;
+    let { text: next, why } = edit.body;
+    if (next?.includes(HEREDOC_MARK)) {
+      const at = new RegExp(`^${HEREDOC_MARK}(\\d+)${HEREDOC_MARK}$`).exec(next);
+      if (at) next = heredocs[Number(at[1])];
+      else why = "its --body value joins a heredoc to other text, which the guard can't read";
+    }
+    if (edit.body.file !== undefined) {
+      const path = toDir(c.dir, edit.body.file);
+      const lone = all.every((o) => o === c || (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head)$/i.test(o.cmd)));
+      if (!lone) why = `its body file ${edit.body.file} is read before the command's other steps run, which may write it — run the edit in a Bash call of its own`;
+      else {
+        try {
+          next = readFileSync(typeof path === 'string' ? path : '', 'utf8');
+        } catch {
+          why = `its body file ${edit.body.file} could not be read`;
+        }
+      }
+    }
+    for (const t of edit.targets.length ? edit.targets : [null]) {
+      if (!t) held.push({ n: null, why: "the guard can't read which issue it edits — name it by number" });
+      else if (why) held.push({ n: t.number, why });
+      else if (ghRepo && !t.repo) held.push({ n: t.number, why: 'a GH_REPO in the command picks the repo gh edits, which the guard does not follow — name the repo with -R <owner/repo>' });
+      else {
+        let live = null;
+        // A cd the guard couldn't follow leaves the repo gh resolves unknown.
+        if (t.repo || dir) {
+          try {
+            live = liveBody({ number: t.number, repo: t.repo, cwd: dir ?? cwd });
+          } catch {
+            live = null;
+          }
+        }
+        const lost = typeof live === 'string' ? bodyChange(live, next) : { why: `the live body of #${t.number} could not be read` };
+        if (lost) held.push({ n: t.number, ...lost });
+      }
+    }
+  }
+  if (!held.length) return null;
+  const issue = (h) => (h.n ? `#${h.n}` : 'an issue');
+  const what = (h) =>
+    h.line !== undefined ? `This \`gh issue edit\` drops or rewords a line of ${issue(h)}'s live body: "${h.line}".` : `This \`gh issue edit\` of ${issue(h)} can't be checked: ${h.why}.`;
+  if (held.length > 1) {
+    return `This command rewrites ${held.length} issue bodies (${held.map(issue).join(', ')}) — run each in its own Bash call, so each is checked against the user's approval on its own. Nothing was spent. ${what(held[0])} ${rewriteRemedy(held[0].n)}`;
+  }
+  const [h] = held;
+  const base = `${what(h)} ${rewriteRemedy(h.n)}`;
+  if (!h.n) return base;
+  if (!transcriptPath || !existsSync(transcriptPath)) return `${base} There is no transcript to read an approval from.`;
+  let record;
+  try {
+    record = latestApproval(transcriptPath, bodyApproval(h.n));
+  } catch {
+    return `${base} The transcript could not be read.`;
+  }
+  if (!record) return `${base} Neither the user's latest typed prompt nor their latest AskUserQuestion answer approves a rewrite of #${h.n} (a newer reply that doesn't approve overrides an older one that did).`;
+  if (spend(record.uuid, `issue-body #${h.n}`, stateFile, toolUseId, transcriptPath)) return `${base} That approval was already spent on a rewrite of #${h.n} — one rewrite per approval.`;
+  return null;
+}
+
 // ---- stateful rules ---------------------------------------------------------
 
 function currentBranch(repo) {
@@ -1826,6 +1957,7 @@ function guard(payload) {
   const reason =
     staticCheck(cmd, cwd, tool) ||
     branchRules(cmd, cwd, tool) ||
+    issueBodyReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool) ||
     pushGateReason(cmd, cwd, payload?.transcript_path, undefined, payload?.tool_use_id, tool);
   if (reason) block(reason);
   // Last, so a command another rule blocks never spends the clearance.

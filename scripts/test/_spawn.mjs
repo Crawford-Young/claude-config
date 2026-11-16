@@ -27,6 +27,8 @@ const PATH_OVERRIDES = {
   CLAUDE_ACTIVE_REPO_DIR: ['.claude', 'active-repo'],
   CLAUDE_BROWSER_GATE_STATE: ['.claude', 'browser-gate.json'],
   CLAUDE_PUSH_GATE_STATE: ['.claude', 'push-gate.json'],
+  CLAUDE_ISSUE_BODY_STATE: ['.claude', 'issue-body-approvals.json'],
+  CLAUDE_ISSUE_BODY_STUB: ['.claude', 'issue-body-stub.md'],
 };
 /** Live-session identity must not leak into a child; a test that needs it passes it in `env`. */
 const SCRUBBED = ['CLAUDE_PID'];

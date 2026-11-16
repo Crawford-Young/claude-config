@@ -3,7 +3,7 @@
 //   node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]
 // Replays unique Bash/PowerShell commands (each under the tool that ran it) through staticCheck and gatedVerbs,
 // and unique AskUserQuestion answers through isApproving and isBrowserApproving,
-// in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 always: a report, not a gate.
+// in both checkouts. Prints one line per changed verdict plus a summary. Exit 0 on a report (not a gate), 1 on a script failure.
 // --branch adds the stateful rules (#165): each command's gitCalls(scrub(c)) diffed by sub, args and repo,
 // then branchRules allow/BLOCK verdicts with cwd = a temp unborn repo and a temp born repo.
 // --full (#168) follows each changed line with the whole command, redacted and indented, and,
@@ -19,6 +19,10 @@
 // default) per rule, sorts each into true / false / undecided by the check in CHECK below, and
 // replays <checkout>'s current rules (default: this repo) over every unique command. A markdown
 // report on stdout; --full adds every block with its verdict.
+//
+//   node scripts/guard-replay.mjs --body-edits [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]
+// --body-edits (#388) counts past `gh issue edit --body/--body-file` calls (every transcript by
+// default): calls, unique commands, sessions and issue targets. --full lists each unique command, redacted.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -44,12 +48,13 @@ function parseArgs(argv) {
     else if (argv[i] === '--branch') o.branch = true;
     else if (argv[i] === '--full') o.full = true;
     else if (argv[i] === '--by-rule') o.byRule = true;
+    else if (argv[i] === '--body-edits') o.bodyEdits = true;
     else o.paths.push(argv[i]);
   }
   // Default: the last 7 days, main + subagent transcripts. A newest-N count skews
   // toward many small subagent files (30 files held 930 commands; 7 days held 2118).
   // --by-rule reads every transcript: a rule's zero needs the widest window.
-  if (!o.byRule && o.files == null && o.days == null) o.days = 7;
+  if (!o.byRule && !o.bodyEdits && o.files == null && o.days == null) o.days = 7;
   return o;
 }
 
@@ -539,19 +544,113 @@ function replay(commands, g) {
 const code = (s) => (s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``);
 const day = (ts) => (ts ? ts.slice(0, 10) : '?');
 
+/** The report's window line, up to the calls count. */
+function windowLine(files, first, last, calls) {
+  const subs = files.filter((f) => /[\\/]subagents[\\/]/.test(f)).length;
+  const days = first ? Math.round((Date.parse(day(last)) - Date.parse(day(first))) / 864e5) + 1 : 0;
+  return `Window: ${day(first)} → ${day(last)} (${days} days); ${files.length} transcript files (${files.length - subs} main, ${subs} subagent); ${calls} Bash/PowerShell calls`;
+}
+
+// ---- --body-edits (#388) ------------------------------------------------------
+
+const BODY_FLAG = /^(?:(?:-b|-F|--body|--body-file)(?:=|$)|-[bF].)/;
+/** gh issue edit flags that take a separate value, so the value is not the issue target. */
+const EDIT_VALUE_FLAGS = new Set(['-b', '--body', '-F', '--body-file', '-t', '--title', '-R', '--repo', '-a', '--add-assignee', '-l', '--add-label', '-m', '--milestone', '--add-project', '--remove-assignee', '--remove-label', '--remove-milestone', '--remove-project']);
+
+/** A ref-shaped token: `5`, `#5`, an `…/issues/5` URL or a `$var` placeholder; a redirection or flag is not a target. */
+const REF_TOKEN = /^(?:#?\d+|\S*\/issues\/\d+|\$\w+|\$\{\w+\})$/;
+
+/** The targets of a `gh issue edit` call as `repo#ref`, one per issue named; empty when none. */
+function editTargets(args) {
+  let repo = '';
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-R' || args[i] === '--repo') repo = args[++i] ?? '';
+    else if (/^--repo=/.test(args[i])) repo = args[i].slice(7);
+    else if (/^-R./.test(args[i])) repo = args[i].slice(2);
+  }
+  let at = -1;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-R' || args[i] === '--repo') i++;
+    else if (args[i] === 'edit') {
+      at = i;
+      break;
+    }
+  }
+  const refs = [];
+  for (let i = at + 1; at >= 0 && i < args.length; i++) {
+    const a = args[i];
+    if (EDIT_VALUE_FLAGS.has(a)) i++;
+    else if (REF_TOKEN.test(a)) refs.push(`${repo}#${a.replace(/^.*\/issues\/|^#/, '')}`);
+  }
+  return refs;
+}
+
+/** Every `gh issue edit --body/--body-file` call across the files, by transcript. */
+function scanBodyEdits(paths, g) {
+  const seen = new Set();
+  const edits = [];
+  const sessions = new Set();
+  let calls = 0, first = null, last = null;
+  for (const p of paths) {
+    for (const line of readFileSync(p, 'utf8').split('\n')) {
+      if (!line || line[0] !== '{') continue;
+      let o;
+      try {
+        o = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (o?.type !== 'assistant' && o?.type !== 'user') continue;
+      const ts = typeof o.timestamp === 'string' ? o.timestamp : null;
+      if (ts && (!first || ts < first)) first = ts;
+      if (ts && (!last || ts > last)) last = ts;
+      const content = o.message?.content;
+      if (o.type !== 'assistant' || !Array.isArray(content)) continue;
+      for (const c of content) {
+        if (c?.type !== 'tool_use' || (c.id !== undefined && seen.has(c.id)) || (c.name !== 'Bash' && c.name !== 'PowerShell') || typeof c.input?.command !== 'string') continue;
+        if (c.id !== undefined) seen.add(c.id);
+        calls++;
+        const hits = g.ghCalls(g.scrub(c.input.command), o.cwd ?? null, c.name).filter((x) => x.sub === 'issue' && x.action === 'edit' && x.args.some((a) => BODY_FLAG.test(a)));
+        if (!hits.length) continue;
+        sessions.add(p);
+        for (const h of hits) edits.push({ command: c.input.command, tool: c.name, targets: editTargets(h.args) });
+      }
+    }
+  }
+  return { edits, sessions: sessions.size, calls, first, last };
+}
+
+async function bodyEdits(args) {
+  const g = await load(args.paths[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
+  const files = await transcripts(projectsRoot(args.root), args);
+  const { edits, sessions, calls, first, last } = scanBodyEdits(files, g);
+  const unique = [...new Map(edits.map((e) => [`${e.tool}\n${e.command}`, e.command])).values()];
+  const targets = new Set(edits.flatMap((e) => e.targets));
+  const out = [
+    '# Past issue-body edits',
+    '',
+    windowLine(files, first, last, calls),
+    '',
+    `- Body-edit calls: ${edits.length}`,
+    `- Unique commands: ${unique.length}`,
+    `- Sessions: ${sessions}`,
+    `- Issue targets: ${targets.size}`,
+  ];
+  if (args.full) out.push('', `## Every unique command (${unique.length})`, '', ...unique.map((c) => redact(c).replace(/\r\n?/g, '\n').trimEnd().replace(/^/gm, '    ')));
+  console.log(out.join('\n'));
+}
+
 async function byRule(args) {
   const checkout = args.paths[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
   const g = await load(checkout);
   const files = await transcripts(projectsRoot(args.root), args);
   const { blocks, calls, first, last, commands } = scanBlocks(files);
-  const subs = files.filter((f) => /[\\/]subagents[\\/]/.test(f)).length;
-  const days = first ? Math.round((Date.parse(day(last)) - Date.parse(day(first))) / 864e5) + 1 : 0;
   const judged = blocks.map((b) => ({ b, ...classify(b, g) }));
   const replayed = replay(commands, g);
   const out = [
     '# bash-guard blocks by rule (guard-replay --by-rule, #368)',
     '',
-    `Window: ${day(first)} → ${day(last)} (${days} days); ${files.length} transcript files (${files.length - subs} main, ${subs} subagent); ${calls} Bash/PowerShell calls; ${blocks.length} live bash-guard blocks`,
+    `${windowLine(files, first, last, calls)}; ${blocks.length} live bash-guard blocks`,
     `Replay: ${commands.length} unique commands through ${resolve(checkout)}`,
     '',
     '| rule | guards | live blocks | true | false | undecided | replay |',
@@ -576,9 +675,11 @@ async function byRule(args) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.byRule && args.paths.length <= 1 && !args.bad) return byRule(args);
+  if (args.bodyEdits && args.paths.length <= 1 && !args.bad) return bodyEdits(args);
   if (args.paths.length !== 2 || args.bad) {
     console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]');
     console.log('       node scripts/guard-replay.mjs --by-rule [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]');
+    console.log('       node scripts/guard-replay.mjs --body-edits [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]');
     return;
   }
   const [a, b] = await Promise.all(args.paths.map(load));
@@ -638,4 +739,7 @@ async function main() {
   console.log(`summary: ${changed} changed; ${commands.length} commands, ${answers.length} answers from ${files.length} files${branch}`);
 }
 
-if (isMain(import.meta.url)) main().catch((e) => console.log(`guard-replay failed: ${e?.message}`));
+if (isMain(import.meta.url)) main().catch((e) => {
+  console.error(`guard-replay failed: ${e?.message}`);
+  process.exitCode = 1;
+});
