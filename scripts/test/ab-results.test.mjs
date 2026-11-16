@@ -663,6 +663,57 @@ test('#404 review-4: << inside arithmetic is a shift, not a heredoc', () => {
   assert.deepEqual(launchFailures(flags, quiet), []);
 });
 
+const NPX = 'npx @anthropic-ai/claude-code -p x';
+
+test('#412 box 1: npx @anthropic-ai/claude-code is flagged when npx is not the first word', () => {
+  const flags = [
+    `/usr/local/bin/${NPX}`,
+    `./node_modules/.bin/${NPX}`,
+    `time ${NPX}`,
+    `sudo -u bob ${NPX}`,
+    `env -i ${NPX}`,
+    `timeout --signal KILL 60 ${NPX}`,
+    `nice -n 10 ${NPX}`,
+    `if true; then ${NPX}; fi`,
+    `for i in 1; do ${NPX}; done`,
+    `{ ${NPX}; }`,
+    'echo `npx @anthropic-ai/claude-code -p x`',
+  ];
+  assert.deepEqual(launchFailures(flags, []), []);
+});
+
+test('#412 box 2: a Bash backslash outside quotes escapes the next character and opens no quote', () => {
+  const flags = [
+    String.raw`echo don\'t; claude -p x`,
+    String.raw`echo \"; claude -p x`,
+    String.raw`echo 'it'\''s'; claude -p x`,
+    String.raw`echo $'it\'s'; claude -p x`,
+  ];
+  assert.deepEqual(launchFailures(flags, []), []);
+});
+
+test('#412 box 3: a PowerShell backtick escapes the next character and opens or closes no quote', () => {
+  const flags = ['echo `"; claude -p x', 'Write-Host "a`""; claude -p x'];
+  assert.deepEqual(launchFailures(flags, [], 'PowerShell'), []);
+});
+
+test('#412 box 4: a heredoc whose delimiter is written <<\\EOF ends at its EOF line', () => {
+  const flags = ['cat <<\\EOF\nhi\nEOF\nclaude -p x'];
+  const quiet = ['cat <<\\EOF\nclaude -p x\nEOF'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#412 box 5: the first non-option word of bash is its script, so what follows are script args', () => {
+  const quiet = ['bash -x script.sh -c claude'];
+  assert.deepEqual(launchFailures([], quiet), []);
+});
+
+test('#412 guards: behaviour from 841c549 that the fix must keep', () => {
+  const flags = [String.raw`C:\u\.local\bin\claude.exe -p x`, 'bash -lc "claude -p x"', 'bash -o pipefail -c "claude -p x"'];
+  const quiet = ['echo npx @anthropic-ai/claude-code', 'grep npx @anthropic-ai/claude-code file'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
 test('results.mjs without a blind key still writes the run-side table and says the grades are not joined', () => {
   const out = tempDir('ab-nokey-');
   buildOut(out);

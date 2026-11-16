@@ -102,32 +102,49 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 // A command line splits into segments at each unquoted ; & | ( or newline (so $( and PowerShell's call
 // operator & open one too); an unquoted ) ends a segment and the words after it, up to the next
 // separator, are dropped (so `$(pwd)/bin/claude` is missed). Quotes are stripped from the word, and a
-// separator inside them opens no segment. A ' quotes up to the next ', with no escapes (bash's
-// 'it'\''s' is misread). A " quotes up to the next unescaped ", with bash's escapes \" \\ and \$ in a
-// Bash command; a PowerShell one has none (its `" is not handled). A $( inside " opens a command
-// substitution, whose body up to its matching ) is scanned as a command line. Outside quotes a
-// backslash is an ordinary character (Windows paths), and a # that starts a word comments out the
-// rest of its line. After an unquoted <<WORD, <<-WORD, <<'WORD' or <<"WORD", the heredoc body, from
-// the next unquoted newline through the line that is WORD (tabs stripped for <<-, a CRLF's \r
-// ignored), is data and skipped; inside (( )) or $(( )), << is a shift. A <<< here-string's word is an
-// argument. A backtick is an ordinary character: round 1's sed script named "`claude -n`" as a
-// markdown code span. A segment launches claude when a VAR=value word's value is a claude path (the
-// variable is how it gets run: C=~/.local/bin/claude.exe; "$C" -p x), or when its program word, past
-// any VAR=value words and launcher wrappers (chained), is a bare or pathed claude[.exe], or is npx,
-// value-less options (-y, --yes; one with a separate value, like --cache DIR, hides the package), then
-// @anthropic-ai/claude-code[@version]. The
-// wrappers are `env`, `sudo`, `exec`, `nohup`, `timeout [-k DUR|-s SIG|-flag...] DURATION` (other options taking a
-// separate argument, like --signal KILL, are not handled), PowerShell's `Start-Process [-FilePath]`, and
-// a shell `bash|sh|zsh|pwsh|powershell[.exe]` whose options (each -opt with at most one non-dash value)
-// end at -c, a flag cluster ending in c (like -lc) or -Command: the word after it is itself a command
-// line, checked the same way by that shell's rules (pwsh/powershell as PowerShell, the rest as Bash). A
-// wrapper around another program, or a shell without one, stays quiet.
+// separator inside them opens no segment. A ' quotes up to the next ', with no escapes. In a Bash
+// command a $' (ANSI-C quoting; the $ stays in the word) quotes up to the next ' that no backslash
+// escapes, and a " quotes up to the next unescaped ", with bash's escapes \" \\ and \$. Outside quotes
+// an escape character, Bash's backslash or PowerShell's backtick, makes the next character literal (it
+// opens or closes no quote, separates nothing and starts no comment) unless that is a newline or a
+// CRLF's \r, where the escape is an ordinary character; both stay in the word (unquoted Windows paths
+// in Bash), except in a heredoc's WORD, which drops the escape. In a PowerShell command a backtick also
+// escapes inside " (so `" does not close it) and a backslash is ordinary. A $( inside " opens a
+// command substitution, whose body up to its matching ) is scanned as a command line. A # that starts
+// a word comments out the rest of its line. After an unquoted <<WORD, <<-WORD, <<'WORD', <<"WORD" or
+// <<\WORD, the heredoc body, from the next unquoted newline through the line that is WORD (tabs
+// stripped for <<-, a CRLF's \r ignored), is data and skipped; inside (( )) or $(( )), << is a shift. A
+// <<< here-string's word is an argument. Splitting treats a Bash backtick as an ordinary character
+// (round 1's sed script named "`claude -n`" as a markdown code span). A segment launches claude when a
+// VAR=value word's value is a claude path (the variable is how it gets run:
+// C=~/.local/bin/claude.exe; "$C" -p x), or when its program word, past any VAR=value words and
+// launcher wrappers (chained), is a bare or pathed claude[.exe], or is a bare or pathed npx, value-less
+// options (-y, --yes; one with a separate value, like --cache DIR, hides the package), then
+// @anthropic-ai/claude-code[@version] (the npx form). The wrappers are `env`, `sudo`, `exec`, `nohup`,
+// `timeout [-k DUR|-s SIG|-flag...] DURATION`, PowerShell's `Start-Process [-FilePath]`, and a shell
+// `bash|sh|zsh|pwsh|powershell[.exe]` whose options end at -c, a flag cluster ending in c (like -lc)
+// or -Command: the word after it is itself a command line, checked the same way by that shell's rules
+// (pwsh/powershell as PowerShell, the rest as Bash). A pwsh/powershell option takes at most one
+// non-dash value; a bash/sh/zsh option is a -opt or +opt word, of which only -o +o -O +O --rcfile and
+// --init-file take a separate value, and any other word (the shell's script) ends them. Past an
+// npx-only construct only the npx form counts, in a shell's command line too, so a claude or VAR=claude
+// reached that way stays quiet: an option of env (-u -C -S --unset --chdir --split-string take a value)
+// or sudo (-u -g -p -C -D -r -t -T -U -R take one), timeout's --signal SIG or --kill-after DUR, and
+// the prefixes `time [-f FMT|-o FILE|-flag...]`, `nice [-n N|-flag...]`, `then`, `do` and `{`. In a
+// Bash command a word starting with a backtick, when the backticks in the words before it are even in
+// number, opens a substitution: its words, through the closing backtick, are checked for the npx form
+// only. A wrapper around another program, or a shell without -c, stays quiet.
 const SHELL = /^(?:(?:ba|z)?sh|pwsh|powershell)(?:\.exe)?$/i;
 const SHELL_COMMAND = /^-(?:\w*c|command)$/i;
 const NPX_CLAUDE = /^@anthropic-ai\/claude-code(?:@\S*)?$/i;
+const SH_VALUED = /^(?:[-+][oO]|--rcfile|--init-file)$/;
+// The wrappers whose options make the walk npx-only, and the npx-only prefixes: each with the options
+// that take a separate value.
+const WRAPPER_OPTIONS = new Map([['env', /^-[uCS]$|^--(?:unset|chdir|split-string)$/], ['sudo', /^-[ugpCDrtTUR]$/]]);
+const NPX_PREFIXES = new Map([['time', /^-[fo]$/], ['nice', /^-n$/], ['then', /^$/], ['do', /^$/], ['{', /^$/]]);
 
 /** The segments of a command line, each an array of its unquoted words (rule above); `ps` reads it as
- *  PowerShell, whose double quotes take no backslash escapes. */
+ *  PowerShell, whose escape character is the backtick. */
 function segments(command, ps) {
   const segs = [];
   const parens = []; // per open (: null, false for one of a (( pair, or the segment state a "$( was opened inside
@@ -169,8 +186,13 @@ function segments(command, ps) {
     if (quote === "'") {
       if (ch === quote) quote = '';
       else word += ch;
+    } else if (quote === "$'") {
+      if (ch === '\\' && i + 1 < command.length) word += ch + command[++i];
+      else if (ch === "'") quote = '';
+      else word += ch;
     } else if (quote) {
       if (!ps && ch === '\\' && /["\\$]/.test(command[i + 1])) word += command[++i];
+      else if (ps && ch === '`' && i + 1 < command.length) word += ch + command[++i];
       else if (ch === '"') quote = '';
       else if (ch === '$' && command[i + 1] === '(') {
         parens.push({ words, word, open });
@@ -180,6 +202,12 @@ function segments(command, ps) {
         open = true;
         i++;
       } else word += ch;
+    } else if (ch === (ps ? '`' : '\\') && i + 1 < command.length && !'\r\n'.includes(command[i + 1])) {
+      word = (word ?? '') + (heredoc === null ? ch : '') + command[++i]; // an escape; a heredoc WORD drops it
+    } else if (!ps && ch === '$' && command[i + 1] === "'") {
+      word = (word ?? '') + ch; // ANSI-C quoting
+      quote = "$'";
+      i++;
     } else if (ch === '#' && word === null) {
       const nl = command.indexOf('\n', i); // a comment: on to its newline, which ends the segment
       i = (nl === -1 ? command.length : nl) - 1;
@@ -218,30 +246,72 @@ function segments(command, ps) {
   return segs;
 }
 
-const isClaude = (path) => /^claude(?:\.exe)?$/.test(path.split(/[\\/]/).pop());
+const basename = (path) => path.split(/[\\/]/).pop();
+const isClaude = (path) => /^claude(?:\.exe)?$/.test(basename(path));
 
-function launchesClaude(command, ps) {
-  return segments(command, ps).some((words) => {
-    for (let i = 0; ; ) {
-      const w = words[i]?.toLowerCase();
-      if (w === undefined) return false;
-      const assigned = /^[a-z_]\w*=(.*)$/s.exec(w);
-      if (assigned && isClaude(assigned[1])) return true;
-      if (assigned || ['env', 'sudo', 'exec', 'nohup'].includes(w)) i++;
-      else if (w === 'start-process') i += words[i + 1]?.toLowerCase() === '-filepath' ? 2 : 1;
-      else if (w === 'timeout') {
-        for (i++; words[i]?.startsWith('-'); ) i += /^-[ks]$/.test(words[i]) ? 2 : 1;
-        i++; // DURATION
-      } else if (w === 'npx') {
-        do i++;
-        while (words[i]?.startsWith('-'));
-        return NPX_CLAUDE.test(words[i] ?? '');
-      } else if (SHELL.test(w)) {
-        for (i++; words[i]?.startsWith('-') && !SHELL_COMMAND.test(words[i]); ) i += words[i + 1] && !words[i + 1].startsWith('-') ? 2 : 1;
-        return SHELL_COMMAND.test(words[i] ?? '') && launchesClaude(words[i + 1] ?? '', w.startsWith('p'));
-      } else return isClaude(w);
-    }
+/** Whether a segment's words launch claude (rule above); `npxOnly` counts the npx form only. */
+function runsClaude(words, npxOnly) {
+  let i = 0;
+  const skipOptions = (valued) => {
+    for (; words[i]?.startsWith('-'); npxOnly = true) i += valued.test(words[i]) ? 2 : 1;
+  };
+  for (;;) {
+    const w = words[i]?.toLowerCase();
+    if (w === undefined) return false;
+    const assigned = /^[a-z_]\w*=(.*)$/s.exec(w);
+    if (assigned && !npxOnly && isClaude(assigned[1])) return true;
+    if (assigned || ['exec', 'nohup'].includes(w)) i++;
+    else if (WRAPPER_OPTIONS.has(w)) {
+      i++;
+      skipOptions(WRAPPER_OPTIONS.get(w));
+    } else if (NPX_PREFIXES.has(w)) {
+      i++;
+      npxOnly = true;
+      skipOptions(NPX_PREFIXES.get(w));
+    } else if (w === 'start-process') i += words[i + 1]?.toLowerCase() === '-filepath' ? 2 : 1;
+    else if (w === 'timeout') {
+      for (i++; words[i]?.startsWith('-'); ) {
+        if (/^--(?:signal|kill-after)$/.test(words[i])) npxOnly = true;
+        i += /^-[ks]$|^--(?:signal|kill-after)$/.test(words[i]) ? 2 : 1;
+      }
+      i++; // DURATION
+    } else if (basename(w) === 'npx') {
+      do i++;
+      while (words[i]?.startsWith('-'));
+      return NPX_CLAUDE.test(words[i] ?? '');
+    } else if (SHELL.test(w)) {
+      const pwsh = w.startsWith('p');
+      if (pwsh) for (i++; words[i]?.startsWith('-') && !SHELL_COMMAND.test(words[i]); ) i += words[i + 1] && !words[i + 1].startsWith('-') ? 2 : 1;
+      else for (i++; /^[-+]/.test(words[i] ?? '') && !SHELL_COMMAND.test(words[i]); ) i += SH_VALUED.test(words[i]) ? 2 : 1;
+      return SHELL_COMMAND.test(words[i] ?? '') && launchesClaude(words[i + 1] ?? '', pwsh, npxOnly);
+    } else return !npxOnly && isClaude(w);
+  }
+}
+
+/** The words of the Bash backtick substitution that words[k] (a word starting with `) opens, through
+ *  the word holding its closing backtick, cut there. */
+function ticked(words, k) {
+  const sub = [];
+  for (let m = k, w = words[k].slice(1); ; w = words[++m]) {
+    const end = w.indexOf('`');
+    if (end !== -1 || m === words.length - 1) return [...sub, end === -1 ? w : w.slice(0, end)];
+    sub.push(w);
+  }
+}
+
+/** Whether a Bash backtick substitution among a segment's words launches the npx form; a word starting
+ *  with ` opens one unless an odd count of backticks before it left one open. */
+function tickedNpx(words) {
+  let open = false;
+  return words.some((w, k) => {
+    const hit = !open && w.startsWith('`') && runsClaude(ticked(words, k), true);
+    if (w.split('`').length % 2 === 0) open = !open;
+    return hit;
   });
+}
+
+function launchesClaude(command, ps, npxOnly = false) {
+  return segments(command, ps).some((words) => runsClaude(words, npxOnly) || (!ps && tickedNpx(words)));
 }
 
 /** The shell commands in a run's transcripts that launch claude (Bash or PowerShell tool calls, each
