@@ -743,7 +743,7 @@
    "kind": "store",
    "label": "issue-body-approvals.json",
    "file": "~/.claude/issue-body-approvals.json",
-   "summary": "Per issue-body rewrite approval (keyed by transcript record uuid): the `issue-body #N` verbs it has spent (#388), one rewrite per approval. CLAUDE_ISSUE_BODY_STATE overrides the path.",
+   "summary": "Per issue-body rewrite approval (keyed by transcript record uuid): the `issue-body <owner/repo>#N` verbs it has spent (or `issue-body #N` when the lookup was skipped), approvals scoped to their repo (#419), one rewrite per approval. CLAUDE_ISSUE_BODY_STATE overrides the path.",
    "external": true
   },
   {

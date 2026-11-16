@@ -70,9 +70,13 @@
 //      wording: an answer or typed prompt naming the issue (`#N`) with a
 //      rewrite act; each approval allows one rewrite per issue, spent in its
 //      own state file once every other check has passed (issue-body.mjs
-//      holds the logic). A command with more
+//      holds the logic). An approval is scoped to the repo it named (#419). A command with more
 //      than one body edit needing approval is blocked outright. The block
-//      message points at `gh issue comment` for a correction.
+//      message points at `gh issue comment` for a correction. A `gh api`
+//      write of an issue body (REST `repos/<o>/<r>/issues/<N>` with a body
+//      field or --input, not GET; a graphql updateIssue mutation with a body)
+//      is blocked with no approval path (#419); a GH_HOST counts as
+//      unreadable unless the target names its host.
 //
 // Scoping (matters as much as the rules): commit-message payloads and heredoc
 // bodies not fed to an interpreter are stripped before any rule reads the
@@ -114,7 +118,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { isMain } from '../scripts/lib.mjs';
 import {
   BILLED_MODEL,
@@ -127,7 +131,7 @@ import {
   run,
   writeState,
 } from './_hooklib.mjs';
-import { bodyApproval, bodyChange, bodyEdit, issueBodyStateFile, liveIssueBody } from './issue-body.mjs';
+import { apiCall, bodyApproval, bodyChange, bodyEdit, gqlBodyWrite, issueBodyStateFile, issueRepoOf, liveIssueBody, repoKey } from './issue-body.mjs';
 
 export { pushGateStateFile };
 
@@ -367,7 +371,7 @@ const pipelines = (cmd, seps = null) => clauses(cmd, true, seps);
  *  word. Unbalanced quotes: plain whitespace split. With `raw`, the same words
  *  keep their quotes (rule 12 reads which text a quote holds). */
 function words(clause, raw = false) {
-  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s"']+)|(["'])/g;
+  const re = /"((?:[^"\\]|\\[\s\S])*)"|'([^']*)'|([^\s"']+)|(["'])/g;
   const out = [];
   let prev = -1;
   let m;
@@ -799,6 +803,13 @@ const toDir = (dir, p) => {
   if (isAbsolute(e)) return e;
   return typeof dir === 'string' ? resolve(dir, e) : dir;
 };
+
+/** Path `p` as the shell running `tool` reads it: on win32 every shell but
+ *  PowerShell is Git Bash, whose `/tmp` is a mount of the user's temp dir
+ *  (os.tmpdir()), not `C:\tmp` (#419). Rule 13's file reads only: a cd's
+ *  target is left to toDir. */
+const gitBashTmp = (p, tool) =>
+  process.platform === 'win32' && tool !== 'PowerShell' ? p.replace(/^\/tmp(?=\/|$)/, () => tmpdir().replace(/\\/g, '/')) : p;
 
 /** Where a cd/Set-Location/pushd/popd clause with `args` leaves `dir`. A popd
  *  lands where the guard doesn't track, and so does any option but bash's
@@ -1623,7 +1634,8 @@ function assistantBefore(lines, end) {
   return false;
 }
 
-/** The approving user record's `{ uuid }`, or null. Candidates are the latest
+/** The approving user record's `{ uuid, cwd, approves }` (its `cwd` field,
+ *  and the approving predicate's value), or null. Candidates are the latest
  *  AskUserQuestion answer and the latest typed prompt, newest first: the first
  *  that approves wins. An answer that doesn't approve blocks, as before #180; a
  *  typed prompt that refuses or can't be read blocks; a neutral typed prompt
@@ -1649,21 +1661,24 @@ export function latestApproval(transcriptPath, { answers: answersApprove = isApp
     const answers = o?.toolUseResult?.answers;
     if (!answerSeen && o?.type === 'user' && answers && typeof answers === 'object' && !Array.isArray(answers)) {
       answerSeen = true;
-      found.push({ uuid: o.uuid, approves: answersApprove(answers), blocks: true });
+      found.push({ uuid: o.uuid, cwd: o.cwd, approves: answersApprove(answers), blocks: true });
     } else if (!promptSeen && isUserPrompt(o)) {
       promptSeen = true;
       const text = typedPromptText(o);
       if (text === null) found.push({ approves: false, blocks: true });
-      else
+      else {
+        const approves = !launchShaped(o) && promptApproves(text);
         found.push({
           uuid: o.uuid,
-          approves: !launchShaped(o) && promptApproves(text) && assistantBefore(lines, i),
+          cwd: o.cwd,
+          approves: approves && assistantBefore(lines, i) ? approves : false,
           blocks: denies(text, act) || TYPED_REFUSE_RE.test(text),
         });
+      }
     }
   }
   for (const r of found) {
-    if (r.approves) return typeof r.uuid === 'string' ? { uuid: r.uuid } : null;
+    if (r.approves) return typeof r.uuid === 'string' ? { uuid: r.uuid, cwd: typeof r.cwd === 'string' ? r.cwd : null, approves: r.approves } : null;
     if (r.blocks) return null;
   }
   return null;
@@ -1859,21 +1874,57 @@ const HEREDOC_MARK = '\u0001';
 const RUNS_AGAIN = /(?:^|[\s;&|({])(?:for|foreach|while|until|do|function|filter|ForEach-Object)(?![\w-])|\w\s*\(\s*\)|%\s*\{|\.ForEach\s*\(|(?<![&>|<])&(?![&>])/i;
 
 const rewriteRemedy = (n) =>
-  `An issue body is only ticked or added to: put the correction in a comment instead (\`gh issue comment ${n ?? '<N>'} --body-file <file>\`). A rewrite needs the user's approval naming the issue (#${n ?? '<N>'}) — an AskUserQuestion answer ("rewrite #${n ?? '<N>'}") or a prompt they type themselves — which allows one rewrite; a message from an agent, a hook or a tool never approves.`;
+  `An issue body is only ticked or added to: put the correction in a comment instead (\`gh issue comment ${n ?? '<N>'} --body-file <file>\`). A rewrite needs the user's approval naming the issue (#${n ?? '<N>'}) — an AskUserQuestion answer ("rewrite #${n ?? '<N>'}") or a prompt they type themselves — which allows one rewrite in the repo it names ("rewrite owner/repo#${n ?? '<N>'}"), else in the repo of the dir it was given in; a message from an agent, a hook or a tool never approves.`;
+
+// Rule 13's spend keys for issue `n`: `issue-body <repo>#N`, or `issue-body #N`
+// when the repo went unresolved (the approval's dir, no repo named).
+const bodyKey = (n) => new RegExp(`^issue-body (?:[^\\s#]+)?#${n}$`);
+
+/** Has issue `n` been rewritten under approval `uuid` in `state`, under
+ *  either key form? A spend whose call errored is refunded first. */
+function bodySpent(state, uuid, n, transcriptPath) {
+  const isKey = (v) => typeof v === 'string' && bodyKey(n).test(v);
+  for (const v of (Array.isArray(state[uuid]) ? state[uuid] : []).filter(isKey)) {
+    const { entry, ids } = spends(state, uuid, v, transcriptPath);
+    state[uuid] = entry;
+    state[IDS_KEY] = ids;
+  }
+  return Array.isArray(state[uuid]) && state[uuid].some(isKey);
+}
+
+/** spend, for rule 13: one rewrite of #`n` per approval, whichever key form spent it. */
+function bodySpend(uuid, n, verb, file, toolUseId, transcriptPath) {
+  const state = readState(file);
+  if (bodySpent(state, uuid, n, transcriptPath)) return true;
+  const ids = state[IDS_KEY] || {};
+  state[uuid] = [...(Array.isArray(state[uuid]) ? state[uuid] : []), verb];
+  if (toolUseId) ids[`${uuid}|${verb}`] = toolUseId;
+  state[IDS_KEY] = ids;
+  trimState(state);
+  writeState(file, state);
+  return false;
+}
+
+const samePath = (a, b) => (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
 
 /** 13. A `gh issue edit --body/--body-file` that drops or rewords a non-blank
  *  line of the issue's live body (bodyChange), or whose live or new body
  *  can't be read, needs the user's approval naming the issue; ticking a box
  *  and adding lines pass. The approval is the push gate's (latestApproval
- *  with rule 13's predicates), spent once per issue in its own state file —
+ *  with rule 13's predicates), applies only in its own repo (the one it
+ *  names, else gh's in its record's dir; unequal or unresolvable blocks),
+ *  and is spent once per issue in its own state file —
  *  or, given a `deps.pending` array, pushed onto it as a spend to run once
  *  every other check has passed (a blocked command never spends). The live
  *  body is read only for a body edit; `deps.liveBody` replaces gh's read
- *  (tests). A body file is read only when every other step runs after gh
+ *  and `deps.repoOf` gh's repo lookup (tests). A body file is read only when every other step runs after gh
  *  reads it — a trailing tail/head stage, or a later pipeline with no loop,
  *  function or background job in the command (location changes don't
  *  count): an earlier or concurrent step may write it first. In bash a
- *  "$(cat <<'EOF' … EOF\n)" body (HEREDOC_SUB) is read as its heredoc's text. */
+ *  "$(cat <<'EOF' … EOF\n)" body (HEREDOC_SUB) is read as its heredoc's text.
+ *  A `gh api` call that writes an issue body (apiCall, gqlBodyWrite; a
+ *  graphql query it can't read counts) is blocked outright: no approval
+ *  opens it, and the reason points at `gh issue edit --body-file`. */
 export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyStateFile(), toolUseId = undefined, tool = null, deps = {}) {
   const liveBody = deps.liveBody ?? liveIssueBody;
   const held = []; // each body edit that needs approval: { n, line } or { n, why }
@@ -1892,8 +1943,46 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
   // A loop, function or background job may run a later step before (or
   // beside) a body file's read: then no step runs safely after it.
   const repeats = RUNS_AGAIN.test(stripHeredocs(text).replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
-  // gh reads GH_REPO's repo over the cwd's; the guard doesn't follow it.
+  // gh reads GH_REPO's repo over the cwd's, and GH_HOST's host for a target
+  // that names none; the guard follows neither.
   const ghRepo = /\bGH_REPO\b/.test(raw);
+  const ghHost = /\bGH_HOST\b/.test(raw);
+  // A heredoc placeholder in `s` (a `${flag}` value) read back as its text: `{ text }` or `{ why }`.
+  const unmark = (s, flag) => {
+    if (!s?.includes(HEREDOC_MARK)) return { text: s };
+    const at = new RegExp(`^${HEREDOC_MARK}(\\d+)${HEREDOC_MARK}$`).exec(s);
+    return at ? { text: heredocs[Number(at[1])] } : { why: `its ${flag} value joins a heredoc to other text, which the guard can't read` };
+  };
+  // The file `file` (a `what`) that call `c` reads, as `{ text }` or `{ why }`.
+  // Read only when every other step runs once gh has read it — a trailing
+  // tail/head stage, a later pipeline (`&& echo done`), or a group's lone `}`
+  // (it runs nothing): any other step may write it first.
+  const readFile = (c, file, what) => {
+    const at = all.indexOf(c);
+    const after = (o, i) =>
+      (o.cmd === '}' && o.words.length === 1) || (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head)$/i.test(o.cmd)) || (i > at && o.top !== c.top && !repeats);
+    if (!all.every((o, i) => o === c || after(o, i))) return { why: `its ${what} ${file} is read before the command's other steps run, which may write it — run the edit in a Bash call of its own` };
+    const path = toDir(c.dir, gitBashTmp(file, c.tool));
+    try {
+      return { text: readFileSync(typeof path === 'string' ? path : '', 'utf8') };
+    } catch {
+      return { why: `its ${what} ${file} could not be read` };
+    }
+  };
+  // A `gh api` call that writes an issue body: the guard can't check it, and no approval opens it.
+  const apiRoute = (n) =>
+    `no approval opens it. Write the body with \`gh issue edit ${/^\d+$/.test(n ?? '') ? n : '<N>'} --body-file <file>\`, which rule 13 checks against the live body.`;
+  const apiReason = (api, c) => {
+    if (api.n !== undefined) return `This \`gh api\` call writes the body of issue ${api.n}, which the guard can't check — ${apiRoute(api.n)}`;
+    for (const q of api.queries) {
+      let { text, why } = q;
+      if (q.file !== undefined) ({ text, why } = readFile(c, q.file, 'query file'));
+      if (!why) ({ text, why } = unmark(text, 'query'));
+      if (why) return `This \`gh api graphql\` call can't be checked for an issue body write (${why}) — ${apiRoute(null)}`;
+      if (gqlBodyWrite(text, api.keys)) return `This \`gh api graphql\` call's updateIssue mutation writes an issue body, which the guard can't check — ${apiRoute(null)}`;
+    }
+    return null;
+  };
   for (const c of all) {
     if (!/^gh$/i.test(c.cmd)) continue;
     // The call's words end its clause's: wrappers and prefixes come off the
@@ -1908,34 +1997,25 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
       const cut = Math.min(last.match(/\)*$/)[0].length, words(last).join(' ').length - c.words.at(-1).length);
       if (cut > 0) raws[raws.length - 1] = last.slice(0, -cut);
     }
+    const api = apiCall(c.words.slice(1), raws, c.tool);
+    if (api) {
+      const blocked = apiReason(api, c);
+      if (blocked) return blocked;
+      continue;
+    }
     const edit = bodyEdit(c.words.slice(1), raws, c.tool);
     if (!edit) continue;
     const dir = typeof c.dir === 'string' ? c.dir : null;
     let { text: next, why } = edit.body;
-    if (next?.includes(HEREDOC_MARK)) {
-      const at = new RegExp(`^${HEREDOC_MARK}(\\d+)${HEREDOC_MARK}$`).exec(next);
-      if (at) next = heredocs[Number(at[1])];
-      else why = "its --body value joins a heredoc to other text, which the guard can't read";
-    }
-    if (edit.body.file !== undefined) {
-      const path = toDir(c.dir, edit.body.file);
-      // A trailing tail/head stage, or a later pipeline (`&& echo done`), runs
-      // once gh has read the file; any other step may write it first.
-      const at = all.indexOf(c);
-      const after = (o, i) => (o.pipe === c.pipe && o.seg > c.seg && /^(?:tail|head)$/i.test(o.cmd)) || (i > at && o.top !== c.top && !repeats);
-      if (!all.every((o, i) => o === c || after(o, i))) why = `its body file ${edit.body.file} is read before the command's other steps run, which may write it — run the edit in a Bash call of its own`;
-      else {
-        try {
-          next = readFileSync(typeof path === 'string' ? path : '', 'utf8');
-        } catch {
-          why = `its body file ${edit.body.file} could not be read`;
-        }
-      }
-    }
+    if (!why) ({ text: next, why } = unmark(next, '--body'));
+    if (edit.body.file !== undefined) ({ text: next, why } = readFile(c, edit.body.file, 'body file'));
     for (const t of edit.targets.length ? edit.targets : [null]) {
+      // The edit's repo, for its approval: named, else gh's from `dir`; unknown under a GH_REPO or GH_HOST the target doesn't override.
+      const at = t && { n: t.number, repo: t.repo, dir, unknownRepo: (ghRepo && !t.repo) || (ghHost && !t.host) };
       if (!t) held.push({ n: null, why: "the guard can't read which issue it edits — name it by number" });
-      else if (why) held.push({ n: t.number, why });
-      else if (ghRepo && !t.repo) held.push({ n: t.number, why: 'a GH_REPO in the command picks the repo gh edits, which the guard does not follow — name the repo with -R <owner/repo>' });
+      else if (why) held.push({ ...at, why });
+      else if (ghRepo && !t.repo) held.push({ ...at, why: 'a GH_REPO in the command picks the repo gh edits, which the guard does not follow — name the repo with -R <owner/repo>' });
+      else if (ghHost && !t.host) held.push({ ...at, why: "a GH_HOST in the command picks the host gh edits, which the guard does not follow — name the host with -R <host/owner/repo> or the issue's URL" });
       else {
         let live = null;
         // A cd the guard couldn't follow leaves the repo gh resolves unknown.
@@ -1947,7 +2027,7 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
           }
         }
         const lost = typeof live === 'string' ? bodyChange(live, next) : { why: `the live body of #${t.number} could not be read` };
-        if (lost) held.push({ n: t.number, ...lost });
+        if (lost) held.push({ ...at, ...lost });
       }
     }
   }
@@ -1969,11 +2049,41 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
     return `${base} The transcript could not be read.`;
   }
   if (!record) return `${base} Neither the user's latest typed prompt nor their latest AskUserQuestion answer approves a rewrite of #${h.n} (a newer reply that doesn't approve overrides an older one that did).`;
-  const verb = `issue-body #${h.n}`;
+  // The approval applies only in its own repo: the one it names, else gh's in
+  // its record's dir. With no repo named on either side and the edit in that
+  // dir, the two are the same and gh is never asked.
+  const named = Array.isArray(record.approves) ? record.approves : [null];
+  const recordDir = record.cwd || cwd;
+  let verb = `issue-body #${h.n}`;
+  if (h.unknownRepo || h.repo || !named.includes(null) || !h.dir || !samePath(h.dir, recordDir)) {
+    const repoOf = deps.repoOf ?? issueRepoOf;
+    const resolved = new Map();
+    const resolveIn = (d) => {
+      if (!resolved.has(d)) {
+        let r = null;
+        try {
+          r = d ? repoOf(d) : null;
+        } catch {
+          r = null;
+        }
+        resolved.set(d, typeof r === 'string' && r ? repoKey(r) : null);
+      }
+      return resolved.get(d);
+    };
+    const editRepo = h.unknownRepo ? null : h.repo ? repoKey(h.repo) : resolveIn(h.dir);
+    const approved = named.map((r) => r ?? resolveIn(recordDir));
+    if (!editRepo || (!approved.includes(editRepo) && approved.includes(null))) {
+      return `${base} The guard can't tell which repo ${editRepo ? 'that approval' : 'this edit'} is in, so it can't match the approval to the edit — name the repo on both sides: an approval naming owner/repo#${h.n} and the edit's -R owner/repo.`;
+    }
+    if (!approved.includes(editRepo)) {
+      return `${base} That approval is for #${h.n} in ${approved.join(' or ')}; this edit is #${h.n} in ${editRepo}. A rewrite there needs an approval naming it ("rewrite ${editRepo}#${h.n}").`;
+    }
+    verb = `issue-body ${editRepo}#${h.n}`;
+  }
   const spent = `${base} That approval was already spent on a rewrite of #${h.n} — one rewrite per approval.`;
-  if (!deps.pending) return spend(record.uuid, verb, stateFile, toolUseId, transcriptPath) ? spent : null;
-  if (spends(readState(stateFile), record.uuid, verb, transcriptPath).entry.includes(verb)) return spent;
-  deps.pending.push(() => (spend(record.uuid, verb, stateFile, toolUseId, transcriptPath) ? spent : null));
+  if (!deps.pending) return bodySpend(record.uuid, h.n, verb, stateFile, toolUseId, transcriptPath) ? spent : null;
+  if (bodySpent(readState(stateFile), record.uuid, h.n, transcriptPath)) return spent;
+  deps.pending.push(() => (bodySpend(record.uuid, h.n, verb, stateFile, toolUseId, transcriptPath) ? spent : null));
   return null;
 }
 
