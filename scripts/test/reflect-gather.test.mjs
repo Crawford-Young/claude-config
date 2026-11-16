@@ -95,6 +95,48 @@ test('a batch director\'s Time covers every kept window: the long one before /cl
   assert.match(r.stdout, /\| 2026-11-13 \| director_topic_batch-368-376 \| 13\.5s \| 13\.5s \|/);
 });
 
+/** A reused director name (#422): two batches' windows share one title, each with its own named subagent. */
+function reusedNameFixture() {
+  const dir = tempDir('reflect-gather-');
+  const proj = join(dir, 'projects', 'C--proj');
+  mkdirSync(proj, { recursive: true });
+  const say = (id, sessionId, timestamp) => ({ type: 'assistant', uuid: `u-${id}`, requestId: id, timestamp, sessionId,
+    message: { id: `m-${id}`, model: 'claude-opus-5', usage: { input_tokens: 10, output_tokens: 1 }, content: [] } });
+  for (const [id, day, agent] of [['old', '2026-10-01', 'impl_issue_claude-config-1'], ['new', '2026-11-16', 'impl_issue_claude-config-2']]) {
+    const sub = join(proj, id, 'subagents');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(proj, `${id}.jsonl`), lines(say(`${id}1`, id, `${day}T10:00:00Z`), { type: 'custom-title', sessionId: id, customTitle: 'director_topic_batch-1-2' }));
+    writeFileSync(join(sub, 'agent-a01.jsonl'), lines(say(`${id}a`, id, `${day}T10:00:30Z`)));
+    writeFileSync(join(sub, 'agent-a01.meta.json'), JSON.stringify({ agentType: 'implementer', name: agent }));
+  }
+  return { dir, root: join(dir, 'projects') };
+}
+
+test('--since YYYY-MM-DD reaches the audit: a reused director name gathers only that batch (#422)', () => {
+  const f = reusedNameFixture();
+  const all = spawnHarness(cli, ['director_topic_batch-1-2', '--root', f.root]);
+  assert.equal(all.status, 0, all.stderr);
+  assert.match(all.stdout, /## Audit — 2 window\(s\) charged to topic_batch-1-2/);
+  assert.match(all.stdout, /issue_claude-config-1 /);
+  assert.match(all.stdout, /issue_claude-config-2 /);
+  const r = spawnHarness(cli, ['director_topic_batch-1-2', '--root', f.root, '--since', '2026-11-16']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Audit — 1 window\(s\) charged to topic_batch-1-2/);
+  const agents = r.stdout.match(/Agents under its windows, per charge: [^\n]*/)?.[0] ?? '';
+  assert.match(agents, /issue_claude-config-2 /);
+  assert.doesNotMatch(agents, /issue_claude-config-1 /);
+});
+
+test('a rev-form --since is not forwarded to the audit (it takes only a date); the repo activity still uses it (#422)', () => {
+  const f = reusedNameFixture();
+  const repo = fixture().repo;
+  const rev = spawnSync('git', ['-C', repo, 'rev-parse', '--short', 'HEAD~1'], { encoding: 'utf8' }).stdout.trim();
+  const r = spawnHarness(cli, ['director_topic_batch-1-2', '--root', f.root, '--repo', repo, '--since', rev]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /## Audit — 2 window\(s\) charged to topic_batch-1-2/);
+  assert.match(r.stdout, new RegExp(`## Repo activity since ${rev}`));
+});
+
 test('a renamed window with no priced requests reports, not crashes', () => {
   const f = fixture();
   writeFileSync(join(f.proj, 'w4.jsonl'), lines({ type: 'custom-title', sessionId: 'w4', customTitle: 'repo-9' }));
