@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { execHarness, tempDir } from './_spawn.mjs';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -727,4 +727,173 @@ test('--body-edits: a relationship or type flag value is not an issue target', (
 test('--body-edits: --remove-milestone is a switch, so the number after it is a target', () => {
   const out = edits(config({ 's.jsonl': [...shell('gh issue edit --remove-milestone 12 --body x'), ...shell('gh issue edit 13 --remove-milestone --body x')] }));
   assert.deepEqual(tally(out), { 'Body-edit calls': 2, 'Unique commands': 2, Sessions: 1, 'Issue targets': 2 });
+});
+
+// ---- --prefixes (#420): count past calls that ran a command through command/exec/builtin/env ----
+// Pinned output (markdown, stdout, rc 0):
+//   # <title naming prefixes>
+//   Window: <first> → <last> (<n> days); ... <n> Bash/PowerShell calls
+//   - Prefixed calls: N
+//   - Unique prefixed commands: N
+//   - On a guarded verb: N
+//   - Sessions: N
+//   - By prefix: command N, exec N, builtin N, env N
+//   --full adds each unique prefixed command, redacted, indented 4 spaces, guarded ones marked.
+
+const prefixes = (cfg, ...args) => run(cfg, '--prefixes', repoRoot, ...args);
+const pTally = (out) => Object.fromEntries([...out.matchAll(/^- (Prefixed calls|Unique prefixed commands|On a guarded verb|Sessions): (\d+)$/gm)].map((m) => [m[1], Number(m[2])]));
+const byPrefix = (out) => {
+  const m = /^- By prefix: command (\d+), exec (\d+), builtin (\d+), env (\d+)$/m.exec(out);
+  return m ? { command: Number(m[1]), exec: Number(m[2]), builtin: Number(m[3]), env: Number(m[4]) } : null;
+};
+const P = (calls, unique, guarded, sessions) => ({ 'Prefixed calls': calls, 'Unique prefixed commands': unique, 'On a guarded verb': guarded, Sessions: sessions });
+
+test('--prefixes prints the title, the window line and the five summary lines', () => {
+  const out = prefixes(config({ 's.jsonl': [...shell('command ls'), ...shell('ls')] }));
+  assert.match(out, /^# .*prefix/im);
+  assert.match(out, /^Window: 2026-10-01 → 2026-10-01 \(1 days?\); 1 transcript files \(1 main, 0 subagent\); 2 Bash\/PowerShell calls$/m);
+  assert.deepEqual(pTally(out), P(1, 1, 0, 1));
+  assert.deepEqual(byPrefix(out), { command: 1, exec: 0, builtin: 0, env: 0 });
+});
+
+test('--prefixes counts each of command, exec, builtin and env, by basename, case and .exe', () => {
+  const rows = [...shell('command ls'), ...shell('exec ls'), ...shell('builtin echo hi'), ...shell('env ls'), ...shell('/usr/bin/env FOO=1 ls'), ...shell('ENV.EXE ls'), ...shell('Command ls')];
+  const out = prefixes(config({ 's.jsonl': rows }));
+  assert.deepEqual(pTally(out), P(7, 7, 0, 1));
+  assert.deepEqual(byPrefix(out), { command: 2, exec: 1, builtin: 1, env: 3 });
+});
+
+test('--prefixes reads the command word after leading VAR=value assignments and in any clause', () => {
+  const rows = [...shell('FOO=1 BAR=2 command ls'), ...shell('cd /tmp && builtin cd /'), ...shell('ls; exec true')];
+  const out = prefixes(config({ 's.jsonl': rows }));
+  assert.deepEqual(pTally(out), P(3, 3, 0, 1));
+  assert.deepEqual(byPrefix(out), { command: 1, exec: 1, builtin: 1, env: 0 });
+});
+
+test('--prefixes does not count a prefix word inside a quote, as an argument or as a find -exec', () => {
+  const rows = [
+    ...shell('echo "command git push"'),
+    ...shell('find . -exec rm {} \\;'),
+    ...shell("grep 'env git push' notes.md"),
+    ...shell('git log --grep=exec'),
+    ...shell('ls env'),
+    ...shell('git status'),
+  ];
+  const out = prefixes(config({ 's.jsonl': rows }));
+  assert.match(out, /; 6 Bash\/PowerShell calls$/m);
+  assert.deepEqual(pTally(out), P(0, 0, 0, 0));
+  assert.deepEqual(byPrefix(out), { command: 0, exec: 0, builtin: 0, env: 0 });
+});
+
+test('--prefixes counts `command -v git` as prefixed but not as guarded', () => {
+  const out = prefixes(config({ 's.jsonl': shell('command -v git') }));
+  assert.deepEqual(pTally(out), P(1, 1, 0, 1));
+});
+
+test('--prefixes marks a prefixed call guarded on a gated verb, a body edit or a static-check reason', () => {
+  const rows = [
+    ...shell('env git push origin x'),
+    ...shell('env gh issue edit 1 --body x'),
+    ...shell('env git add -A'),
+    ...shell('env ls'),
+    ...shell('command -v git'),
+  ];
+  const out = prefixes(config({ 's.jsonl': rows }));
+  assert.deepEqual(pTally(out), P(5, 5, 3, 1));
+  assert.deepEqual(byPrefix(out), { command: 1, exec: 0, builtin: 0, env: 4 });
+});
+
+test('--prefixes does not count an unprefixed guarded call as guarded-prefixed', () => {
+  const out = prefixes(config({ 's.jsonl': [...shell('git push origin x'), ...shell('gh issue edit 1 --body x'), ...shell('env ls')] }));
+  assert.deepEqual(pTally(out), P(1, 1, 0, 1));
+});
+
+test('--prefixes counts a repeated command twice but lists it once, and counts sessions', () => {
+  const cfg = config({
+    'a.jsonl': [...shell('env git push origin x'), ...shell('env git push origin x')],
+    'b.jsonl': [...shell('command ls')],
+    'c.jsonl': [...shell('ls')],
+  });
+  const out = prefixes(cfg);
+  assert.match(out, /; 3 transcript files \(3 main, 0 subagent\); 4 Bash\/PowerShell calls$/m);
+  assert.deepEqual(pTally(out), P(3, 2, 2, 2));
+});
+
+test('--prefixes counts a tool_use id once across a transcript and a subagent transcript, and reads both', () => {
+  const dup = [{ type: 'assistant', timestamp: '2026-10-01T10:00:00.000Z', cwd: SHARED, message: { content: [{ type: 'tool_use', id: 'toolu_same', name: 'Bash', input: { command: 'command ls' } }] } }];
+  const cfg = config({ 'main.jsonl': [...dup, ...dup, ...shell('env ls')] });
+  const sub = join(cfg, 'projects', 'p', 'main', 'subagents');
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, 'agent-1.jsonl'), shell('exec ls').map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const out = prefixes(cfg);
+  assert.match(out, /; 2 transcript files \(1 main, 1 subagent\); 3 Bash\/PowerShell calls$/m);
+  assert.deepEqual(pTally(out), P(3, 3, 0, 2));
+  assert.deepEqual(byPrefix(out), { command: 1, exec: 1, builtin: 0, env: 1 });
+});
+
+test('--prefixes counts the PowerShell tool and keeps one command run by both tools as two calls, one listed command per tool', () => {
+  const rows = [...shell('env ls', { tool: 'PowerShell' }), ...shell('env ls')];
+  assert.deepEqual(pTally(prefixes(config({ 's.jsonl': rows }))), P(2, 2, 0, 1));
+});
+
+test('--prefixes reads every transcript by default, not the last 7 days, and honours --files', () => {
+  const cfg = config({ 'old.jsonl': shell('command ls', { t: '2026-01-01T10:00:00.000Z' }) });
+  utimesSync(join(cfg, 'projects', 'p', 'old.jsonl'), new Date('2026-01-02'), new Date('2026-01-02'));
+  assert.equal(pTally(prefixes(cfg))['Prefixed calls'], 1);
+  const two = config({ 'a.jsonl': shell('command ls'), 'b.jsonl': shell('env ls') });
+  utimesSync(join(two, 'projects', 'p', 'a.jsonl'), new Date('2026-01-02'), new Date('2026-01-02'));
+  const narrowed = prefixes(two, '--files', '1');
+  assert.match(narrowed, /; 1 transcript files /);
+  assert.equal(pTally(narrowed)['Prefixed calls'], 1);
+});
+
+test('--prefixes lists each unique prefixed command only under --full, redacted, indented, guarded ones marked', () => {
+  const cfg = config({ 's.jsonl': [...shell('env git push origin x'), ...shell('env git push origin x'), ...shell('command ls'), ...shell('ls')] });
+  const plain = prefixes(cfg);
+  assert.doesNotMatch(plain, /^ {4}env git push/m);
+  const full = prefixes(cfg, '--full');
+  assert.match(full, /^ {4}env git push origin x/m);
+  assert.match(full, /^ {4}command ls/m);
+  assert.equal(full.match(/^ {4}env git push origin x/gm).length, 1, 'listed once');
+  assert.doesNotMatch(full, /^ {4}ls$/m, 'an unprefixed command is not listed');
+  const pushLine = full.split('\n').find((l) => /^ {4}env git push origin x/.test(l));
+  const lsLine = full.split('\n').find((l) => /^ {4}command ls/.test(l));
+  assert.match(pushLine, /guarded/i);
+  assert.doesNotMatch(lsLine, /guarded/i);
+  const secret = config({ 's.jsonl': shell('GH_TOKEN=hunter2secret env ls') });
+  assert.doesNotMatch(prefixes(secret, '--full'), /hunter2secret/);
+  assert.equal(pTally(prefixes(secret))['Prefixed calls'], 1, 'an assignment before env still counts');
+});
+
+test('--prefixes reads the checkout it is given: a checkout without hooks/bash-guard.mjs fails loudly', () => {
+  const cfg = config({ 's.jsonl': shell('command ls') });
+  let failed = null;
+  let out = '';
+  try {
+    out = execHarness(script, ['--prefixes', 'C:/nonexistent/checkout'], { env: { CLAUDE_CONFIG_DIR: cfg } });
+  } catch (e) {
+    failed = e;
+  }
+  assert.ok(failed, `expected a non-zero exit for a missing checkout, got a report:\n${out}`);
+  assert.match(failed.stderr, /\S/, 'an error is written to stderr');
+});
+
+test('--prefixes counts a prefix in a later pipeline stage, behind another prefix, after a keyword or in a group', () => {
+  // Known lower bound: a prefix inside `bash -c "..."` or `$(...)` is not counted (not pinned either way).
+  const rows = [
+    ...shell('cat a | command git push origin x'),
+    ...shell('timeout 60 env FOO=1 git push origin x'),
+    ...shell('nohup exec git push origin x'),
+    ...shell('time command ls'),
+    ...shell('if command -v node; then echo y; fi'),
+    ...shell('(command ls)'),
+  ];
+  const out = prefixes(config({ 's.jsonl': rows }));
+  assert.deepEqual(pTally(out), P(6, 6, 3, 1));
+});
+
+test('the guard-replay header comment documents --prefixes', () => {
+  const head = readFileSync(script, 'utf8').split('\n').slice(0, 40).join('\n');
+  assert.match(head, /--prefixes/);
+  assert.match(head, /#420/);
 });

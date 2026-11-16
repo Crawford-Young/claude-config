@@ -665,7 +665,7 @@
    "kind": "script",
    "label": "guard-replay.mjs",
    "file": "scripts/guard-replay.mjs",
-   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106); --by-rule counts the live bash-guard blocks per rule (#368); --body-edits counts past gh issue edit body calls and their issue targets (#388).",
+   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106); --by-rule counts the live bash-guard blocks per rule (#368); --body-edits counts past gh issue edit body calls and their issue targets (#388); --prefixes counts past calls behind a command/exec/builtin/env prefix and those on a guarded verb (#420).",
    "rules": [
     "Run before a guard or approval-parser PR",
     "Report only: exit 0 with the verdicts, exit 1 with a stderr line only when the script itself fails; local transcripts, never CI"

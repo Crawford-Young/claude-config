@@ -95,8 +95,12 @@
 // matches a command by its name (commandName: the basename less a `.exe`, in
 // any case, so `C:/…/git.exe` and `GIT` are git), read through the prefixes
 // env, timeout, nohup and time and their options (`env -u X`, `timeout -s KILL 5`)
-// to the call they run (#239). A POSIX shell's command line is found past -c,
-// alone or in a flag cluster (`bash -lc`), PowerShell's past -Command or -c,
+// to the call they run (#239), and through bash's command, exec and builtin
+// (`command -p`, `exec -a n`, `builtin command`), stacked, with env -S /
+// --split-string's string split into the call it runs (#420). A lookup
+// (`command -v`/`-V`) or a bare `exec >log` redirect runs no command. A
+// POSIX shell's command line is found past -c, alone or in a flag cluster
+// (`bash -lc`), PowerShell's past -Command or -c,
 // eval/iex's as their words (shellLine), and a call inside a group or shell
 // line belongs to the pipeline stage it runs in (inStage). These are the
 // shapes real sessions use: #291 cut the readers for every other prefix,
@@ -549,29 +553,46 @@ export function billedLaunch(raw) {
 const commandName = (word) => word.split(/[/\\]/).pop().replace(/\.exe$/i, '');
 
 /** Commands that run the rest of their words as a command (`timeout 60 git
- *  push`, `env -u X git push`, `nohup git push`, `time (…)`), by name: the short options
- *  that take a value (`value`; in a cluster the first one takes the rest of
- *  it, or the next word), every long option (`long`), marked `=` when it
- *  takes a value and `!` when nothing runs after it, and how many words come
- *  before the command (`args`: timeout's duration). Any other option takes
- *  no value. The prefixes real sessions use (#239; #291 cut the rest). */
+ *  push`, `env -u X git push`, `nohup git push`, `time (…)`, `command git
+ *  push`, `exec -a n git push`, `builtin command git push`), by name: the
+ *  short options that take a value (`value`; in a cluster the first one takes
+ *  the rest of it, or the next word), the short options after which nothing
+ *  runs (`lookup`: `command -v`, `-pV`), every long option (`long`, matched
+ *  by its name or any unique abbreviation of it, as getopt_long does), marked
+ *  `=` when it takes a value and `!` when nothing runs after it, the option
+ *  whose value is itself the command line, split (`split`: env -S /
+ *  --split-string), and how many words come before the command (`args`:
+ *  timeout's duration). Any other option takes no value. The prefixes real
+ *  sessions use (#239; #291 cut the rest; #420 added the bash builtins).
+ *  Prefix names match in any case, like command names. */
 const PREFIX = new Map(
   Object.entries({
     nohup: { long: 'help! version!' },
     time: { value: 'fo', long: 'append format= help! output= portability quiet verbose version!' },
     env: {
       value: 'aCPSu',
+      split: ['S', 'split-string'],
       long: 'argv0= block-signal chdir= debug default-signal help! ignore-environment ignore-signal list-signal-handling null split-string= unset= version!',
     },
     timeout: { value: 'ks', long: 'foreground help! kill-after= preserve-status signal= verbose version!', args: 1 },
+    command: { lookup: 'vV', long: 'help!' },
+    exec: { value: 'a', long: 'help!' },
+    builtin: { long: 'help!' },
   }),
 );
 
 /** The words of the call a prefix command (PREFIX) runs, or null when `w`
- *  doesn't start with one or its options run nothing (`timeout --help`). */
+ *  doesn't start with one or its options run nothing (`timeout --help`,
+ *  `command -v git`). A bare `exec` (`exec >log 2>&1`) runs only its
+ *  redirects, which name no command. env -S's string stands in, split, for
+ *  the option that carried it, and env reads its options again from there,
+ *  as GNU env does (`env -S '-i FOO=1 git push'`). */
 function prefixRead(w) {
   const spec = PREFIX.get(commandName(w[0] ?? '').toLowerCase());
   if (!spec) return null;
+  const [splitShort, splitLong] = spec.split ?? [];
+  // Re-read `w` with word k replaced by `keep` and the split line `line`, resuming at word `next`.
+  const split = (k, keep, line, next) => prefixRead([w[0], ...w.slice(1, k), ...keep, ...words(line ?? ''), ...w.slice(next)]);
   let k = 1;
   for (; k < w.length && w[k].startsWith('-'); k++) {
     const a = w[k];
@@ -581,12 +602,25 @@ function prefixRead(w) {
     }
     if (a.startsWith('--')) {
       const [name, attached] = a.slice(2).split(/=(.*)/s);
-      const o = spec.long.split(' ').find((x) => x.replace(/[=!]$/, '') === name);
+      // As getopt_long reads it: the exact name, else the one long option the word
+      // abbreviates (`--spl`). An ambiguous one (`env --i`) makes the real command
+      // run nothing; it is read past as a flag, so the words after it stay read.
+      const longs = spec.long.split(' ').map((x) => [x.replace(/[=!]$/, ''), x]);
+      const hits = longs.filter(([n]) => n.startsWith(name));
+      const [long, o] = longs.find(([n]) => n === name) ?? (hits.length === 1 ? hits[0] : []);
       if (o?.endsWith('!')) return null;
+      if (long !== undefined && long === splitLong) return split(k, [], attached ?? w[k + 1], attached === undefined ? k + 2 : k + 1);
       if (o?.endsWith('=') && attached === undefined) k++;
     } else {
-      const j = [...a.slice(1)].findIndex((ch) => spec.value?.includes(ch));
-      if (j !== -1 && j === a.length - 2) k++;
+      const flags = a.slice(1);
+      const j = [...flags].findIndex((ch) => spec.value?.includes(ch));
+      const own = j === -1 ? flags : flags.slice(0, j); // the cluster's flags before any value
+      if ([...own].some((ch) => spec.lookup?.includes(ch))) return null;
+      if (j !== -1 && flags[j] === splitShort) {
+        const attached = j < flags.length - 1;
+        return split(k, own ? [`-${own}`] : [], attached ? flags.slice(j + 1) : w[k + 1], attached ? k + 1 : k + 2);
+      }
+      if (j !== -1 && j === flags.length - 1) k++;
     }
   }
   return w.slice(k + (spec.args ?? 0));
@@ -600,6 +634,24 @@ function unwrapCommand(w) {
     else if (!(run = prefixRead(w))) break;
   }
   return w;
+}
+
+/** The prefix commands (PREFIX's names, lowercase) a clause — one pipeline
+ *  stage, as clauses() cuts it — runs its call through, outermost first, past
+ *  wrappers (`(`, `{`, `!`, keywords, assignments): `timeout 60 env X=1 git
+ *  push` → timeout, env. One whose options run nothing (`command -v x`) is
+ *  still named. Read-only, for guard-replay --prefixes (#420). */
+export function prefixCommands(clause) {
+  const out = [];
+  for (let w = words(clause), run; w.length; w = run) {
+    const head = w[0].replace(/^[({!]+/, '');
+    if (!head || WRAPPER.test(head)) run = w.slice(1);
+    else if (PREFIX.has(commandName(head).toLowerCase())) {
+      out.push(commandName(head).toLowerCase());
+      run = prefixRead([head, ...w.slice(1)]) ?? [];
+    } else break;
+  }
+  return out;
 }
 
 /** Mark `cs`, emitted from a body or shell line run as pipeline stage
@@ -877,7 +929,7 @@ function walkCommands(raw, scope) {
           w[0] = w[0].slice(lead.length);
         }
         if (!w.length) break;
-        // A prefix command (`timeout 5`, `env -u X`) runs the call after it.
+        // A prefix command (`timeout 5`, `env -u X`, `command -p`) runs the call after it.
         const run = !WRAPPER.test(w[0]) && prefixRead(w);
         if (run) {
           wrappers.push(w[0]);

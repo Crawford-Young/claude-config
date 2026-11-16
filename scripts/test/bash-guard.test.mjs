@@ -1503,6 +1503,174 @@ test('#239: env, timeout, nohup and time are read through their options to the c
   for (const c of ['timeout 5 npm test', 'env -u X node a.mjs', 'nohup node server.mjs']) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
 });
 
+// --- #420: command / exec / builtin / env carry a guarded command past no rule ---
+
+const SH = ['Bash', null];
+const gatedSh = (c, verbs) => {
+  for (const tool of SH) assert.deepEqual(gatedVerbs(c, '/work', tool), verbs, `${tool} ${c}`);
+};
+const CORE_PREFIXES = ['command', 'exec', 'builtin command', 'env'];
+const ALL_PREFIXES = [
+  ...CORE_PREFIXES,
+  'command -p',
+  'command --',
+  'command -p --',
+  'exec -a name',
+  'exec -c',
+  'exec -l',
+  'exec -cl -a name',
+  'exec --',
+  'builtin command -p',
+  'builtin exec',
+  'env -u NAME',
+  'env -C dir',
+  'env --',
+  'env VAR=1',
+  'env -i VAR=1',
+  'env -i command exec',
+  'command env FOO=1',
+  'command exec env -u X',
+  'exec env --',
+  'env -i command -p exec -a n',
+];
+
+test('#420: a push behind command / exec / builtin / env, with options, stacked, is the push gate', () => {
+  for (const p of ALL_PREFIXES) gatedSh(`${p} git push origin x`, ['git push']);
+  gatedSh('command git push --force-with-lease origin x', ['git push']);
+  gatedSh('cd /tmp && exec git push', ['git push']);
+  gatedSh('echo hi; command git push origin x', ['git push']);
+  gatedSh('command GIT.EXE push origin x', ['git push']);
+  gatedSh('command git -C /r push origin x', ['git push']);
+  // A dry run and a branch delete stay exempt through the prefix too.
+  gatedSh('command git push --dry-run origin x', []);
+  gatedSh('exec git push origin :old', []);
+});
+
+test('#420: a PR create behind command / exec / builtin / env, with options, stacked, is the PR gate', () => {
+  for (const p of ALL_PREFIXES) gatedSh(`${p} gh pr create --fill`, ['gh pr create']);
+  gatedSh('command gh -R o/r pr create --fill', ['gh pr create']);
+  gatedSh('command gh.exe pr create', ['gh pr create']);
+});
+
+test('#420: a PR merge behind command / exec / builtin / env, with options, stacked, is the PR gate', () => {
+  for (const p of ALL_PREFIXES) gatedSh(`${p} gh pr merge 1`, ['gh pr merge']);
+  gatedSh('command gh pr merge 1 --squash', ['gh pr merge']);
+  gatedSh('command env FOO=1 gh pr merge 1', ['gh pr merge']);
+});
+
+test('#420: env -S / --split-string splits its string into the command it runs', () => {
+  gatedSh(`env -S 'git push origin x'`, ['git push']);
+  gatedSh(`env --split-string='git push origin x'`, ['git push']);
+  gatedSh(`env --split-string 'gh pr merge 1'`, ['gh pr merge']);
+  gatedSh(`env -S 'gh pr create --fill'`, ['gh pr create']);
+  gatedSh(`env -i -S 'git push origin x'`, ['git push']);
+  gatedSh(`command env -S 'git push origin x'`, ['git push']);
+  gatedSh(`env -S 'FOO=1 git push'`, ['git push']);
+  gatedSh(`env -S 'echo hi'`, []);
+});
+
+test('#420: the other rules read the command behind command / exec / builtin too', () => {
+  // Rule 1: wholesale staging.
+  for (const c of ['command git add -A', 'exec git add .', 'builtin command git add --all', 'command -p git commit -am x', 'exec -a n git commit --all -m x', 'command env FOO=1 git add -A']) {
+    for (const tool of SH) assert.ok(staticCheck(c, '/work', tool), `${tool} ${c}`);
+  }
+  // Rule 2: env files.
+  for (const c of ['command git add .env', 'exec git commit --only .env -m x', 'builtin command git add .env.local']) {
+    for (const tool of SH) assert.ok(staticCheck(c, '/work', tool), `${tool} ${c}`);
+  }
+  // Rule 12: a backtick in a double-quoted node eval script.
+  for (const c of ['command node -e "`x`"', 'exec node -e "`x`"', 'builtin command node -p "`x`"', 'command -p node --eval "`x`"']) evalBlocked(c, SH);
+  // Wrapped ordinary commands stay open.
+  for (const c of ['command git add a.ts', 'exec git commit -m x', 'command node a.mjs', 'command git status']) assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
+});
+
+test('#420: rule 6 blocks a commit in the claude-config main checkout behind command / exec / builtin', () => {
+  const h = tmpHome();
+  const cfg = join(h, 'cfg');
+  mkdirSync(cfg);
+  execFileSync('git', ['init', '-q', '-b', 'main', cfg]);
+  execFileSync('git', ['-C', cfg, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'root']);
+  const env = { CLAUDE_CONFIG_REPO: cfg };
+  assert.equal(guardRun(`cd ${cfg} && git commit -m x`, h, env), 2, 'control');
+  for (const c of [`cd ${cfg} && command git commit -m x`, `cd ${cfg} && exec git commit -m x`, `builtin command git -C ${cfg} commit -m x`, `cd ${cfg} && command -p git commit -m x`, `cd ${cfg} && env -i command git commit -m x`]) {
+    assert.equal(guardRun(c, h, env), 2, c);
+  }
+});
+
+test('#420: the push / PR gate fires through the hook behind command / exec / builtin', () => {
+  const h = tmpHome();
+  for (const c of ['command git push origin x', 'exec git push origin x', 'builtin command git push origin x', 'command gh pr merge 1', 'exec gh pr merge 1', 'command gh pr create --fill', 'command -p git push', 'command env FOO=1 gh pr merge 1']) {
+    assert.equal(guardRun(c, h), 2, c);
+  }
+});
+
+test('#420: lookups and non-commands behind the same words are not gated or blocked', () => {
+  for (const c of [
+    'command -v git',
+    'command -V gh',
+    'command -v git push',
+    'command -V gh pr merge 1',
+    'command -pv git',
+    'command -pV gh',
+    'type git',
+    'type -a gh',
+    'which git',
+    'exec >log 2>&1',
+    'exec 3>&1',
+    'find . -exec echo {} \\;',
+    'find . -name x -exec grep y {} +',
+    'echo command git push',
+    `echo "command gh pr merge 1"`,
+    `echo 'exec git push'`,
+    'git commit -m "command git push"',
+    'builtin echo hi',
+    'builtin cd /tmp',
+    'command ls',
+  ]) {
+    gatedSh(c, []);
+    assert.equal(staticCheck(c, '/work', 'Bash'), null, c);
+  }
+  const h = tmpHome();
+  for (const c of ['command -v git', 'command -V gh', 'command -v git push', 'command -pv git', 'exec >log 2>&1']) assert.equal(guardRun(c, h), 0, c);
+});
+
+test('#420 review: a long option is read by any unique prefix of its name, as getopt_long does', () => {
+  for (const c of [
+    `env --split='git push origin x'`,
+    `env --spl 'git push origin x'`,
+    'env --un X git push origin x',
+    'env --ch /tmp git push origin x',
+    'timeout --sig KILL 5 git push origin x',
+    'timeout --kill 3 5 git push origin x',
+  ]) {
+    gatedSh(c, ['git push']);
+  }
+  gatedSh(`env --spl 'gh pr merge 1'`, ['gh pr merge']);
+  assert.equal(guardRun(`env --spl 'gh pr merge 1'`, tmpHome()), 2, 'through the hook');
+  // An ambiguous prefix (env --i: ignore-environment / ignore-signal) makes real env run nothing.
+  // Failing closed is the safe pin: the words after it are still read as the command, so it stays gated.
+  gatedSh('env --i git push origin x', ['git push']);
+});
+
+test('#420 review: rule 3 and rule 6 (non-commit verbs) and the approval binding see behind a prefix', () => {
+  for (const c of ['command npm test | tail -5', 'exec node --test a.mjs | tail -5']) {
+    for (const tool of SH) assert.match(staticCheck(c, '/work', tool) ?? '', /pipe after a gate/, `${tool} ${c}`);
+  }
+  const h = tmpHome();
+  const cfg = join(h, 'cfg');
+  mkdirSync(cfg);
+  execFileSync('git', ['init', '-q', '-b', 'main', cfg]);
+  execFileSync('git', ['-C', cfg, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'root']);
+  const env = { CLAUDE_CONFIG_REPO: cfg };
+  assert.equal(guardRun(`cd ${cfg} && git checkout -b foo`, h, env), 2, 'control');
+  for (const c of [`cd ${cfg} && command git checkout -b foo`, `cd ${cfg} && exec git switch other`]) assert.equal(guardRun(c, h, env), 2, c);
+  const dir = shipRepo();
+  for (const c of ['command git push origin x', `env -S 'git push origin x'`]) {
+    const r = canonicalShip(c, dir, null, { prHead });
+    assert.ok(r.why && !r.target, `${c} → ${JSON.stringify(r)}`);
+  }
+});
+
 test('#291: a shell line is read past bash/sh -c (a flag cluster too) and powershell/pwsh -Command or -c', () => {
   for (const c of [
     `bash -c "git push"`,
