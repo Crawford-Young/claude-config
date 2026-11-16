@@ -497,6 +497,172 @@ test('#380: claudeLaunches also finds a claude started through a wrapper, and st
   for (const [name, command] of quiet) assert.deepEqual(claudeLaunches([call(name, command)]), [], `quiet: ${command}`);
 });
 
+test('#404: claudeLaunches finds env/sudo/exec, shell flag clusters, PowerShell -Command, timeout option arguments and chained wrappers, and stays quiet on wrappers around something else', () => {
+  const call = (name, command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `${name}:${command}`, name, input: { command } }] } });
+  const wrapped = [
+    ['Bash', 'env claude -p x'],
+    ['Bash', 'env FOO=1 claude -p x'],
+    ['Bash', 'sudo claude -p x'],
+    ['Bash', 'exec claude -p x'],
+    ['Bash', 'bash -lc "claude -p x"'],
+    ['PowerShell', 'PowerShell -Command "claude -p x"'],
+    ['PowerShell', 'pwsh -c "claude -p x"'],
+    ['PowerShell', 'powershell.exe -NoProfile -Command "claude -p x"'],
+    ['Bash', 'timeout -s KILL 60 claude -p x'],
+    ['Bash', 'timeout -k 5 60 claude -p x'],
+    ['Bash', 'bash -c "nohup claude -p x"'],
+  ];
+  const quiet = [
+    ['Bash', 'env node claude.mjs'],
+    ['Bash', 'sudo ls ~/.claude'],
+    ['Bash', 'exec node claude.mjs'],
+    ['Bash', 'timeout -s KILL 60 node claude.mjs'],
+    ['Bash', 'timeout -k 5 60 node claude.mjs'],
+    ['Bash', 'bash -lc "echo claude"'],
+    ['PowerShell', 'PowerShell -Command "echo claude"'],
+    ['Bash', 'bash -c "nohup node claude.mjs"'],
+  ];
+  for (const [name, command] of wrapped) assert.deepEqual(claudeLaunches([call(name, command)]), [command], `flags: ${command}`);
+  for (const [name, command] of quiet) assert.deepEqual(claudeLaunches([call(name, command)]), [], `quiet: ${command}`);
+});
+
+test('#404: a separator inside a quoted argument opens no segment, while one after the closing quote or inside a shell -c argument does', () => {
+  const call = (name, command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `${name}:${command}`, name, input: { command } }] } });
+  const quiet = [
+    'git commit -m "fix; nohup claude -p x"',
+    'git commit -m "fix; claude -p x"',
+    "echo 'a | claude -p x'",
+    'git commit -m "a && claude -p x"',
+    'git commit -m "fix; sudo claude -p x"',
+    "echo 'x | env claude'",
+    'gh issue comment 1 -b "a; pwsh -c claude"',
+    'git commit -m "(sudo claude)"',
+  ];
+  const flags = [
+    'git commit -m "fix; x" ; claude -p x',
+    'bash -c "cd x; claude -p x"',
+    'bash -c "cd x && claude -p x"',
+  ];
+  // Quiet cases first and separately, so every failing case shows before a flags failure.
+  const failures = [];
+  for (const command of quiet) {
+    const got = claudeLaunches([call('Bash', command)]);
+    if (got.length !== 0) failures.push(`quiet: ${command} -> ${JSON.stringify(got)}`);
+  }
+  assert.deepEqual(failures, [], 'a separator inside a quoted argument must open no segment');
+  for (const command of flags) assert.deepEqual(claudeLaunches([call('Bash', command)]), [command], `flags: ${command}`);
+});
+
+test('#404: claudeLaunches does not backtrack catastrophically on a long run of timeout options', () => {
+  const call = (command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bt', name: 'Bash', input: { command } }] } });
+  // The pre-#404 regex took ~2 s at n=20 and doubled per step; the scanner is linear (~3 ms at n=5000), so a
+  // super-linear regression fails the bound here.
+  const command = 'timeout ' + '-k -s '.repeat(5000) + 'x';
+  const start = performance.now();
+  const got = claudeLaunches([call(command)]);
+  const ms = performance.now() - start;
+  assert.deepEqual(got, [], 'no claude launch in the command');
+  assert.ok(ms < 500, `claudeLaunches took ${Math.round(ms)} ms (bound 500 ms): catastrophic backtracking`);
+});
+
+test('#404: shell wrappers with a valued option or pwsh.exe', () => {
+  const call = (name, command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `${name}:${command}`, name, input: { command } }] } });
+  const wrapped = [
+    'pwsh -ExecutionPolicy Bypass -Command "claude -p x"',
+    'pwsh.exe -c "claude -p x"',
+  ];
+  for (const command of wrapped) assert.deepEqual(claudeLaunches([call('PowerShell', command)]), [command], `flags: ${command}`);
+});
+
+/** Every failing case of a flags/quiet table at once: [] when all hold. */
+const launchFailures = (flags, quiet, name = 'Bash') => {
+  const call = (command) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: command, name, input: { command } }] } });
+  const got = (command) => claudeLaunches([call(command)]).length > 0;
+  return [...flags.filter((c) => !got(c)).map((c) => `flags: ${JSON.stringify(c)}`), ...quiet.filter(got).map((c) => `quiet: ${JSON.stringify(c)}`)];
+};
+
+test('#404 fix: a $( inside double quotes is a command substitution checked as a command line; inside single quotes it stays literal', () => {
+  const flags = ['out="$(claude -p x)"', 'echo "$(claude -p x)"', 'RESULT="$(claude -p "review" --output-format json)"', 'git commit -m "$(echo hi)" && claude -p x'];
+  const quiet = ["echo '$(claude -p x)'", 'git commit -m "fix; nohup claude -p x"', 'git commit -m "$(echo claude)"', 'echo "$(echo ")") claude"'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 fix: a heredoc body is data, skipped through its terminator line, also inside a $( )', () => {
+  const flags = [
+    "cat > f.md <<'EOF'\nIt's broken\nEOF\nclaude -p x",
+    "git commit -m \"$(cat <<'EOF'\nfix: say \"hi\nEOF\n)\" && claude -p x",
+    'cat <<EOF\nhi\nEOF\nclaude -p x',
+    'cat <<"EOF"\nhi\nEOF\nclaude -p x',
+    'cat <<-EOF\n\thi\n\tEOF\nclaude -p x',
+  ];
+  const quiet = [
+    "git commit -m \"$(cat <<'EOF'\nfix\n\nclaude -p x ran\nEOF\n)\"",
+    'cat <<EOF\nclaude -p x\nEOF',
+    'cat <<"EOF"\nclaude -p x\nEOF',
+    'cat <<-EOF\n\tclaude -p x\n\tEOF',
+  ];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 fix: inside double quotes \\" \\\\ and \\$ are escapes, while an unquoted backslash is an ordinary path character', () => {
+  const flags = ['echo "a\\"b"; claude -p x', 'echo "a\\\\"; claude -p x'];
+  const quiet = ['echo "a\\" ; claude -p x"', 'echo "\\$(claude -p x)"'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+  assert.deepEqual(launchFailures(['C:\\u\\.local\\bin\\claude.exe -p x', '& "C:\\u\\.local\\bin\\claude.exe" -p x'], [], 'PowerShell'), []);
+});
+
+test('#404 fix: npx is followed past value-less options only, so an option with a separate value hides the package', () => {
+  const flags = ['npx -y @anthropic-ai/claude-code@latest -p go', 'npx --yes @anthropic-ai/claude-code -p go'];
+  const quiet = ['npx --cache /tmp/c @anthropic-ai/claude-code -p go'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 fix: the documented deviations from the old regex hold', () => {
+  const flags = ['sudo FOO=1 claude -p x', '$(claude -p x)'];
+  const quiet = ['echo npx @anthropic-ai/claude-code', 'echo $(date) claude'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 review-4: a VAR=value word whose value is a claude path counts, since the variable is how it gets run', () => {
+  const flags = ['C=~/.local/bin/claude.exe; "$C" -p x', 'CLAUDE=/usr/bin/claude\n$CLAUDE -p x', 'C="C:\\u\\.local\\bin\\claude.exe"; "$C" --version'];
+  const quiet = ['C=~/.claude/x.md; cat "$C"', 'D=claude-config; cd $D', 'FOO=1 node claude.mjs'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 review-4: an unquoted # at the start of a word comments out the rest of its line, quotes included', () => {
+  const flags = ["# don't forget\nclaude -p x", "echo hi # it's fine\nclaude -p x", 'ls; #"\nclaude -p x'];
+  const quiet = ['# a; claude -p x', "echo a#b'; claude -p x'", 'echo hi #; claude -p x'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+  assert.deepEqual(launchFailures(["# don't\nclaude -p x"], [], 'PowerShell'), []);
+});
+
+test("#404 review-4: PowerShell has no backslash escapes, so a quoted path ending in \\ closes at its quote; Bash's escapes still hold", () => {
+  const flags = ['cd "C:\\dir\\"; claude -p x', 'robocopy "C:\\a\\" "C:\\b\\"\nclaude -p x', 'Write-Output "a\\$(claude -p x)"', 'bash -c "cd x; claude -p x"'];
+  const quiet = ['& "C:\\dir\\" claude'];
+  assert.deepEqual(launchFailures(flags, quiet, 'PowerShell'), []);
+  // The quoted argument of a shell wrapper is read by that shell's rules, whichever tool ran the wrapper.
+  assert.deepEqual(launchFailures(['pwsh -c \'cd "C:\\dir\\"; claude -p x\''], ['bash -c \'echo "a\\" ; claude -p x"\'']), []);
+  assert.deepEqual(launchFailures(['echo "a\\"b"; claude -p x'], ['echo "a\\" ; claude -p x"']), []);
+});
+
+test('#404 review-4: a heredoc with CRLF line ends still ends at its terminator line', () => {
+  const flags = ["cat <<'EOF'\r\nhi\r\nEOF\r\nclaude -p x", 'cat <<-EOF\r\n\thi\r\n\tEOF\r\nclaude -p x', "git commit -m \"$(cat <<'EOF'\r\nfix\r\nEOF\r\n)\" && claude -p x"];
+  const quiet = ['cat <<EOF\r\nclaude -p x\r\nEOF\r\n', 'cat <<EOF\r\nEOF2\r\nclaude -p x\r\nEOF'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 review-4: a <<< here-string is one argument word and opens no heredoc', () => {
+  const flags = ['cat <<<word\nclaude -p x', "cat <<< 'a'; claude -p x", 'claude -p x <<< "hi"'];
+  const quiet = ['cat <<< "claude -p x"', "cat <<<'a; claude -p x'"];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
+test('#404 review-4: << inside arithmetic is a shift, not a heredoc', () => {
+  const flags = ['echo $((1<<2))\nclaude -p x', 'x=$((1 << 3))\nclaude -p x', 'echo "$((1<<2))"\nclaude -p x', '((n <<= 1))\nclaude -p x'];
+  const quiet = ['echo $((1)) <<EOF\nclaude -p x\nEOF', 'cat <<EOF\n$((1<<2))\nclaude -p x\nEOF', 'echo $(( 1<<2 )) "; claude -p x"'];
+  assert.deepEqual(launchFailures(flags, quiet), []);
+});
+
 test('results.mjs without a blind key still writes the run-side table and says the grades are not joined', () => {
   const out = tempDir('ab-nokey-');
   buildOut(out);
