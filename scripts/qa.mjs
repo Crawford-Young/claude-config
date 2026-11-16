@@ -55,7 +55,7 @@ async function main() {
     if (!verdict.ok) {
       failed++;
       if (verdict.reason) log(`  ${verdict.reason}`);
-      const fails = out.split(/\r?\n/).filter((l) => /(fail|error|✕|×|✗)/i.test(l)).slice(0, 40);
+      const fails = failLines(g, out);
       for (const l of fails) log(`  ${l}`);
       log(`  FULL_LOG: ${logFile}`);
     } else {
@@ -274,6 +274,13 @@ export function discoverGates(repoPath) {
   if (existsSync(join(repoPath, 'scripts', 'audit.mjs'))) found.push({ name: 'stamps', cmd: 'node scripts/audit.mjs --stamps' });
   // Godot repos: GUT via justfile only; nothing else to guess safely.
   return found;
+}
+
+/** Console lines for a red gate, capped at 40. The stamps gate's whole output is its finding list (`<file>:<n> names …`), none of which says "fail"; other gates print only failure-looking lines. */
+export function failLines(gate, out) {
+  const lines = out.split(/\r?\n/);
+  const keep = gate.name === 'stamps' ? lines.filter((l) => l.trim()) : lines.filter((l) => /(fail|error|✕|×|✗)/i.test(l));
+  return keep.slice(0, 40);
 }
 
 /** Verdict for one gate run. A node --test gate that ran no tests (unmatched glob exits 0 with `tests 0`) fails, as in CI. */
