@@ -317,7 +317,7 @@
    "kind": "hook",
    "label": "bash-guard",
    "file": "hooks/bash-guard.mjs",
-   "summary": "PreToolUse:Bash|PowerShell — eight numbered rules (1-4, 6-8, 12; a gap is a cut rule): rule 1 blocks add -A/commit -a only in shared (non-worktree) checkouts and allows git add -N (#368); rule 3 is one fixed message, run the gate unpiped and redirect it (#368, was a runnable rewrite, #295); rule 6 also blocks git commit in the claude-config main checkout and resolves literal cd/-C paths only (#368); shell-launched fable (rule 7), push/PR approval (rule 8, #75), node -e substitution (rule 12, #258). Headed-Playwright consent (old rule 9) and rules 5, 10, 11 are gone: browser-gate alone gates a visible browser.",
+   "summary": "PreToolUse:Bash|PowerShell — nine numbered rules (1-4, 6-8, 12, 13; a gap is a cut rule): rule 1 blocks add -A/commit -a only in shared (non-worktree) checkouts and allows git add -N (#368); rule 3 is one fixed message, run the gate unpiped and redirect it (#368, was a runnable rewrite, #295); rule 6 also blocks git commit in the claude-config main checkout and resolves literal cd/-C paths only (#368); shell-launched fable (rule 7), push/PR approval (rule 8, #75), node -e substitution (rule 12, #258), gh issue edit body rewrites (rule 13, #388). Headed-Playwright consent (old rule 9) and rules 5, 10, 11 are gone: browser-gate alone gates a visible browser.",
    "rules": [
     "No git add -A / commit -a in a shared (non-worktree) checkout; linked worktrees and git add -N pass; an unresolvable dir counts as shared (#368)",
     "No .env in git",
@@ -329,7 +329,18 @@
     "Command substitutions (`…`, $(…), <(…)) are parsed as commands; single-quoted text stays literal",
     "One gated verb per Bash call — a compound with two is blocked unspent",
     "A node/bun -e script or deno eval holding a shell substitution is blocked (#258)",
+    "A gh issue edit --body/--body-file that drops or rewords a live-body line, or whose body can't be read, needs an approval naming the issue — one rewrite each (#388)",
     "A command nesting blocks, groups or substitutions more than 100 levels deep is blocked unread (#167)"
+   ]
+  },
+  {
+   "id": "hook:issue-body",
+   "kind": "hook",
+   "label": "issue-body",
+   "file": "hooks/issue-body.mjs",
+   "summary": "Rule 13's logic for bash-guard (#388): the body comparator (ticking and adding pass), the shell reading of a gh issue edit body, the rewrite-approval predicates and the live-body reader (CLAUDE_ISSUE_BODY_STUB seam).",
+   "rules": [
+    "Fails closed: a body it can't read counts as a rewrite"
    ]
   },
   {
@@ -654,10 +665,10 @@
    "kind": "script",
    "label": "guard-replay.mjs",
    "file": "scripts/guard-replay.mjs",
-   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106); --by-rule counts the live bash-guard blocks per rule (#368).",
+   "summary": "Replays unique shell commands and AskUserQuestion answers from recent transcripts through two checkouts' guards; prints each changed verdict (#106); --by-rule counts the live bash-guard blocks per rule (#368); --body-edits counts past gh issue edit body calls and their issue targets (#388).",
    "rules": [
     "Run before a guard or approval-parser PR",
-    "Report only, exit 0; local transcripts, never CI"
+    "Report only: exit 0 with the verdicts, exit 1 with a stderr line only when the script itself fails; local transcripts, never CI"
    ]
   },
   {
@@ -725,6 +736,14 @@
    "label": "push-gate-approvals.json",
    "file": "~/.claude/push-gate-approvals.json",
    "summary": "Per push approval (keyed by transcript record uuid): the verbs it has spent (#75), or the repo#branch it is bound to with its calls' tool_use_ids, create and merge (#305). Self-trims to the newest 200 uuids. CLAUDE_PUSH_GATE_STATE overrides the path.",
+   "external": true
+  },
+  {
+   "id": "store:issue-body-approvals",
+   "kind": "store",
+   "label": "issue-body-approvals.json",
+   "file": "~/.claude/issue-body-approvals.json",
+   "summary": "Per issue-body rewrite approval (keyed by transcript record uuid): the `issue-body #N` verbs it has spent (#388), one rewrite per approval. CLAUDE_ISSUE_BODY_STATE overrides the path.",
    "external": true
   },
   {
@@ -1128,6 +1147,12 @@
    "label": "shared clearance check"
   },
   {
+   "from": "hook:bash-guard",
+   "to": "hook:issue-body",
+   "kind": "reads",
+   "label": "rule 13: issue-body rewrite check"
+  },
+  {
    "from": "hook:_hooklib",
    "to": "store:clearance",
    "kind": "writes",
@@ -1452,6 +1477,12 @@
    "to": "store:push-gate-approvals",
    "kind": "writes",
    "label": "rule 8: spends the approval per verb"
+  },
+  {
+   "from": "hook:bash-guard",
+   "to": "store:issue-body-approvals",
+   "kind": "writes",
+   "label": "rule 13: spends the approval per issue"
   },
   {
    "from": "store:settings-json",
