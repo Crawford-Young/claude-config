@@ -5,7 +5,7 @@
 //
 // Gates come from the repo itself: a justfile `check` recipe when present,
 // otherwise the package.json scripts among lint / typecheck / test / e2e,
-// otherwise marker files (scripts/test/*.test.mjs, verify-frontmatter.mjs, harness-map.mjs).
+// otherwise marker files (scripts/test/*.test.mjs, verify-frontmatter.mjs, harness-map.mjs, audit.mjs).
 // Each gate runs FOREGROUND and unpiped; the full output goes to a log file
 // and the console gets: an EXIT:<code> line per gate, failure lines on red,
 // and all coverage metric lines on green. This replaces the old "pipe to
@@ -271,6 +271,7 @@ export function discoverGates(repoPath) {
   }
   if (existsSync(join(repoPath, 'scripts', 'verify-frontmatter.mjs'))) found.push({ name: 'frontmatter', cmd: 'node scripts/verify-frontmatter.mjs' });
   if (existsSync(join(repoPath, 'scripts', 'harness-map.mjs'))) found.push({ name: 'harness-map', cmd: 'node scripts/harness-map.mjs check' });
+  if (existsSync(join(repoPath, 'scripts', 'audit.mjs'))) found.push({ name: 'stamps', cmd: 'node scripts/audit.mjs --stamps' });
   // Godot repos: GUT via justfile only; nothing else to guess safely.
   return found;
 }
