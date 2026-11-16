@@ -28,6 +28,7 @@
 // --prefixes (#420) counts past calls that run through a `command`, `exec`, `builtin` or `env`
 // prefix in any pipeline stage (every transcript by default), and how many of those sat on a guarded verb: calls, unique
 // commands, guarded, sessions, and the count per prefix. --full lists each unique prefixed command, redacted.
+// The checkout must be at or after #420 (its guard exports prefixCommands); an older one exits 1 saying so (#427).
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -738,7 +739,14 @@ function scanPrefixes(paths, g) {
 }
 
 async function prefixed(args) {
-  const g = await load(args.paths[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
+  const checkout = args.paths[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
+  const g = await load(checkout);
+  // A guard from before #420 has no prefix reader: say so, not "is not a function" (#427).
+  if (typeof g.prefixCommands !== 'function') {
+    console.error(`guard-replay --prefixes: ${checkout} predates #420 — its hooks/bash-guard.mjs exports no prefixCommands; pass a checkout at or after #420.`);
+    process.exitCode = 1;
+    return;
+  }
   const files = await transcripts(projectsRoot(args.root), args);
   const { hits, sessions, by, calls, first, last } = scanPrefixes(files, g);
   const unique = new Map(hits.map((h) => [`${h.tool}\n${h.command}`, h]));

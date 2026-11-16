@@ -102,8 +102,20 @@
 // env, timeout, nohup and time and their options (`env -u X`, `timeout -s KILL 5`)
 // to the call they run (#239), and through bash's command, exec and builtin
 // (`command -p`, `exec -a n`, `builtin command`), stacked, with env -S /
-// --split-string's string split into the call it runs (#420). A lookup
-// (`command -v`/`-V`) or a bare `exec >log` redirect runs no command. A
+// --split-string's string split into the call it runs (#420), by GNU env's
+// escapes (`\_` separates words, `\c` ends the string). A lookup
+// (`command -v`/`-V`) or a bare `exec >log` redirect runs no command, and
+// neither does `builtin` before a word that is no builtin running or moving
+// something (`builtin git push`), nor command/exec/builtin under PowerShell,
+// which has no such builtins (Get-Command; env, nohup, timeout and time can
+// be binaries there and are read). A redirect and its target (`>log`,
+// `2> f`, `2>&1`, `<<<w`), wherever it stands, are no words of the call, so
+// `>log git push` and `git >log push` are git push; a closed substitution is
+// part of its word (`x=$(command git push)` is one push, read in its body);
+// under Bash a backslash quotes the next character, so `g\it` is git (a word
+// opening with a drive path, `C:\…`, keeps its separators); and env -C /
+// --chdir runs its call in its dir, where every rule that reads a call's dir
+// judges it (#427). A
 // POSIX shell's command line is found past -c, alone or in a flag cluster
 // (`bash -lc`), PowerShell's past -Command or -c,
 // eval/iex's as their words (shellLine), and a call inside a group or shell
@@ -368,20 +380,108 @@ export class NestingError extends UnreadableError {
 /** The pipelines of a compound command: clauses that keep `|` inside. */
 const pipelines = (cmd, seps = null) => clauses(cmd, true, seps);
 
-/** A clause's words with quotes removed; adjacent pieces (a"b"c, @'…'@) are one
- *  word. Unbalanced quotes: plain whitespace split. With `raw`, the same words
- *  keep their quotes (rule 12 reads which text a quote holds). */
-function words(clause, raw = false) {
-  const re = /"((?:[^"\\]|\\[\s\S])*)"|'([^']*)'|([^\s"']+)|(["'])/g;
+/** Where the substitution opening a word piece at s[i] ends (just past its
+ *  close), or -1: a closed $(…) in any shell, and outside PowerShell a closed
+ *  `…` or <(…)/>(…). A shell reads it as part of the word, spaces and all. */
+function wordSpanEnd(s, i, tool) {
+  const ps = tool === 'PowerShell';
+  let close = -1;
+  if (s[i] === '`' && !ps) close = closeTick(s, i + 1);
+  else if (s[i + 1] === '(' && (s[i] === '$' || (!ps && (s[i] === '<' || s[i] === '>')))) close = closeGroup(s, i + 1);
+  return close === -1 ? -1 : close + 1;
+}
+
+/** A clause's words, both ways at once: `plain` with quotes removed and `raw`
+ *  with them kept, index for index. Adjacent pieces (a"b"c, @'…'@) are one
+ *  word, and so is a closed substitution with the text around it
+ *  (`x=$(a b)`), as the shell reads it (wordSpanEnd). Under Bash a backslash
+ *  quotes the next character, so `plain` drops it: unquoted always (`g\it` is
+ *  git, `a\ b` one word), in double quotes only before $ ` " \ and newline —
+ *  except in a word that opens with a drive path (`C:\Users\…`), read as the
+ *  Windows path it names. Other shells keep every backslash. Unbalanced
+ *  quotes: plain whitespace split. */
+function scanWords(clause, tool = null) {
+  const bash = tool === 'Bash';
+  const plain = [];
+  const raw = [];
+  let p = null; // the word being read, or null between words
+  let r = '';
+  let drive = false; // the word opens with a drive path: its backslashes are path separators
+  for (let i = 0; i < clause.length; ) {
+    const ch = clause[i];
+    if (/\s/.test(ch)) {
+      if (p !== null) plain.push(p), raw.push(r);
+      p = null;
+      i++;
+      continue;
+    }
+    if (p === null) {
+      p = '';
+      r = '';
+      drive = /^[A-Za-z]:\\/.test(clause.slice(i, i + 3));
+    }
+    if (ch === "'") {
+      const e = clause.indexOf("'", i + 1);
+      if (e === -1) return { plain: clause.split(/\s+/).filter(Boolean), raw: clause.split(/\s+/).filter(Boolean) };
+      p += clause.slice(i + 1, e);
+      r += clause.slice(i, e + 1);
+      i = e + 1;
+    } else if (ch === '"') {
+      let j = i + 1;
+      let body = '';
+      for (; j < clause.length && clause[j] !== '"'; j++) {
+        if (clause[j] === '\\' && j + 1 < clause.length) {
+          const n = clause[++j];
+          body += bash && /[$`"\\\n]/.test(n) ? (n === '\n' ? '' : n) : `\\${n}`;
+        } else body += clause[j];
+      }
+      if (j >= clause.length) return { plain: clause.split(/\s+/).filter(Boolean), raw: clause.split(/\s+/).filter(Boolean) };
+      p += body;
+      r += clause.slice(i, j + 1);
+      i = j + 1;
+    } else if (bash && !drive && ch === '\\' && i + 1 < clause.length) {
+      const n = clause[i + 1];
+      p += n === '\n' ? '' : n;
+      r += ch + n;
+      i += 2;
+    } else {
+      const end = wordSpanEnd(clause, i, tool);
+      const piece = clause.slice(i, end === -1 ? i + 1 : end);
+      p += piece;
+      r += piece;
+      i += piece.length;
+    }
+  }
+  if (p !== null) plain.push(p), raw.push(r);
+  return { plain, raw };
+}
+
+/** A clause's words with quotes removed (scanWords). With `raw`, the same
+ *  words keep their quotes (rule 12 reads which text a quote holds). `tool`
+ *  is the shell reading them (newScope). */
+const words = (clause, raw = false, tool = null) => scanWords(clause, tool)[raw ? 'raw' : 'plain'];
+
+/** A redirect word, read off its raw (quoted) text: an optional group or
+ *  negation lead the walk reads (`(`, `{`, `!`), the operator — `[n]>`,
+ *  `[n]>>`, `[n]<`, `[n]>|`, `[n]>&m`, `[n]<&m`, `&>`, `&>>`, `<<<` — and its
+ *  target, attached or (when empty) the next word. Not a heredoc's `<<` (its
+ *  body is stripped before), nor a <(…)/>(…) process substitution. */
+const REDIRECT = /^([({!]*)(?:\d*(?:>>|>\||>&|<&|<<<|>|<(?!<))|&>>?)(?!\()([\s\S]*)$/;
+
+/** A clause's words as the shell runs them: words() less every redirect and
+ *  its target, wherever it stands (`>log git push`, `git >log push`, `exec
+ *  2>/dev/null git push`). A redirect names no command, so it can't hide the
+ *  command word. */
+function callWords(clause, tool = null, raw = false) {
+  const { plain, raw: raws } = scanWords(clause, tool);
   const out = [];
-  let prev = -1;
-  let m;
-  while ((m = re.exec(clause)) !== null) {
-    if (m[4]) return clause.split(/\s+/).filter(Boolean);
-    const w = raw ? m[0] : (m[1] ?? m[2] ?? m[3]);
-    if (m.index === prev && out.length) out[out.length - 1] += w;
-    else out.push(w);
-    prev = re.lastIndex;
+  for (let i = 0; i < raws.length; i++) {
+    const m = REDIRECT.exec(raws[i]);
+    if (!m) out.push(raw ? raws[i] : plain[i]);
+    else {
+      if (m[1]) out.push(m[1]);
+      if (!m[2]) i++;
+    }
   }
   return out;
 }
@@ -418,7 +518,7 @@ export function stripHeredocs(cmd) {
     if (!m) continue;
     // The heredoc's consumer is the command of the clause holding the `<<`
     // (so `cat > run.sh <<EOF` is cat, not sh; `timeout 60 bash <<EOF` is bash).
-    const consumer = commandName(unwrapCommand(words(clauses(line.slice(0, m.index)).pop() || ''))[0] ?? '');
+    const consumer = commandName(unwrapCommand(callWords(clauses(line.slice(0, m.index)).pop() || ''))[0] ?? '');
     if (shellTool(consumer) || /^cmd$/i.test(consumer)) continue;
     const end = lines.findIndex((l, j) => j > i && (m[1] ? l.replace(/^\t+/, '') : l) === m[3]);
     if (end === -1) continue; // unterminated — leave it for the rules to read
@@ -566,10 +666,15 @@ const commandName = (word) => word.split(/[/\\]/).pop().replace(/\.exe$/i, '');
  *  by its name or any unique abbreviation of it, as getopt_long does), marked
  *  `=` when it takes a value and `!` when nothing runs after it, the option
  *  whose value is itself the command line, split (`split`: env -S /
- *  --split-string), and how many words come before the command (`args`:
- *  timeout's duration). Any other option takes no value. The prefixes real
- *  sessions use (#239; #291 cut the rest; #420 added the bash builtins).
- *  Prefix names match in any case, like command names. */
+ *  --split-string), the option whose value is the dir the call runs in
+ *  (`chdir`: env -C / --chdir), and how many words come before the command
+ *  (`args`: timeout's duration). Any other option takes no value. `bash`
+ *  marks a bash builtin, which PowerShell doesn't have: there `command` is
+ *  Get-Command and `exec`/`builtin` don't exist, so none runs the words after
+ *  it; `builtin` runs only a builtin (`runs`: the ones that run or move
+ *  something), so `builtin git push` runs nothing. The prefixes real sessions
+ *  use (#239; #291 cut the rest; #420 added the bash builtins; #427 scoped
+ *  them). Prefix names match in any case, like command names. */
 const PREFIX = new Map(
   Object.entries({
     nohup: { long: 'help! version!' },
@@ -577,27 +682,71 @@ const PREFIX = new Map(
     env: {
       value: 'aCPSu',
       split: ['S', 'split-string'],
+      chdir: ['C', 'chdir'],
       long: 'argv0= block-signal chdir= debug default-signal help! ignore-environment ignore-signal list-signal-handling null split-string= unset= version!',
     },
     timeout: { value: 'ks', long: 'foreground help! kill-after= preserve-status signal= verbose version!', args: 1 },
-    command: { lookup: 'vV', long: 'help!' },
-    exec: { value: 'a', long: 'help!' },
-    builtin: { long: 'help!' },
+    command: { lookup: 'vV', long: 'help!', bash: true },
+    exec: { value: 'a', long: 'help!', bash: true },
+    builtin: { long: 'help!', bash: true, runs: /^(?:command|exec|eval|builtin|cd|pushd|popd|source|\.)$/ },
   }),
 );
 
+/** GNU env's escapes in an -S string (`\t` and the like stay in the word). */
+const ENV_ESCAPE = { t: '\t', n: '\n', r: '\r', f: '\f', v: '\v' };
+
+/** The words GNU env -S splits `s` into: whitespace and, outside double
+ *  quotes, `\_` separate words (in them `\_` is a space); quotes group;
+ *  `\\` `\"` `\'` `\$` `\#` give the character, `\t` `\n` `\r` `\f` `\v` the
+ *  control character inside the word, and `\c` ends the string. In single
+ *  quotes only `\\` and `\'` are escapes. */
+function envSplit(s) {
+  const out = [];
+  let cur = null;
+  let quote = null;
+  const add = (t) => (cur = (cur ?? '') + t);
+  const end = () => {
+    if (cur !== null) out.push(cur);
+    cur = null;
+  };
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else add(ch === '\\' && (s[i + 1] === '\\' || s[i + 1] === "'") ? s[++i] : ch);
+    } else if (ch === '\\' && i + 1 < s.length) {
+      const n = s[++i];
+      if (n === 'c') break;
+      if (n === '_' && !quote) end();
+      else add(n === '_' ? ' ' : ENV_ESCAPE[n] ?? n);
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else add(ch);
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      add('');
+    } else if (/\s/.test(ch)) end();
+    else add(ch);
+  }
+  end();
+  return out;
+}
+
 /** The words of the call a prefix command (PREFIX) runs, or null when `w`
- *  doesn't start with one or its options run nothing (`timeout --help`,
- *  `command -v git`). A bare `exec` (`exec >log 2>&1`) runs only its
- *  redirects, which name no command. env -S's string stands in, split, for
- *  the option that carried it, and env reads its options again from there,
- *  as GNU env does (`env -S '-i FOO=1 git push'`). */
-function prefixRead(w) {
+ *  doesn't start with one, or its options or `tool` (a bash builtin under
+ *  PowerShell; `builtin` before a non-builtin) run nothing (`timeout
+ *  --help`, `command -v git`). A bare `exec` (`exec >log 2>&1`, its redirects
+ *  already cut by callWords) runs no command. env -S's string stands in,
+ *  split (envSplit), for the option that carried it, and env reads its
+ *  options again from there, as GNU env does (`env -S '-i FOO=1 git push'`).
+ *  env -C's dir, as given, lands in `moved.chdir` (the last one wins). */
+function prefixRead(w, tool = null, moved = {}) {
   const spec = PREFIX.get(commandName(w[0] ?? '').toLowerCase());
-  if (!spec) return null;
+  if (!spec || (spec.bash && tool === 'PowerShell')) return null;
   const [splitShort, splitLong] = spec.split ?? [];
+  const [chdirShort, chdirLong] = spec.chdir ?? [];
   // Re-read `w` with word k replaced by `keep` and the split line `line`, resuming at word `next`.
-  const split = (k, keep, line, next) => prefixRead([w[0], ...w.slice(1, k), ...keep, ...words(line ?? ''), ...w.slice(next)]);
+  const split = (k, keep, line, next) => prefixRead([w[0], ...w.slice(1, k), ...keep, ...envSplit(line ?? ''), ...w.slice(next)], tool, moved);
   let k = 1;
   for (; k < w.length && w[k].startsWith('-'); k++) {
     const a = w[k];
@@ -615,6 +764,7 @@ function prefixRead(w) {
       const [long, o] = longs.find(([n]) => n === name) ?? (hits.length === 1 ? hits[0] : []);
       if (o?.endsWith('!')) return null;
       if (long !== undefined && long === splitLong) return split(k, [], attached ?? w[k + 1], attached === undefined ? k + 2 : k + 1);
+      if (long !== undefined && long === chdirLong) moved.chdir = attached ?? w[k + 1];
       if (o?.endsWith('=') && attached === undefined) k++;
     } else {
       const flags = a.slice(1);
@@ -625,10 +775,12 @@ function prefixRead(w) {
         const attached = j < flags.length - 1;
         return split(k, own ? [`-${own}`] : [], attached ? flags.slice(j + 1) : w[k + 1], attached ? k + 1 : k + 2);
       }
+      if (j !== -1 && flags[j] === chdirShort) moved.chdir = j < flags.length - 1 ? flags.slice(j + 1) : w[k + 1];
       if (j !== -1 && j === flags.length - 1) k++;
     }
   }
-  return w.slice(k + (spec.args ?? 0));
+  const run = w.slice(k + (spec.args ?? 0));
+  return spec.runs && !spec.runs.test(run[0] ?? '') ? null : run;
 }
 
 /** A call's real command words: past the wrappers (an env assignment, a
@@ -643,12 +795,13 @@ function unwrapCommand(w) {
 
 /** The prefix commands (PREFIX's names, lowercase) a clause — one pipeline
  *  stage, as clauses() cuts it — runs its call through, outermost first, past
- *  wrappers (`(`, `{`, `!`, keywords, assignments): `timeout 60 env X=1 git
- *  push` → timeout, env. One whose options run nothing (`command -v x`) is
- *  still named. Read-only, for guard-replay --prefixes (#420). */
+ *  wrappers (`(`, `{`, `!`, keywords, assignments) and redirects: `timeout 60
+ *  env X=1 git push` → timeout, env. One whose options run nothing (`command
+ *  -v x`, `builtin git push`) is still named. Read-only, for guard-replay
+ *  --prefixes (#420). */
 export function prefixCommands(clause) {
   const out = [];
-  for (let w = words(clause), run; w.length; w = run) {
+  for (let w = callWords(clause), run; w.length; w = run) {
     const head = w[0].replace(/^[({!]+/, '');
     if (!head || WRAPPER.test(head)) run = w.slice(1);
     else if (PREFIX.has(commandName(head).toLowerCase())) {
@@ -747,8 +900,8 @@ function evalSubstitution(calls) {
     if (!EVAL_RUNTIME.test(call.cmd)) continue;
     const j = evalScriptAt(call.words);
     if (j === -1) continue;
-    const plain = words(call.text);
-    const raws = words(call.text, true);
+    const plain = callWords(call.text, call.tool);
+    const raws = callWords(call.text, call.tool, true);
     // A group's closing `)` may stand as a last word of its own, cut off the call's.
     const at = [0, 1].map((cut) => plain.length - cut - call.words.length).find((i) => i >= 0 && plain[i].replace(/^[({!]+/, '') === call.words[0]);
     if (at !== undefined && runsSubstitution(raws[at + j], call.tool)) return EVAL_SUBSTITUTION_REASON;
@@ -919,7 +1072,7 @@ function walkCommands(raw, scope) {
     const segs = clauses(p, false, null, blocks);
     for (const [seg, c] of segs.entries()) {
       closeSubshells();
-      const w = words(c);
+      const w = callWords(c, scope.tool);
       // A case arm's pattern (`a)`, `(a)`, `a|b)`) heads the command it runs, on
       // the `case … in` line or its own. On its own line it is told from a
       // group's `)` by depth: no subshell may have opened since the case began.
@@ -929,6 +1082,8 @@ function walkCommands(raw, scope) {
       // bash subshell condition (`while (true); do`) closes with no `{`.
       const psBlock = () => /^\((?!\()/.test(w[0] ?? '') && (/\)\s*\{/.test(c) || !c.includes(')'));
       const wrappers = [];
+      // The dir the call runs in: an env -C / --chdir moves it, not the scope (#427).
+      let callDir = scope.dir;
       let opens = 0; // ( … ) subshells opened at command position
       // A `(` after if/while/until opens a PowerShell condition, not a subshell.
       const countOpens = (lead) => {
@@ -942,8 +1097,10 @@ function walkCommands(raw, scope) {
         }
         if (!w.length) break;
         // A prefix command (`timeout 5`, `env -u X`, `command -p`) runs the call after it.
-        const run = !WRAPPER.test(w[0]) && prefixRead(w);
+        const moved = {};
+        const run = !WRAPPER.test(w[0]) && prefixRead(w, scope.tool, moved);
         if (run) {
+          if (moved.chdir !== undefined) callDir = toDir(callDir, moved.chdir);
           wrappers.push(w[0]);
           w.splice(0, w.length, ...run);
           continue;
@@ -1015,10 +1172,10 @@ function walkCommands(raw, scope) {
         continue;
       }
       if (shellTool(cmd)) {
-        if (shellRun) out.push(...inStage(commands(shellRun.join(' '), newScope(scope.dir, shellTool(cmd))), stage));
+        if (shellRun) out.push(...inStage(commands(shellRun.join(' '), newScope(callDir, shellTool(cmd))), stage));
         continue;
       }
-      out.push({ cmd, words: w, text: c, dir: scope.dir, tool: scope.tool, pipe, seg });
+      out.push({ cmd, words: w, text: c, dir: callDir, tool: scope.tool, pipe, seg });
     }
     // Every call this pipeline ran, nested ones too: an outer walk overwrites
     // this, so `top` ends as the outermost pipeline the call runs in.
@@ -2003,14 +2160,14 @@ export function issueBodyReason(raw, cwd, transcriptPath, stateFile = issueBodyS
     if (!/^gh$/i.test(c.cmd)) continue;
     // The call's words end its clause's: wrappers and prefixes come off the
     // front, a group's lone `)` off the end. Quotes kept, to read the body.
-    const rw = words(c.text, true);
+    const rw = callWords(c.text, c.tool, true);
     const k = rw.length - c.words.length - (/^\)+$/.test(rw.at(-1) ?? '') ? 1 : 0);
-    const lined = k >= 0 && c.words.every((x, i) => i === 0 || i === c.words.length - 1 || words(rw[k + i]).join(' ') === x);
+    const lined = k >= 0 && c.words.every((x, i) => i === 0 || i === c.words.length - 1 || words(rw[k + i], false, c.tool).join(' ') === x);
     const raws = lined ? rw.slice(k + 1, k + c.words.length) : null;
     if (raws?.length) {
       // The `)`s a group's close left on the last word come off it too, as the walk took them off c.words.
       const last = raws.at(-1);
-      const cut = Math.min(last.match(/\)*$/)[0].length, words(last).join(' ').length - c.words.at(-1).length);
+      const cut = Math.min(last.match(/\)*$/)[0].length, words(last, false, c.tool).join(' ').length - c.words.at(-1).length);
       if (cut > 0) raws[raws.length - 1] = last.slice(0, -cut);
     }
     const api = apiCall(c.words.slice(1), raws, c.tool);

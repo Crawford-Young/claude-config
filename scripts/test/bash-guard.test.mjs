@@ -1652,6 +1652,214 @@ test('#420 review: a long option is read by any unique prefix of its name, as ge
   gatedSh('env --i git push origin x', ['git push']);
 });
 
+// --- #427: command-word gaps: redirects, $( ) prefixes, builtin, backslashes, env -C ---
+
+const gatedBash = (c, verbs) => assert.deepEqual(gatedVerbs(c, '/work', 'Bash'), verbs, c);
+const hookStatus = (command, cwd, h, tool = 'Bash', env = {}) =>
+  spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: tool, tool_input: { command }, cwd }), home: h, env }).status;
+
+test('#427 item 1: a redirect before or between the words does not hide the command word', () => {
+  for (const c of [
+    '>log git push origin x',
+    'exec >log git push origin x',
+    '2>/dev/null git push origin x',
+    '> log git push origin x',
+    'command >log git push origin x',
+    'git >log push origin x',
+    '>>log git push origin x',
+    '>> log git push origin x',
+    '2>>log git push origin x',
+    '<in git push origin x',
+    '< in git push origin x',
+    '2<in git push origin x',
+    '&>log git push origin x',
+    '&> log git push origin x',
+    '&>>log git push origin x',
+    '>|log git push origin x',
+    '>| log git push origin x',
+    '2>&1 git push origin x',
+    '>&2 git push origin x',
+    '<<<word git push origin x',
+    '<<< word git push origin x',
+    '2> log git push origin x',
+    'exec 2>/dev/null >log git push origin x',
+    'FOO=1 >log git push origin x',
+    'git push >log origin x',
+  ]) {
+    gatedBash(c, ['git push']);
+  }
+  gatedBash('>log gh pr create --fill', ['gh pr create']);
+  gatedBash('2>/dev/null gh pr merge 1', ['gh pr merge']);
+  gatedBash('command >log gh pr merge 1', ['gh pr merge']);
+});
+
+test('#427 item 1: a redirect before the command word is read by the other rules and the hook', () => {
+  for (const c of ['>log git add -A', 'exec >log git commit -am x', 'git >log add -A']) assert.ok(staticCheck(c, '/work', 'Bash'), c);
+  const h = tmpHome();
+  for (const c of ['>log git push origin x', 'exec >log git push origin x', '2>/dev/null git push origin x', '> log git push origin x', 'command >log git push origin x', 'git >log push origin x']) {
+    assert.equal(hookStatus(c, h, h), 2, c);
+  }
+});
+
+test('#427 item 1: a redirect alone runs nothing, and a redirect after the command is still the call', () => {
+  for (const c of ['exec >log 2>&1', '>log', '> log', '2>&1', 'exec 3>&1', 'echo hi >log git push', 'echo >log hi']) gatedBash(c, []);
+  gatedBash('exec >log; git push origin x', ['git push']);
+  gatedBash('git push origin x >log 2>&1', ['git push']);
+  gatedBash('git push origin x 2>&1', ['git push']);
+  assert.equal(hookStatus('exec >log 2>&1', tmpHome(), tmpHome()), 0);
+});
+
+test('#427 item 2: a prefix inside $( ) is one gated verb, not two', () => {
+  for (const p of ['command', 'env', 'exec', 'nohup']) {
+    gatedSh(`x=$(${p} git push origin x)`, ['git push']);
+    gatedSh(`echo $(${p} git push origin x)`, ['git push']);
+  }
+  gatedSh('x=$(git push origin x)', ['git push']);
+  gatedSh('x=$(command gh pr merge 1)', ['gh pr merge']);
+  // A real two-verb command still reports both.
+  gatedSh('git push origin x; gh pr create', ['git push', 'gh pr create']);
+  gatedSh('x=$(command git push origin x); gh pr create', ['git push', 'gh pr create']);
+});
+
+test('#427 item 2: through the hook, x=$(command git push) blocks with the single-verb approval message', () => {
+  const h = tmpHome();
+  for (const p of ['command', 'env', 'exec', 'nohup']) {
+    const r = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: `x=$(${p} git push origin x)` }, cwd: h }), home: h });
+    assert.equal(r.status, 2, p);
+    assert.match(r.stderr, /git push needs explicit user approval/, p);
+    assert.doesNotMatch(r.stderr, /holds \d+ gated verbs/, p);
+  }
+  const two = spawnHarness(hookPath, [], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git push origin x; gh pr create' }, cwd: h }), home: h });
+  assert.match(two.stderr, /holds 2 gated verbs \(git push, gh pr create\)/);
+});
+
+test('#427 item 3: under PowerShell, command / exec / builtin run nothing, while env, nohup, timeout and time stay gated', () => {
+  for (const p of ['command', 'exec', 'builtin', 'command -p', 'exec -a n']) {
+    assert.deepEqual(gatedVerbs(`${p} git push origin x`, '/work', 'PowerShell'), [], `PowerShell ${p}`);
+    assert.deepEqual(gatedVerbs(`${p} gh pr merge 1`, '/work', 'PowerShell'), [], `PowerShell ${p} gh`);
+  }
+  for (const p of ['env', 'env -i', 'nohup', 'timeout 5', 'time']) {
+    assert.deepEqual(gatedVerbs(`${p} git push origin x`, '/work', 'PowerShell'), ['git push'], `PowerShell ${p}`);
+  }
+  // Bash and the no-tool reading keep command and exec gated.
+  for (const p of ['command', 'exec']) gatedSh(`${p} git push origin x`, ['git push']);
+  const h = tmpHome();
+  for (const c of ['command git push origin x', 'exec git push origin x', 'builtin git push origin x']) assert.equal(hookStatus(c, h, h, 'PowerShell'), 0, `PowerShell hook: ${c}`);
+  assert.equal(hookStatus('env git push origin x', h, h, 'PowerShell'), 2);
+});
+
+test('#427 item 3: under Bash, builtin runs only a builtin, so only command / exec / eval / builtin / cd-like words are read on', () => {
+  gatedBash('builtin git push origin x', []);
+  gatedBash('builtin gh pr merge 1', []);
+  gatedBash('builtin env git push origin x', []);
+  gatedBash('builtin nohup git push origin x', []);
+  gatedBash('builtin echo hi', []);
+  for (const c of [
+    'builtin command git push origin x',
+    'builtin exec git push origin x',
+    "builtin eval 'git push origin x'",
+    'builtin builtin command git push origin x',
+    'builtin command -p git push origin x',
+  ]) {
+    gatedBash(c, ['git push']);
+  }
+  const h = tmpHome();
+  assert.equal(hookStatus('builtin git push origin x', h, h, 'Bash'), 0);
+  assert.equal(hookStatus('builtin command git push origin x', h, h, 'Bash'), 2);
+  assert.equal(hookStatus('builtin exec git push origin x', h, h, 'Bash'), 2);
+  assert.equal(hookStatus("builtin eval 'git push origin x'", h, h, 'Bash'), 2);
+});
+
+test('#427 item 3: builtin cd still moves the dir for rule 6', () => {
+  const h = tmpHome();
+  const cfg = join(h, 'cfg').replace(/\\/g, '/');
+  mkdirSync(cfg);
+  execFileSync('git', ['init', '-q', '-b', 'main', cfg]);
+  execFileSync('git', ['-C', cfg, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'root']);
+  const env = { CLAUDE_CONFIG_REPO: cfg };
+  assert.equal(hookStatus(`cd ${cfg} && git commit -m x`, h, h, 'Bash', env), 2, 'control');
+  assert.equal(hookStatus(`builtin cd ${cfg} && git commit -m x`, h, h, 'Bash', env), 2);
+  assert.equal(hookStatus(`builtin pushd ${cfg} && git commit -m x`, h, h, 'Bash', env), 2);
+});
+
+test('#427 item 4: env -S reads the GNU escapes: \\_ separates words, \\t does not, \\c ends the string', () => {
+  gatedBash(String.raw`env -S 'git\_push\_origin\_x'`, ['git push']);
+  gatedBash(String.raw`env -S 'gh\_pr\_merge\_1'`, ['gh pr merge']);
+  gatedBash(String.raw`env -i -S 'FOO=1\_git\_push'`, ['git push']);
+  gatedBash(String.raw`env -S 'git\_push\c\_origin'`, ['git push']);
+  gatedBash(`env -S 'git push origin x'`, ['git push']);
+  gatedBash(String.raw`env -S 'echo\_hi'`, []);
+  gatedBash(String.raw`env -S 'echo\c\_git\_push'`, []);
+  // \t is a tab inside the word, not a separator: the word is not `git`.
+  gatedBash(String.raw`env -S 'git\tpush'`, []);
+  assert.equal(hookStatus(String.raw`env -S 'git\_push\_origin\_x'`, tmpHome(), tmpHome(), 'Bash'), 2);
+});
+
+test('#427 item 4: under Bash an unquoted backslash in a word is removed, so it cannot hide the call', () => {
+  for (const c of [String.raw`g\it push origin x`, String.raw`git pu\sh origin x`, String.raw`\git push origin x`, String.raw`bash -c 'g\it push origin x'`, String.raw`g\it pu\sh origin x`]) {
+    gatedBash(c, ['git push']);
+  }
+  gatedBash(String.raw`g\h pr merge 1`, ['gh pr merge']);
+  gatedBash(String.raw`command g\it push origin x`, ['git push']);
+  assert.equal(hookStatus(String.raw`g\it push origin x`, tmpHome(), tmpHome(), 'Bash'), 2);
+  assert.equal(hookStatus(String.raw`git pu\sh origin x`, tmpHome(), tmpHome(), 'Bash'), 2);
+  assert.equal(hookStatus(String.raw`bash -c 'g\it push origin x'`, tmpHome(), tmpHome(), 'Bash'), 2);
+});
+
+test('#427 item 4: in double quotes a backslash is removed only before $ ` " \\ and newline; an escaped backslash stays one', () => {
+  // `\i` keeps its backslash inside double quotes, so the word is g\it, not git.
+  gatedBash(String.raw`"g\it" push origin x`, []);
+  gatedBash(String.raw`git "pu\sh" origin x`, []);
+  // `\\` is one backslash inside double quotes: the word is push\, not push. Single quotes keep every backslash.
+  gatedBash(String.raw`git "push\\" origin x`, []);
+  gatedBash(String.raw`git 'pu\sh' origin x`, []);
+  // \$ is a literal dollar: the word is not git either.
+  gatedBash(String.raw`"\$git" push origin x`, []);
+});
+
+test('#427 item 4: under PowerShell a backslash is literal, so it hides nothing and changes nothing', () => {
+  for (const c of [String.raw`g\it push origin x`, String.raw`git pu\sh origin x`]) assert.deepEqual(gatedVerbs(c, '/work', 'PowerShell'), [], c);
+  assert.deepEqual(gatedVerbs(String.raw`& 'C:\Program Files\Git\cmd\git.exe' push origin x`, '/work', 'PowerShell'), ['git push']);
+  assert.equal(hookStatus(String.raw`g\it push origin x`, tmpHome(), tmpHome(), 'PowerShell'), 0);
+});
+
+/** cfgLayout's main checkout (h/code/claude-config, shared under the default workspace root) and its
+ *  linked worktree, both as forward-slash paths a command can name. */
+function envCLayout() {
+  const { h, cfg, wt } = cfgLayout();
+  return { h, cfg: cfg.replace(/\\/g, '/'), wt: wt.replace(/\\/g, '/') };
+}
+
+test('#427 item 5: env -C <dir> is judged at <dir> by rules 1 and 6, not at the cwd', () => {
+  const { h, cfg, wt } = envCLayout();
+  const run = (c, cwd) => hookStatus(c, cwd, h);
+  assert.equal(run('git add -A', cfg), 2, 'control: rule 1 in the main checkout');
+  assert.equal(run('git add -A', wt), 0, 'control: rule 1 in the worktree');
+  assert.equal(run('git commit -m x', cfg), 2, 'control: rule 6 in the main checkout');
+  assert.equal(run('git commit -m x', wt), 0, 'control: rule 6 in the worktree');
+  for (const form of [`env -C ${cfg}`, `env -C${cfg}`, `env --chdir=${cfg}`, `env --chdir ${cfg}`, `env --ch=${cfg}`, `env -i -C ${cfg}`, `command env -C ${cfg}`]) {
+    assert.equal(run(`${form} git add -A`, wt), 2, `from the worktree: ${form} git add -A`);
+    assert.equal(run(`${form} git commit -m x`, wt), 2, `from the worktree: ${form} git commit -m x`);
+  }
+  for (const form of [`env -C ${wt}`, `env -C${wt}`, `env --chdir=${wt}`, `env --chdir ${wt}`, `env --ch=${wt}`]) {
+    assert.equal(run(`${form} git add -A`, cfg), 0, `from the main checkout: ${form} git add -A`);
+    assert.equal(run(`${form} git commit -m x`, cfg), 0, `from the main checkout: ${form} git commit -m x`);
+  }
+});
+
+test('#427 item 5: a relative env -C dir resolves against the current scope dir', () => {
+  const { h, cfg, wt } = envCLayout();
+  const run = (c, cwd) => hookStatus(c, cwd, h);
+  assert.equal(run('env -C ../../claude-config git add -A', wt), 2);
+  assert.equal(run('env --chdir=../../claude-config git commit -m x', wt), 2);
+  assert.equal(run('env -C ../.worktrees/claude-config-1-x git add -A', cfg), 0);
+  assert.equal(run('env --chdir ../.worktrees/claude-config-1-x git commit -m x', cfg), 0);
+  // Resolved against a cd that moved the scope first.
+  assert.equal(run(`cd ${wt} && env -C ../../claude-config git add -A`, cfg), 2);
+  assert.equal(run(`cd ${wt} && env -C ${cfg} git add -A`, cfg), 2);
+  assert.equal(run(`cd ${cfg} && env -C ${wt} git add -A`, cfg), 0);
+});
+
 test('#420 review: rule 3 and rule 6 (non-commit verbs) and the approval binding see behind a prefix', () => {
   for (const c of ['command npm test | tail -5', 'exec node --test a.mjs | tail -5']) {
     for (const tool of SH) assert.match(staticCheck(c, '/work', tool) ?? '', /pipe after a gate/, `${tool} ${c}`);
