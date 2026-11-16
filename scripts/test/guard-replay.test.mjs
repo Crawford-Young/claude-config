@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { execHarness, tempDir } from './_spawn.mjs';
+import { execHarness, spawnHarness, tempDir } from './_spawn.mjs';
 import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -913,6 +913,34 @@ test('--prefixes counts a prefix in a later pipeline stage, behind another prefi
   ];
   const out = prefixes(config({ 's.jsonl': rows }));
   assert.deepEqual(pTally(out), P(6, 6, 3, 1));
+});
+
+test('#427: --prefixes still names builtin for `builtin git push`, but the call is no longer guarded; builtin command / exec / eval still are', () => {
+  const named = prefixes(config({ 's.jsonl': shell('builtin git push origin x') }));
+  assert.deepEqual(byPrefix(named), { command: 0, exec: 0, builtin: 1, env: 0 });
+  assert.deepEqual(pTally(named), P(1, 1, 0, 1), 'builtin runs only a builtin, so git push behind it runs nothing');
+  const guardedOf = (cmd, o) => pTally(prefixes(config({ 's.jsonl': shell(cmd, o) })))['On a guarded verb'];
+  assert.equal(guardedOf('builtin command git push origin x'), 1);
+  assert.equal(guardedOf('builtin exec git push origin x'), 1);
+  assert.equal(guardedOf("builtin eval 'git push origin x'"), 1);
+});
+
+test('#427: --prefixes reads command / exec as unguarded under PowerShell, env as still guarded', () => {
+  const guardedOf = (cmd) => pTally(prefixes(config({ 's.jsonl': shell(cmd, { tool: 'PowerShell' }) })))['On a guarded verb'];
+  assert.equal(guardedOf('command git push origin x'), 0);
+  assert.equal(guardedOf('exec git push origin x'), 0);
+  assert.equal(guardedOf('env git push origin x'), 1);
+});
+
+test('#427: --prefixes against a checkout that predates #420 (no prefixCommands export) fails with a one-line explanation', () => {
+  const cfg = config({ 's.jsonl': shell('command ls') });
+  // A pre-#420 guard: scrub and clauses exist, prefixCommands does not.
+  const old = checkout('return null;', 'true', 'export const scrub = (c) => c;\nexport const clauses = (c) => [c];');
+  const r = spawnHarness(script, ['--prefixes', old], { env: { CLAUDE_CONFIG_DIR: cfg } });
+  assert.equal(r.status, 1);
+  assert.equal(r.stderr.trim(), `guard-replay --prefixes: ${old} predates #420 — its hooks/bash-guard.mjs exports no prefixCommands; pass a checkout at or after #420.`);
+  assert.doesNotMatch(r.stderr, /is not a function/);
+  assert.equal(r.stdout, '');
 });
 
 test('the guard-replay header comment documents --prefixes', () => {
