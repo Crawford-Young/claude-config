@@ -23,6 +23,11 @@
 //   node scripts/guard-replay.mjs --body-edits [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]
 // --body-edits (#388) counts past `gh issue edit --body/--body-file` calls (every transcript by
 // default): calls, unique commands, sessions and issue targets. --full lists each unique command, redacted.
+//
+//   node scripts/guard-replay.mjs --prefixes [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]
+// --prefixes (#420) counts past calls that run through a `command`, `exec`, `builtin` or `env`
+// prefix in any pipeline stage (every transcript by default), and how many of those sat on a guarded verb: calls, unique
+// commands, guarded, sessions, and the count per prefix. --full lists each unique prefixed command, redacted.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -49,12 +54,13 @@ function parseArgs(argv) {
     else if (argv[i] === '--full') o.full = true;
     else if (argv[i] === '--by-rule') o.byRule = true;
     else if (argv[i] === '--body-edits') o.bodyEdits = true;
+    else if (argv[i] === '--prefixes') o.prefixes = true;
     else o.paths.push(argv[i]);
   }
   // Default: the last 7 days, main + subagent transcripts. A newest-N count skews
   // toward many small subagent files (30 files held 930 commands; 7 days held 2118).
   // --by-rule reads every transcript: a rule's zero needs the widest window.
-  if (!o.byRule && !o.bodyEdits && o.files == null && o.days == null) o.days = 7;
+  if (!o.byRule && !o.bodyEdits && !o.prefixes && o.files == null && o.days == null) o.days = 7;
   return o;
 }
 
@@ -667,6 +673,96 @@ async function bodyEdits(args) {
   console.log(out.join('\n'));
 }
 
+// ---- --prefixes (#420) --------------------------------------------------------
+
+const PREFIXES = ['command', 'exec', 'builtin', 'env'];
+
+/** The PREFIXES a call runs through, as the checkout's guard reads them (prefixCommands):
+ *  in each pipeline stage, past keywords, group openers, assignments and other prefixes
+ *  (`timeout 60 env …`). A lower bound: one inside `bash -c "…"` or `$(…)` is not counted. */
+function prefixesOf(g, command) {
+  return g.clauses(g.scrub(command)).flatMap((stage) => g.prefixCommands(stage).filter((p) => PREFIXES.includes(p)));
+}
+
+/** Does the guard act on this call: a gated verb, a gh issue edit with a body flag, or a static-check reason? */
+function guarded(g, command, tool, cwd) {
+  const text = stripComments(g.scrub(command), tool);
+  return (
+    verdictText(() => g.gatedVerbs(command, cwd, tool).join(' ')) !== '' ||
+    g.ghCalls(text, cwd, tool).some((x) => x.sub === 'issue' && x.action === 'edit' && x.args.some((a) => BODY_FLAG.test(a))) ||
+    verdictText(() => g.staticCheck(command, null, tool)) !== ''
+  );
+}
+
+/** Is a guarded action the command a prefix runs, in that same simple command (pipeline stage)?
+ *  `command git push` is; `command -v gh && gh pr create` is not: the push sits in another stage. */
+function prefixedGuarded(g, command, tool, cwd) {
+  return g.clauses(g.scrub(command)).some((stage) => g.prefixCommands(stage).some((p) => PREFIXES.includes(p)) && guarded(g, stage, tool, cwd));
+}
+
+/** Every prefixed Bash/PowerShell call across the files; each tool_use id once. */
+function scanPrefixes(paths, g) {
+  const seen = new Set();
+  const hits = [];
+  const sessions = new Set();
+  const by = Object.fromEntries(PREFIXES.map((p) => [p, 0]));
+  let calls = 0, first = null, last = null;
+  for (const p of paths) {
+    for (const line of readFileSync(p, 'utf8').split('\n')) {
+      if (!line || line[0] !== '{') continue;
+      let o;
+      try {
+        o = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (o?.type !== 'assistant' && o?.type !== 'user') continue;
+      const ts = typeof o.timestamp === 'string' ? o.timestamp : null;
+      if (ts && (!first || ts < first)) first = ts;
+      if (ts && (!last || ts > last)) last = ts;
+      const content = o.message?.content;
+      if (o.type !== 'assistant' || !Array.isArray(content)) continue;
+      for (const c of content) {
+        if (c?.type !== 'tool_use' || (c.id !== undefined && seen.has(c.id)) || (c.name !== 'Bash' && c.name !== 'PowerShell') || typeof c.input?.command !== 'string') continue;
+        if (c.id !== undefined) seen.add(c.id);
+        calls++;
+        const used = prefixesOf(g, c.input.command);
+        if (!used.length) continue;
+        sessions.add(p);
+        for (const w of new Set(used)) by[w]++;
+        hits.push({ command: c.input.command, tool: c.name, guarded: prefixedGuarded(g, c.input.command, c.name, o.cwd ?? null) });
+      }
+    }
+  }
+  return { hits, sessions: sessions.size, by, calls, first, last };
+}
+
+async function prefixed(args) {
+  const g = await load(args.paths[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
+  const files = await transcripts(projectsRoot(args.root), args);
+  const { hits, sessions, by, calls, first, last } = scanPrefixes(files, g);
+  const unique = new Map(hits.map((h) => [`${h.tool}\n${h.command}`, h]));
+  const out = [
+    '# Past calls through a command/exec/builtin/env prefix (guard-replay --prefixes, #420)',
+    '',
+    windowLine(files, first, last, calls),
+    '',
+    `- Prefixed calls: ${hits.length}`,
+    `- Unique prefixed commands: ${unique.size}`,
+    `- On a guarded verb: ${hits.filter((h) => h.guarded).length}`,
+    `- Sessions: ${sessions}`,
+    `- By prefix: ${PREFIXES.map((p) => `${p} ${by[p]}`).join(', ')}`,
+  ];
+  if (args.full) {
+    out.push('', `## Every unique prefixed command (${unique.size})`, '');
+    for (const h of unique.values()) {
+      const text = redact(h.command).replace(/\r\n?/g, '\n').trimEnd().replace(/^/gm, '    ');
+      out.push(h.guarded ? `${text}  [guarded]` : text);
+    }
+  }
+  console.log(out.join('\n'));
+}
+
 async function byRule(args) {
   const checkout = args.paths[0] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
   const g = await load(checkout);
@@ -703,10 +799,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.byRule && args.paths.length <= 1 && !args.bad) return byRule(args);
   if (args.bodyEdits && args.paths.length <= 1 && !args.bad) return bodyEdits(args);
+  if (args.prefixes && args.paths.length <= 1 && !args.bad) return prefixed(args);
   if (args.paths.length !== 2 || args.bad) {
     console.log('usage: node scripts/guard-replay.mjs <old-checkout> <new-checkout> [--branch] [--full] [--files N] [--days D] [--root <projects-dir>]');
     console.log('       node scripts/guard-replay.mjs --by-rule [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]');
     console.log('       node scripts/guard-replay.mjs --body-edits [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]');
+    console.log('       node scripts/guard-replay.mjs --prefixes [<checkout>] [--full] [--files N] [--days D] [--root <projects-dir>]');
     return;
   }
   const [a, b] = await Promise.all(args.paths.map(load));

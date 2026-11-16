@@ -217,6 +217,38 @@ test('a body edit after a prefix or in a chain is detected', () => {
   assert.ok(reason(`echo hi; gh issue edit 12 --body "${REWORD}"`, ONE));
 });
 
+test('#420: a body edit behind command / exec / builtin / env, with options, stacked, is detected', () => {
+  for (const p of [
+    'command',
+    'command -p',
+    'command --',
+    'exec',
+    'exec -a name',
+    'exec -c',
+    'exec -l',
+    'builtin command',
+    'env',
+    'env -u NAME',
+    'env -C dir',
+    'env --',
+    'env VAR=1',
+    'env -i command exec',
+    'command env FOO=1',
+  ]) {
+    assert.ok(reason(`${p} gh issue edit 12 --body "${REWORD}"`, ONE), p);
+    assert.ok(reason(`${p} gh issue edit 12 --body-file n.md`, ONE), `${p} file`);
+  }
+  assert.ok(reason(`env -S 'gh issue edit 12 --body "${REWORD}"'`, ONE), 'env -S');
+  assert.ok(reason(`env --split-string='gh issue edit 12 --body-file n.md'`, ONE), 'env --split-string');
+  // A tick through the prefix still passes; a non-body edit never reads the live body.
+  assert.equal(reason(`command gh issue edit 12 --body "- [x] one box"`, '- [ ] one box'), null);
+  const t = tmp();
+  const deps = { liveBody: () => assert.fail('the live body must not be fetched') };
+  for (const cmd of ['command gh issue edit 12 --add-label bug', 'exec gh issue edit 12 --title t', 'command -v gh', 'command -V gh', 'type gh', 'echo command gh issue edit 12 --body x']) {
+    assert.equal(guard.issueBodyReason(cmd, t.dir, join(t.dir, 'none.jsonl'), t.state, undefined, null, deps), null, cmd);
+  }
+});
+
 // ---- what is untouched --------------------------------------------------------------------
 
 test('non-body gh calls are untouched and never read the live body', () => {
