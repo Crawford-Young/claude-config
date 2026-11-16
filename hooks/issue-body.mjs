@@ -15,73 +15,75 @@ export const issueBodyStateFile = () => process.env.CLAUDE_ISSUE_BODY_STATE || j
 // A task item (bulleted or ordered): its indent and bullet, its box, then its text.
 const TASK = /^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])\](.*)$/;
 
-/** The first non-blank line of `live` that `next` drops or rewords, as
- *  `{ line }`, or null. Each must be matched in order by an equal line of
- *  `next`, or a task item by itself ticked (`[x]`/`[X]`, so a ticked box may
- *  change case); added lines pass anywhere. CRLF and trailing whitespace are
- *  ignored. Un-ticking, re-indenting and reordering are rewording. A line
- *  hidden in an HTML comment (see hidden) matches no live line outside one:
- *  wrapping a box in `<!-- … -->` loses it (#419). */
+/** What `next` does to `live`'s lines: `{ line }` for the first non-blank
+ *  line of `live` it drops or rewords, else `{ opener }` for the first line
+ *  of `next` holding an HTML comment opener that no live line matched, else
+ *  null. Each live line must be matched in order by an equal line of `next`,
+ *  or a task item by itself ticked (`[x]`/`[X]`, so a ticked box may change
+ *  case), with the same context tags (see tagged): a box moved into a fence
+ *  or a `<details>` block is lost (#430). Added lines pass anywhere, but an
+ *  added or moved `<!--` fails closed, wherever any `-->` sits: the guard
+ *  does not read what a comment hides (#430). CRLF and trailing whitespace
+ *  are ignored. Un-ticking, re-indenting and reordering are rewording. */
 export function bodyChange(live, next) {
-  const lines = (s) => hidden(String(s).replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd()));
+  const lines = (s) => tagged(String(s).replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd()));
   const have = lines(next);
+  const matched = new Set();
   let j = 0;
-  for (const { text: line, hid } of lines(live).filter((l) => l.text.trim())) {
+  for (const { text: line, code, details } of lines(live).filter((l) => l.text.trim())) {
     const m = TASK.exec(line);
-    const ok = ({ text: l, hid: h }) => (hid || !h) && (l === line || (m !== null && (l === `${m[1]}[x]${m[3]}` || l === `${m[1]}[X]${m[3]}`)));
+    const ok = (l) => l.code === code && l.details === details && (l.text === line || (m !== null && (l.text === `${m[1]}[x]${m[3]}` || l.text === `${m[1]}[X]${m[3]}`)));
     while (j < have.length && !ok(have[j])) j++;
     if (j === have.length) return { line };
-    j++;
+    matched.add(j++);
   }
-  return null;
+  const added = have.find((l, i) => l.opener && !matched.has(i));
+  return added ? { opener: added.text } : null;
 }
 
-/** Each line as `{ text, hid }`: `hid` when it starts inside an HTML comment,
- *  or opens one first thing (`<!--` past its indent). A comment runs to the
- *  first `-->` after its `<!--`, across lines; one that starts its line and is
- *  never closed runs to the end, but a mid-line `<!--` with no `-->` after it
- *  is plain text. A `<!--` inside an inline code span or a fenced code block opens nothing. */
-function hidden(lines) {
-  let open = false;
+/** Each line as `{ text, code, details, opener }`: `code` inside a fenced
+ *  code block (``` or ~~~, its fence lines included); `details` inside a
+ *  `<details …>` … `</details>` region outside fences (nesting counts, a line
+ *  opening or closing one included); `opener` when it holds a `<!--` outside
+ *  a fence. A `<details>` or `<!--` inside an inline code span counts for
+ *  neither. Fences read as GitHub's: an opener has at most 3 spaces of
+ *  indent (no tab), and a backtick opener's info string holds no backtick (a
+ *  tilde opener's may); a closer has at most 3 spaces of indent, the
+ *  opener's character only, at least as many, then only spaces or tabs. A
+ *  four-space indent is no code block here. */
+function tagged(lines) {
   let fence = null;
-  // A `-->` after offset `at` of line `n`, or on a later line.
-  const closes = (n, at) => lines[n].indexOf('-->', at) >= 0 || lines.slice(n + 1).some((l) => l.includes('-->'));
-  return lines.map((text, n) => {
-    if (!open) {
-      const f = /^\s*(`{3,}|~{3,})/.exec(text);
-      if (fence) {
-        if (f && f[1][0] === fence[0] && f[1].length >= fence.length && /^\s*[`~]+\s*$/.test(text)) fence = null;
-        return { text, hid: false };
-      }
-      if (f) {
-        fence = f[1];
-        return { text, hid: false };
-      }
+  let depth = 0;
+  return lines.map((text) => {
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+    if (fence || (f && !(f[1][0] === '`' && f[2].includes('`')))) {
+      if (!fence) fence = f[1];
+      else if (f && f[1][0] === fence[0] && f[1].length >= fence.length && /^[ \t]*$/.test(f[2])) fence = null;
+      return { text, code: true, details: depth > 0, opener: false };
     }
-    const hid = open || text.trimStart().startsWith('<!--');
-    const first = open ? -1 : text.length - text.trimStart().length;
-    for (let at = 0; ; ) {
-      if (open) {
-        const i = text.indexOf('-->', at);
-        if (i < 0) break;
-        at = i + 3;
-        open = false;
-        continue;
-      }
-      const m = /<!--|`+/g;
-      m.lastIndex = at;
-      const f = m.exec(text);
-      if (!f) break;
-      if (f[0] === '<!--') {
-        at = f.index + 4;
-        open = first === f.index || closes(n, at);
-      } else {
-        const close = text.indexOf(f[0], f.index + f[0].length);
-        at = close < 0 ? f.index + f[0].length : close + f[0].length;
-      }
+    const markup = outsideSpans(text);
+    let details = depth > 0;
+    for (const tag of markup.matchAll(/<(\/?)details(?=[\s/>])[^>]*>/gi)) {
+      if (!tag[1]) details = true;
+      depth = Math.max(0, depth + (tag[1] ? -1 : 1));
     }
-    return { text, hid };
+    return { text, code: false, details, opener: markup.includes('<!--') };
   });
+}
+
+/** `text` with each inline code span (a backtick run to the next equal run on
+ *  the line) cut to a space: what is left is read as markup. */
+function outsideSpans(text) {
+  let out = '';
+  let at = 0;
+  for (const run of text.matchAll(/`+/g)) {
+    if (run.index < at) continue;
+    const close = text.indexOf(run[0], run.index + run[0].length);
+    if (close < 0) continue;
+    out += `${text.slice(at, run.index)} `;
+    at = close + run[0].length;
+  }
+  return out + text.slice(at);
 }
 
 // A substitution or variable the shell expands: `…`, $(…), ${…}, $name, $1.
@@ -135,6 +137,14 @@ function target(word) {
 /** The host a `-R` value names: `host` of `host/owner/repo`, else null (gh's default host, which GH_HOST sets). */
 const repoHost = (repo) => (repo.split('/').length === 3 ? repo.split('/')[0].toLowerCase() : null);
 
+/** A -R value as its repo: a URL (a trailing / or .git allowed) is host/o/r,
+ *  github.com's own included — gh takes the URL's host over GH_HOST, and
+ *  repoKey drops github.com for comparison; else as written. */
+function repoOfUrl(v) {
+  const u = /^https?:\/\/([^/\s]+)\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(v);
+  return u ? `${u[1].toLowerCase()}/${u[2]}/${u[3]}` : v;
+}
+
 /** A gh call's body edit, read from its args (`args`, unquoted, after `gh`)
  *  and the same words with quotes kept (`raw`, null when they couldn't be
  *  lined up): null unless it is `gh issue edit` with -b/--body or
@@ -167,7 +177,7 @@ export function bodyEdit(args, raw, tool = null) {
     if (flag === '-b' || flag === '--body') body = v === null ? { why: unread ?? why('--body value') } : { text: v };
     else if (flag === '-F' || flag === '--body-file') {
       body = v === null ? { why: unread ?? why('--body-file path') } : v === '-' ? { why: "its new body comes from stdin (`--body-file -`), which the guard can't read" } : { file: v };
-    } else if (flag === '-R' || flag === '--repo') repo = v === null ? { why: unread ?? why('--repo value') } : v;
+    } else if (flag === '-R' || flag === '--repo') repo = v === null ? { why: unread ?? why('--repo value') } : repoOfUrl(v);
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -205,7 +215,7 @@ const API_FIELD = new Set(['-f', '--raw-field', '-F', '--field']);
 const API_SHORT = /^(-[XfFHqtp])(.+)$/s;
 // A REST endpoint naming one issue, no further segment: owner, repo and number
 // may each be literal, a `{owner}`/`{repo}` placeholder or a `$var`.
-const ISSUE_ENDPOINT = /^(?:https?:\/\/[^/\s]+(?:\/api\/v3)?)?\/?repos\/[^/\s]+\/[^/\s]+\/issues\/([^/?#\s]+)\/?(?:[?#].*)?$/s;
+const ISSUE_ENDPOINT = /^(?:https?:\/\/[^/\s]+(?:\/api\/v3)?)?\/?(?:repos\/[^/\s]+\/[^/\s]+|repositories\/[^/\s]+)\/issues\/([^/?#\s]+)\/?(?:[?#].*)?$/s;
 // A field key that is, or may be, `body`.
 const BODY_KEY = /^body$|[$`]/;
 
@@ -214,7 +224,7 @@ const BODY_KEY = /^body$|[$`]/;
  *  `{ n }` for a REST write of issue `n` (its number word as written): a body
  *  field (`-f`/`-F`/`--field`/`--raw-field` `body=…`) or `--input`, with a
  *  method other than GET. `{ queries, keys }` for a graphql call: each query
- *  field's value as `{ text }`, `{ file }` (`query=@file`) or `{ why }` when
+ *  field's value as `{ text }`, `{ file }` (`-F query=@file`; `-f` sends the text as is) or `{ why }` when
  *  it can't be read, and the call's other field keys. */
 export function apiCall(args, raw, tool = null) {
   const at = args.findIndex((a) => !a.startsWith('-'));
@@ -244,18 +254,20 @@ export function apiCall(args, raw, tool = null) {
     if (i >= args.length) continue;
     const v = args[i].slice(prefix);
     if (flag === '-X' || flag === '--method') method = v;
-    else if (API_FIELD.has(flag)) fields.push({ key: v.split('=')[0], i, prefix });
+    else if (API_FIELD.has(flag)) fields.push({ key: v.split('=')[0], i, prefix, typed: flag === '-F' || flag === '--field' });
   }
   const rest = ISSUE_ENDPOINT.exec(endpoint ?? '');
   if (rest) return (input || fields.some((f) => BODY_KEY.test(f.key))) && !/^get$/i.test(method ?? '') ? { n: rest[1] } : null;
-  if (!/^(?:https?:\/\/[^/\s]+(?:\/api)?)?\/?graphql$/.test(endpoint ?? '')) return null;
+  // Any endpoint ending in a graphql segment (a trailing slash, query string, no scheme, /api/v3): over-matching only adds checks.
+  if (!/(?:^|\/)graphql\/?(?:[?#].*)?$/.test(endpoint ?? '')) return null;
   const queries = fields
     .filter((f) => f.key === 'query')
-    .map(({ i, prefix }) => {
+    .map(({ i, prefix, typed }) => {
       if (raw === null) return { why: "the guard couldn't line up its words" };
       const lit = literal(raw[i] ?? '', tool);
       if (lit === null) return { why: "its query holds a shell substitution or variable, which the guard can't read" };
       const text = lit.slice(prefix + 'query='.length);
+      if (!typed) return { text };
       if (text === '@-') return { why: "its query comes from stdin (`query=@-`), which the guard can't read" };
       return text.startsWith('@') ? { file: text.slice(1) } : { text };
     });
@@ -263,9 +275,90 @@ export function apiCall(args, raw, tool = null) {
   return { queries, keys: fields.filter((f) => f.key !== 'query').map((f) => f.key) };
 }
 
-/** A graphql query that writes an issue body: an `updateIssue` mutation with
- *  `body` in the query or in a field key (`-F input[body]=…`). */
-export const gqlBodyWrite = (query, keys = []) => /\bupdateIssue\b/.test(query) && (/\bbody\b/.test(query) || keys.some((k) => /\bbody\b/.test(k)));
+/** A graphql query that may write an issue body: it names `updateIssue`, and
+ *  `body` is in a field key (`-F input[body]=…`) or anywhere in the query but
+ *  an `updateIssue(…)` field's selection set, which the guard cuts only where
+ *  it reads that field's argument list to its end (strings, block strings and
+ *  `#` comments skipped). Fails closed: what it can't read is kept. */
+export function gqlBodyWrite(query, keys = []) {
+  if (!/\bupdateIssue\b/.test(query)) return false;
+  if (keys.some((k) => /\bbody\b/.test(k))) return true;
+  let kept = '';
+  let from = 0;
+  for (let i = 0; i < query.length; ) {
+    if (query[i] === '#') i = gqlSkip(query, i);
+    else if (query[i] === '"') {
+      i = gqlString(query, i);
+      if (i < 0) break;
+    } else {
+      const name = /[_A-Za-z][_0-9A-Za-z]*/y;
+      name.lastIndex = i;
+      const m = name.exec(query);
+      if (!m) {
+        i++;
+        continue;
+      }
+      i += m[0].length;
+      const open = gqlSkip(query, i);
+      if (m[0] !== 'updateIssue' || query[open] !== '(') continue;
+      const args = gqlGroup(query, open);
+      const set = args < 0 ? -1 : gqlSkip(query, args);
+      const end = query[set] === '{' ? gqlGroup(query, set) : -1;
+      if (end < 0) continue;
+      kept += query.slice(from, set);
+      from = i = end;
+    }
+  }
+  return /\bbody\b/.test(kept + query.slice(from));
+}
+
+// GraphQL's ignored tokens from `i` (whitespace, commas, `#` comments): the next index past them.
+function gqlSkip(q, i) {
+  for (;;) {
+    if (/[\s,\u{FEFF}]/u.test(q[i] ?? '')) i++;
+    else if (q[i] === '#') while (i < q.length && q[i] !== '\n' && q[i] !== '\r') i++;
+    else return i;
+  }
+}
+
+// The index past the string opening at `i` (`"…"` or `"""…"""`), or -1 when it never closes.
+function gqlString(q, i) {
+  if (q.startsWith('"""', i)) {
+    for (let j = i + 3; j < q.length; j++) {
+      if (q.startsWith('\\"""', j)) j += 3;
+      else if (q.startsWith('"""', j)) return j + 3;
+    }
+    return -1;
+  }
+  for (let j = i + 1; j < q.length; j++) {
+    if (q[j] === '\\') j++;
+    else if (q[j] === '"') return j + 1;
+    else if (q[j] === '\n' || q[j] === '\r') return -1;
+  }
+  return -1;
+}
+
+// The index past the bracket group opening at `i` (strings and comments skipped), or -1 when it never closes or mismatches.
+function gqlGroup(q, i) {
+  const closer = { '(': ')', '{': '}', '[': ']' };
+  const stack = [];
+  for (let j = i; j < q.length; ) {
+    const ch = q[j];
+    if (ch === '#') j = gqlSkip(q, j);
+    else if (ch === '"') {
+      j = gqlString(q, j);
+      if (j < 0) return -1;
+    } else {
+      if (closer[ch]) stack.push(closer[ch]);
+      else if (')}]'.includes(ch)) {
+        if (stack.pop() !== ch) return -1;
+        if (!stack.length) return j + 1;
+      }
+      j++;
+    }
+  }
+  return -1;
+}
 
 /** Rule 13's acts: what a rewrite approval says it allows. */
 const ACTS = 'rewrite|reword|edit|update|change|replace|fix|correct';

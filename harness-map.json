@@ -338,7 +338,7 @@
    "kind": "hook",
    "label": "issue-body",
    "file": "hooks/issue-body.mjs",
-   "summary": "Rule 13's logic for bash-guard (#388): the body comparator (ticking and adding pass), the shell reading of a gh issue edit body, the rewrite-approval predicates and the live-body reader (CLAUDE_ISSUE_BODY_STUB seam).",
+   "summary": "Rule 13's logic for bash-guard (#388): the body comparator (ticking and adding pass; a live line matches only in its own fence and <details> context, and an added <!-- outside a fence or code span fails closed, #430), the shell reading of a gh issue edit body (a -R URL names its host), the gh api body-write reader, the rewrite-approval predicates and the live-body reader (CLAUDE_ISSUE_BODY_STUB seam).",
    "rules": [
     "Fails closed: a body it can't read counts as a rewrite"
    ]
