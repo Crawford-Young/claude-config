@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { commitlintConfig, isHuskyRepo, servePorts } from '../worktree.mjs';
+import { commitlintConfig, isHuskyRepo, listsPath, lockReason, servePorts } from '../worktree.mjs';
 
 function writeSession(sessionsDir, pid, name, nameSource, entrypoint) {
   mkdirSync(sessionsDir, { recursive: true });
@@ -57,6 +57,67 @@ test('new copies env files and cuts clean from origin/main; remove cleans up', (
   assert.ok(!existsSync(wt), 'worktree dir removed');
   const list = sh(repo, 'git', ['worktree', 'list']);
   assert.doesNotMatch(list, /app-demo/);
+});
+
+test('remove unlocks a locked worktree so git no longer lists it afterwards (#352)', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'locked'], { encoding: 'utf8', env });
+  const wt = join(root, '.worktrees', 'app-locked');
+  sh(repo, 'git', ['worktree', 'lock', '--reason', 'claude session locked (pid 1)', wt]);
+  assert.match(sh(repo, 'git', ['worktree', 'list', '--porcelain']), /^locked/m, 'fixture is locked');
+
+  const r = spawnHarness(script, ['remove', wt], { env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!existsSync(wt), 'worktree dir removed');
+  assert.doesNotMatch(sh(repo, 'git', ['worktree', 'list', '--porcelain']), /app-locked/);
+  assert.match(r.stdout, /app-locked is locked \(claude session locked \(pid 1\)\); unlocking/, 'names path and reason');
+});
+
+test('remove prints no lock line for an unlocked worktree (#352)', () => {
+  const root = tempDir('wt-');
+  const repo = makeRepoWithOrigin(root);
+  const env = { CLAUDE_WORKSPACE_ROOT: root };
+  execHarness(script, ['new', repo, 'free'], { encoding: 'utf8', env });
+  const wt = join(root, '.worktrees', 'app-free');
+  const r = spawnHarness(script, ['remove', wt], { env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /locked|unlocking/);
+});
+
+const PORCELAIN = [
+  'worktree C:/code/app\nHEAD aaa\nbranch refs/heads/main\n',
+  'worktree C:/code/.worktrees/app-a\nHEAD bbb\nbranch refs/heads/a\nlocked claude session (pid 1)\n',
+  'worktree C:/code/.worktrees/my app\nHEAD ccc\ndetached\nlocked\n',
+].join('\n');
+
+test('listsPath matches a locked entry, a path with a space, and ignores prefix siblings (#352)', () => {
+  assert.ok(listsPath(PORCELAIN, 'C:/code/.worktrees/app-a'), 'locked entry');
+  assert.ok(listsPath(PORCELAIN, 'C:/code/.worktrees/my app'), 'space in path');
+  assert.ok(!listsPath(PORCELAIN, 'C:/code/.worktrees/app'), 'prefix of app-a must not match');
+  assert.ok(!listsPath(PORCELAIN.replace('app-a', 'app-ab'), 'C:/code/.worktrees/app-a'), 'app-ab is not app-a');
+  assert.ok(!listsPath('', 'C:/code/app'));
+});
+
+test('listsPath ignores drive-letter case, backslashes and a trailing separator (#352)', () => {
+  assert.ok(listsPath(PORCELAIN, 'c:\\code\\.worktrees\\app-a'));
+  assert.ok(listsPath(PORCELAIN, 'C:\\code\\.worktrees\\app-a\\'));
+  assert.ok(listsPath(PORCELAIN.replace(/\n/g, '\r\n'), 'C:/code/.worktrees/app-a'), 'CRLF output');
+});
+
+test('listsPath given the realpath matches where the resolved path (8.3 or junction) would not (#352)', () => {
+  const longPath = 'C:/Users/young.long/.worktrees/app-x';
+  const porcelain = `worktree ${longPath}\nHEAD ddd\n`;
+  assert.ok(!listsPath(porcelain, 'C:/Users/YOUNG~1/.worktrees/app-x'), 'short form differs');
+  assert.ok(listsPath(porcelain, longPath));
+});
+
+test('lockReason returns the reason, empty string for a bare lock, null when unlocked or unlisted (#352)', () => {
+  assert.equal(lockReason(PORCELAIN, 'C:/code/.worktrees/app-a'), 'claude session (pid 1)');
+  assert.equal(lockReason(PORCELAIN, 'C:/code/.worktrees/my app'), '');
+  assert.equal(lockReason(PORCELAIN, 'C:/code/app'), null);
+  assert.equal(lockReason(PORCELAIN, 'C:/code/nowhere'), null);
 });
 
 test('remove finishes a half-removed worktree: empty dir, no .git pointer', () => {
