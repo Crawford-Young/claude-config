@@ -395,6 +395,31 @@ test('file restores are blocked on the claude-config main checkout, not elsewher
   assert.equal(guardRun(`cd ${other} && git restore a.mjs`, h, env), 0);
 });
 
+test('#330: checkout-index --force is a file restore on the claude-config main checkout', () => {
+  const h = tmpHome();
+  const cfg = join(h, 'cfg');
+  const other = join(h, 'other');
+  for (const r of [cfg, other]) {
+    mkdirSync(r);
+    execFileSync('git', ['init', '-q', '-b', 'main', r]);
+  }
+  const env = { CLAUDE_CONFIG_REPO: cfg };
+  for (const c of [
+    'git checkout-index --force -- a.mjs',
+    'git checkout-index -f a.mjs',
+    'git checkout-index -fa',
+    'git checkout-index -a -f',
+    'git checkout-index -u -f -- a.mjs',
+  ]) {
+    assert.equal(guardRun(`cd ${cfg} && ${c}`, h, env), 2, c);
+  }
+  // Without -f it refuses to overwrite an existing file, so it can't discard an edit.
+  assert.equal(guardRun(`cd ${cfg} && git checkout-index -a`, h, env), 0);
+  assert.equal(guardRun(`cd ${cfg} && git checkout-index -- new.mjs`, h, env), 0);
+  // Any other repo keeps it.
+  assert.equal(guardRun(`cd ${other} && git checkout-index --force -- a.mjs`, h, env), 0);
+});
+
 test('#368: rule 6 blocks a commit in the claude-config main checkout on main; rule 5 (commit on main) is gone', () => {
   const h = tmpHome();
   const cfg = join(h, 'cfg');
@@ -1003,6 +1028,17 @@ test('#98: non-gate commands that mention a tool name pass', () => {
   ]) {
     assert.equal(staticCheck(cmd), null, cmd);
   }
+});
+
+test('#326: a gate pipe after a backslash-newline continuation is rule 3, like the one-line form', () => {
+  assert.ok(staticCheck('node --test x | grep ok'), 'one line');
+  assert.ok(staticCheck('node --test x \\\n| grep ok'), 'continued');
+  assert.ok(staticCheck('node --test x \\\n  | tail -5'), 'continued, indented');
+  assert.ok(staticCheck('cargo test \\\n  --workspace \\\n  | grep ok'), 'several continuations');
+  // A plain newline still ends the clause, and an escaped backslash before it
+  // is a literal, not a continuation.
+  assert.equal(staticCheck('node --test x\necho done | grep x'), null);
+  assert.equal(staticCheck('echo a\\\\\nnode --test x'), null);
 });
 
 test('#98: Rust, just and package-runner gates piped onward are blocked', () => {

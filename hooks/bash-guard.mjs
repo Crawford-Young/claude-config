@@ -14,7 +14,8 @@
 //   4. PowerShell Set-Content/Out-File/Add-Content (mojibake + BOM on UTF-8)
 //   6. on the claude-config MAIN checkout — the live junction surface, which
 //      carries other sessions' uncommitted edits: a git checkout/switch off a
-//      branch, a file restore (checkout -- <path>, checkout ., restore), or a
+//      branch, a file restore (checkout -- <path>, checkout ., restore,
+//      checkout-index --force), or a
 //      commit on main (it sweeps or strands live edits and breaks land.mjs
 //      sync's fast-forward; land.mjs commits from its own worktree)
 //   7. a shell-launched `claude` on a usage-billed model (--model fable|mythos,
@@ -308,6 +309,13 @@ export function clauses(cmd, pipes = false, seps = null, blocks = null) {
     const sub = quote === "'" ? null : substitutionAt(cmd, i, quote === '"');
     if (ch === '\\' && cmd[i + 1] === '`') {
       cur += ch + cmd[++i];
+    } else if (!quote && ch === '\\' && cmd[i + 1] === '\n' && cmd[i - 1] !== '\\') {
+      // A line continuation: the shell drops the backslash-newline and reads
+      // one line, so `gate \` then `| grep ok` is still one pipeline (#326).
+      // A `\\` before the newline is an escaped backslash, and the newline
+      // still ends the clause.
+      cur += ' ';
+      i++;
     } else if (sub) {
       cur += cmd.slice(i, sub.end);
       i = sub.end - 1;
@@ -2286,9 +2294,14 @@ function callRule({ sub, args, repo }) {
   // A file restore (`checkout -- <path>`, `checkout .`, `restore` that touches the
   // worktree) — `restore --staged` alone only unstages and is left alone.
   const has = (...f) => args.some((a) => f.includes(a));
+  // `checkout-index --force` overwrites tracked files from the index, the same
+  // as `checkout -- <path>` (#330). Without -f it refuses existing files, so it
+  // stays allowed. Short flags can be bundled (-fa, -af).
+  const forced = args.some((a) => a === '--force' || /^-[a-z]*f[a-z]*$/.test(a));
   const isRestore =
     (sub === 'checkout' && has('--', '.')) ||
-    (sub === 'restore' && !(has('--staged', '-S') && !has('--worktree', '-W')));
+    (sub === 'restore' && !(has('--staged', '-S') && !has('--worktree', '-W'))) ||
+    (sub === 'checkout-index' && forced);
   const isSwitch = (sub === 'checkout' || sub === 'switch') && !isRestore;
   if (!isCommit && !isSwitch && !isRestore) return null;
   // No info, or a cd the guard couldn't read: fail open.
